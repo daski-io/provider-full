@@ -1,4 +1,4 @@
-name: daski-provider-dev
+name: daski-provider-full-dev
 
 services:
   postgres:
@@ -25,4 +25,4 @@ services:
 
 volumes:
   provider_postgres_data:
-    name: daski-provider-dev-postgres
+    name: daski-provider-full-dev-postgres

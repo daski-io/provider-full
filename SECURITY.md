@@ -6,7 +6,7 @@ starter and the obligations of a provider that adds a real service.
 ## Reporting a vulnerability
 
 For this upstream starter, open a
-[private GitHub security advisory](https://github.com/daski-io/provider/security/advisories/new).
+[private GitHub security advisory](https://github.com/daski-io/provider-full/security/advisories/new).
 Do not put exploit details, credentials, customer data, protected payloads, or
 affected transaction identifiers in a public issue.
 

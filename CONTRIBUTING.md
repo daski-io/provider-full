@@ -1,6 +1,6 @@
 # Contributing
 
-Thank you for improving the Daski provider starter. Changes should make it
+Thank you for improving the Daski provider-full starter. Changes should make it
 safer or faster for a new provider to implement its own service without
 introducing a provider-specific dependency.
 
@@ -43,7 +43,6 @@ npm run typecheck:test
 npm run lint
 npm run lint:architecture
 npm run docs:check
-npm run skill:validate
 npm run test:run
 npm run build
 ```

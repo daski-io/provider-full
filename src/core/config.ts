@@ -121,7 +121,7 @@ const envSchema = z.object({
   DATABASE_STATEMENT_TIMEOUT_MS: z.coerce.number().int().min(100).max(120_000).default(30_000),
   DATABASE_IDLE_TX_TIMEOUT_MS: z.coerce.number().int().min(100).max(120_000).default(30_000),
   DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(100).default(20),
-  DATABASE_APPLICATION_NAME: z.string().min(1).max(63).default("daski-provider"),
+  DATABASE_APPLICATION_NAME: z.string().min(1).max(63).default("daski-provider-full"),
   BASE_RPC_URL: httpsUrlSchema,
   // Comma-separated ordered failover RPC endpoints tried after
   // BASE_RPC_URL. Empty = single-endpoint behavior. Ignored entirely under

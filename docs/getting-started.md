@@ -44,8 +44,8 @@ and confirm `node --version` starts with `v24.`.
 ## 1. Clone and install
 
 ```bash
-git clone https://github.com/daski-io/provider.git
-cd provider
+git clone https://github.com/daski-io/provider-full.git
+cd provider-full
 npm ci
 ```
 
@@ -106,7 +106,7 @@ npm run dev:db:up
 ```
 
 It is bound to `127.0.0.1:55432`; it is not reachable from other hosts. Data is
-kept in the named `daski-provider-dev-postgres` volume when the container is
+kept in the named `daski-provider-full-dev-postgres` volume when the container is
 stopped.
 
 Set this local URL in `.env`:
@@ -158,7 +158,6 @@ npm run typecheck:test
 npm run lint
 npm run lint:architecture
 npm run docs:check
-npm run skill:validate
 npm run test:run
 npm run build
 ```
@@ -243,7 +242,7 @@ workers required for admitted traffic are currently healthy.
 The normal local integration topology runs local provider and gateway
 processes while both point at the reviewed Base Sepolia deployment:
 
-- provider: [daski-io/provider](https://github.com/daski-io/provider);
+- full provider: [daski-io/provider-full](https://github.com/daski-io/provider-full);
 - gateway: [daski-io/gateway](https://github.com/daski-io/gateway); and
 - contracts: [daski-io/contracts](https://github.com/daski-io/contracts).
 

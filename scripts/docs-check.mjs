@@ -24,7 +24,6 @@ const files = [
   join(ROOT, "CHANGELOG.md"),
   join(ROOT, "scripts/README.md"),
   ...await markdownFiles(join(ROOT, "docs")),
-  ...await markdownFiles(join(ROOT, ".agents/skills")),
 ];
 
 const sources = new Map(await Promise.all(files.map(async (path) => [

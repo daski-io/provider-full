@@ -1,13 +1,13 @@
 {
-  "name": "@daski-io/provider",
+  "name": "@daski-io/provider-full",
   "version": "0.1.0",
   "private": true,
-  "description": "Starter repository for building a service provider on Daski",
+  "description": "Full-featured starter for building a service provider on Daski",
   "license": "MIT",
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/daski-io/provider.git"
+    "url": "git+https://github.com/daski-io/provider-full.git"
   },
   "engines": {
     "node": ">=24.0.0 <25"
@@ -30,7 +30,6 @@
     "test:critical-coverage": "vitest run --config vitest.critical.config.ts --coverage",
     "test:mainnet-readiness": "vitest run test/configProductionSecurity.test.ts test/providerComposition.test.ts",
     "docs:check": "node scripts/docs-check.mjs",
-    "skill:validate": "node scripts/validate-skill.mjs",
     "typecheck": "tsc --noEmit",
     "typecheck:test": "tsc -p tsconfig.test.json --noEmit",
     "lint": "eslint src",

@@ -65,7 +65,6 @@ jobs:
       - run: npm run lint
       - run: npm run lint:architecture
       - run: npm run docs:check
-      - run: npm run skill:validate
       - run: docker compose config --quiet
       - run: npm run test:coverage
       - run: npm run test:critical-coverage
@@ -82,13 +81,13 @@ jobs:
           detect --source=/repo --no-git --redact
           --config=/repo/.gitleaks.toml --exit-code=1
       - name: Build production image
-        run: docker build -t daski-provider:ci .
+        run: docker build -t daski-provider-full:ci .
       - name: Verify production image boundary
         run: |
-          test "$(docker image inspect -f '{{.Config.User}}' daski-provider:ci)" = "node"
-          docker run --rm --entrypoint sh daski-provider:ci -c \
+          test "$(docker image inspect -f '{{.Config.User}}' daski-provider-full:ci)" = "node"
+          docker run --rm --entrypoint sh daski-provider-full:ci -c \
             'test ! -e /app/test && test ! -e /app/docs && test ! -e /app/scripts && test ! -e /app/.env'
-          docker run --rm --entrypoint sh daski-provider:ci -c \
+          docker run --rm --entrypoint sh daski-provider-full:ci -c \
             '! grep -R -E "PaymentRouter|PAYMENT_ROUTER_ADDRESS|daski-exact" /app/dist | grep -v "^/app/dist/core/db/migrations/"'
 
   windows-tooling:
@@ -103,28 +102,6 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - run: npm run docs:check
-      - run: npm run skill:validate
-      - name: Verify CRLF skill validation
-        shell: pwsh
-        run: |
-          $path = ".agents/skills/daski-provider/SKILL.md"
-          $original = [IO.File]::ReadAllBytes($path)
-          try {
-            $text = [Text.Encoding]::UTF8.GetString($original)
-            $text = $text.Replace("`r`n", "`n").Replace("`r", "`n")
-            $crlf = $text.Replace("`n", "`r`n")
-            [IO.File]::WriteAllText(
-              $path,
-              $crlf,
-              [Text.UTF8Encoding]::new($false)
-            )
-            npm run skill:validate
-            if ($LASTEXITCODE -ne 0) {
-              throw "CRLF skill validation failed"
-            }
-          } finally {
-            [IO.File]::WriteAllBytes($path, $original)
-          }
       - run: npm run test:run -- test/doctor.test.ts test/toolingContract.test.ts
 
   release:
@@ -142,27 +119,20 @@ jobs:
           node-version: 24
       - name: Verify tag and package version
         run: >-
-          node -e 'const fs=require("node:fs");
-          const expected=process.env.GITHUB_REF_NAME.slice(1);
+          node -e 'const expected=process.env.GITHUB_REF_NAME.slice(1);
           const actual=require("./package.json").version;
-          const source=fs.readFileSync(".agents/skills/daski-provider/SKILL.md","utf8");
-          const skill=/^  version: "([^"]+)"$/m.exec(source)?.[1];
-          if(actual!==expected||skill!==expected){throw new Error(
-          `tag ${expected} does not match package ${actual} and skill ${skill}`)}'
-      - name: Build release archives
+          if(actual!==expected){throw new Error(
+          `tag ${expected} does not match package ${actual}`)}'
+      - name: Build release archive
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          git archive --format=tar.gz --prefix="provider-${VERSION}/" \
-            --output="provider-${VERSION}.tar.gz" HEAD
-          git archive --format=zip --prefix=daski-provider/ \
-            --output=daski-provider-agent-skill.zip \
-            HEAD:.agents/skills/daski-provider
-          sha256sum "provider-${VERSION}.tar.gz" \
-            daski-provider-agent-skill.zip > SHA256SUMS
+          git archive --format=tar.gz --prefix="provider-full-${VERSION}/" \
+            --output="provider-full-${VERSION}.tar.gz" HEAD
+          sha256sum "provider-full-${VERSION}.tar.gz" > SHA256SUMS
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
           gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes
-          provider-*.tar.gz daski-provider-agent-skill.zip SHA256SUMS
+          provider-full-*.tar.gz SHA256SUMS

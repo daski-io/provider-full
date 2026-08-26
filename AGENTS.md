@@ -1,23 +1,28 @@
-# AGENTS.md — Daski provider starter guide
+# AGENTS.md — Daski provider-full starter guide
 
-This file is the canonical repository guide for coding agents and contributors.
+This is the canonical repository guide for coding agents and contributors.
 Read it before changing code. Keep durable project knowledge in tracked
-documentation, not in chat history or harness-specific files.
+documentation, not chat history or harness-specific files.
 
 ## Repository purpose
 
-This is the generic Express + TypeScript starter for organizations offering
+This is the full-featured generic Express + TypeScript starter for offering
 services through Daski. It receives discovery, quote, signed dispatch,
 lifecycle, wallet-action, and evidence calls over the standard Exact-EVM rail.
 
-The repository intentionally includes only one marketplace service:
+Use this repository for dynamic quotes, durable jobs, later input/cancellation,
+assets/actions, human review, email/admin, direct A2A, protected-data workflows,
+or multi-replica recovery. When every operation is fixed-price, automated,
+one-shot, and terminal within 50 seconds, prefer the smaller
+`https://github.com/daski-io/provider` starter.
 
-| Slug | Folder | Purpose |
-| --- | --- | --- |
-| `dummy` | `src/services/dummy` | Reference implementation with free `echo` and paid `create-note` skills |
+The repositories are alternatives. The portable agent skill is maintained only
+in `daski-io/provider`; after selecting this full starter, this file and this
+repository's docs are authoritative.
 
-The dummy has no supplier or private policy and is forbidden on Base mainnet.
-A provider fork should replace it with its own service.
+The only marketplace service is `src/services/dummy`, a reference with free
+`echo` and paid `create-note` skills. It has no supplier/private policy and is
+forbidden on Base Mainnet. A provider fork replaces it with its product.
 
 Do not reintroduce retired payment routers, alternate native payment paths, or
 provider-specific code from another repository.
@@ -48,7 +53,6 @@ npm run dev:db:up
 npm run doctor -- --stage=testnet
 npm run try-skill -- dummy echo
 npm run docs:check
-npm run skill:validate
 npm run dev
 npm run typecheck
 npm run typecheck:test
@@ -62,25 +66,23 @@ npm run build
 npm start
 ```
 
-Node 24 and PostgreSQL 16 are required. The bundled Compose service is a
-loopback-only development database; `npm run dev:db:stop` preserves its named
-volume. `doctor` is read-only and reports stable, redacted setup findings for
-local, Testnet, or Mainnet. Unit tests need no live database, RPC, or supplier.
-PostgreSQL security/migration scripts require an explicitly selected disposable
+Node 24 and PostgreSQL 16 are required. Compose starts a loopback-only
+development database; `npm run dev:db:stop` preserves its named volume.
+`doctor` is read-only and redacted. Unit tests need no live database, RPC, or
+supplier. PostgreSQL security/migration scripts require an explicit disposable
 database.
 
 ## Change workflow
 
 1. Inspect the closest types, implementation, docs, and tests before editing.
 2. Make the smallest cohesive change.
-3. Update public manifest/docs, runtime code, validation, migrations, and tests
-   together when a contract changes.
-4. Keep service behavior within the service folder.
-5. Run targeted tests, then the full quality gates appropriate to the change.
+3. Update manifest/docs, runtime, validation, migrations, and tests together
+   when a contract changes.
+4. Keep service behavior inside its service folder.
+5. Run targeted tests, then the full relevant gates.
 6. Scan the diff for credentials, customer data, supplier account data,
    private policy, raw runtime output, and provider-specific leakage.
-7. Never weaken a fail-closed check merely to make a fixture or deployment
-   pass.
+7. Never weaken a fail-closed check merely to make a fixture/deployment pass.
 
 Keep files near 250 lines when practical. Split by responsibility before
 adding another large branch to an already-large module.
@@ -88,27 +90,27 @@ adding another large branch to an already-large module.
 ## Implementation invariants
 
 - Quote validates buyer data before payment; execute revalidates it.
-- Financial and lifecycle state changes use conditional writes, locks, leases,
+- Financial/lifecycle state uses conditional writes, locks, leases,
   idempotency keys, and fencing. Never use process-local money/task guards.
 - Journal intent before a non-convergent external mutation. Reconcile
   authoritative supplier state after ambiguity; never guess or blindly retry.
-- Persist signed chain writes before broadcast and reconcile them after restart.
+- Persist signed chain writes before broadcast and reconcile after restart.
 - Ownership comes from the wallet-authorized payer. Order ids, asset ids, and
   caller metadata are not credentials.
-- Consequential asset mutations require an admitted standard action. Destructive
-  actions also require the delayed second-authorization flow and adversarial
+- Consequential asset mutations require an admitted standard action.
+  Destructive actions also require delayed second authorization and adversarial
   mismatch/replay tests. Do not invent a service-local signature scheme.
-- Migrations are append-only once published and are checksummed. Core
-  migrations live under `src/core/db/migrations/`; service migrations stay
-  with their service.
+- Applied migrations are immutable, append-only, and checksummed. Core
+  migrations live under `src/core/db/migrations`; service migrations stay with
+  their service.
 - Use the centralized logger. Never log protected payloads or include
   supplier-controlled details in public errors.
-- Direct supplier HTTP must use the reviewed outbound network boundary, with
-  pinned endpoints, bounded responses/timeouts, and SSRF protection.
-- Declare workers and live invariants through service readiness so
+- Direct supplier HTTP uses the reviewed outbound boundary with pinned
+  endpoints, bounded requests/responses, and SSRF protection.
+- Declare workers and live supplier invariants through service readiness so
   `/health/ready` fails closed.
-- Treat `providerLaunchPolicy` changes as coordinated Daski onboarding/release
-  changes. Signed artifacts must contain the exact same set.
+- Treat `providerLaunchPolicy` changes as coordinated Daski release changes.
+  Signed artifacts must contain the exact same set.
 
 ## Configuration and environments
 
@@ -116,24 +118,19 @@ adding another large branch to an already-large module.
 standard-rail artifacts and valid contract/signer bindings; placeholders are
 expected to fail.
 
-The upstream starter is hosting-neutral. The Dockerfile is the canonical
-production artifact; provider forks may add their own deployment descriptors.
-Every hosting platform must use `/health/ready` for traffic activation and
-keep at least one provider process running while services are active.
+The upstream starter is hosting-neutral. Its Dockerfile is the canonical
+production artifact; forks may add deployment descriptors. Use
+`/health/ready` for traffic activation and keep required workers available.
 
-Service-specific environment variables belong in
-`src/services/<slug>/config.ts` and must be parsed strictly. Keep credentials
-out of manifests, documentation, errors, and tests. Testnet services should use
-supplier sandboxes or explicit fakes. Mainnet service modules must refuse mock
-suppliers and enforce their own live readiness evidence.
-
-The dummy service must remain incapable of booting on Base mainnet.
+Service variables belong in `src/services/<slug>/config.ts` and are parsed
+strictly. Keep credentials out of manifests, docs, errors, and tests. Testnet
+uses supplier sandboxes/fakes; Mainnet services must refuse them and enforce
+live readiness evidence. Dummy must never boot on Base Mainnet.
 
 ## Public surfaces
 
 - `/health/live`, `/health/ready`
-- `/.well-known/agent.json`,
-  `/.well-known/agent-registration.json`
+- `/.well-known/agent.json`, `/.well-known/agent-registration.json`
 - `/agent-cards/<slug>.json`, `/skills/*`, `/llms.txt`
 - `/standard-rail/*`
 - `/a2a/:serviceSlug`
@@ -159,14 +156,14 @@ Start at `README.md`, then use:
 - `docs/releasing.md`
 - `SECURITY.md`
 
-The portable agent entrypoint is `.agents/skills/daski-provider/SKILL.md`. It
-routes agents to the tracked documentation and must not become a second manual.
-Do not leave the only copy of a durable decision in a harness directory or
-assistant memory.
+The portable agent entrypoint is published by
+`https://github.com/daski-io/provider/tree/develop/.agents/skills/daski-provider`.
+`docs/agent-skill.md` explains the single-copy policy. Do not leave the only
+copy of a durable decision in a harness directory or assistant memory.
 
 ## Git policy
 
-Work lands on `develop` or a branch merged into `develop`. Do not push
-`main` without explicit authorization in the current session. Never add AI
-tool attribution or co-author trailers to commits, pull requests, tags, or
-release notes.
+Work lands on `develop` or a branch merged into `develop`. Do not push `main`
+without explicit authorization in the current session. Never add AI-tool
+attribution or co-author trailers to commits, pull requests, tags, or release
+notes.

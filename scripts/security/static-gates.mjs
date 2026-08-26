@@ -40,7 +40,6 @@ if (!bootstrapSource.includes("npm run doctor -- --stage=testnet")) {
 for (const script of [
   "doctor",
   "docs:check",
-  "skill:validate",
   "typecheck",
   "typecheck:test",
   "test:run",
@@ -141,23 +140,21 @@ if (
 }
 if (
   !composeSource.includes("provider_postgres_data:/var/lib/postgresql/data")
-  || !composeSource.includes("name: daski-provider-dev-postgres")
+  || !composeSource.includes("name: daski-provider-full-dev-postgres")
 ) {
   failures.push("the local PostgreSQL service must use its named development volume");
 }
-for (const requiredPath of ["scripts/doctor.mjs", ".agents/skills/daski-provider/SKILL.md"]) {
+for (const requiredPath of ["scripts/doctor.mjs"]) {
   if (!existsSync(join(root, requiredPath))) failures.push(`${requiredPath} is missing`);
 }
 const releaseWorkflow = read(".github/workflows/security-release.yml");
 for (const required of [
   'tags: ["v*"]',
   "npm run docs:check",
-  "npm run skill:validate",
   "runs-on: windows-latest",
-  "Verify CRLF skill validation",
   "needs: [verify, windows-tooling]",
   "docker compose config --quiet",
-  "daski-provider-agent-skill.zip",
+  'provider-full-${VERSION}.tar.gz',
   "SHA256SUMS",
   "gh release create",
 ]) {
@@ -404,8 +401,12 @@ for (const publicDoc of publicDocs) {
     failures.push(`${projectPath(publicDoc)} references a harness-local file`);
   }
 }
-if (!read("docs/agent-skill.md").includes(".agents/skills/daski-provider")) {
-  failures.push("agent skill guide must keep the portable installation canonical");
+const agentSkillGuide = read("docs/agent-skill.md");
+if (!agentSkillGuide.includes("https://github.com/daski-io/provider")) {
+  failures.push("agent skill guide must link to the canonical provider skill");
+}
+if (existsSync(join(root, ".agents/skills/daski-provider"))) {
+  failures.push("provider-full must not duplicate the canonical provider skill");
 }
 
 if (failures.length > 0) {

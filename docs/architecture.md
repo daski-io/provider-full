@@ -46,7 +46,7 @@ src/
 test/                         core and cross-service tests
 docs/                         public provider integration guidance
 scripts/                      build, registration, migration, and security tools
-.agents/skills/daski-provider/ portable agent router into the public docs
+docs/agent-skill.md           link to the canonical cross-starter agent skill
 ```
 
 `src/providerExtensions/` is intentionally absent until a provider needs a

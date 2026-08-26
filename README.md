@@ -1,4 +1,4 @@
-# Daski Provider Starter
+# Daski Provider Full Starter
 
 Build the provider-side adapter that lets agents discover, buy, and operate
 your existing product through [Daski](https://daski.io).
@@ -8,6 +8,17 @@ an API, MCP server, SDK, or internal application. It supplies the Daski
 protocol, payment, identity, ownership, persistence, security, and operator
 foundations. You supply the product integration and operate the resulting
 provider.
+
+## Choose the right starter
+
+| Starter | Use it when |
+| --- | --- |
+| [`provider`](https://github.com/daski-io/provider) | Every operation is fixed-price, fully automated, one-shot, terminal within 50 seconds, and needs no durable asset/lifecycle or later reconciliation. |
+| `provider-full` (this repository) | Any operation needs dynamic quotes, long-running jobs, later input, cancellation, durable assets/actions, human review, email, admin, direct A2A, protected-data workflows, or multi-replica recovery. |
+
+The starters share the standard Exact-EVM rail but are alternatives, not
+layers. The portable agent skill is published only by `provider`; this full
+repository links to that canonical copy instead of maintaining a duplicate.
 
 The starter is intentionally generic. Its only marketplace service is
 `src/services/dummy`, a small reference with a free `echo` skill and a paid
@@ -52,8 +63,8 @@ You need Node.js 24 and npm. No database, wallet, RPC, Daski artifact, or API
 credential is used by this tour.
 
 ```bash
-git clone https://github.com/daski-io/provider.git
-cd provider
+git clone https://github.com/daski-io/provider-full.git
+cd provider-full
 npm ci
 npm run try-skill -- dummy echo
 npm run try-skill -- dummy create-note
@@ -103,7 +114,6 @@ src/providerLaunchPolicy.ts       exact reviewed paid outcome/action ids
 src/providerScreening.ts          optional provider-policy composition
 test/                              core and cross-service tests
 docs/                              canonical integration and onboarding guides
-.agents/skills/daski-provider/    portable Agent Skill
 scripts/                           diagnostics, operations, and CI helpers
 compose.yaml                       local PostgreSQL only
 Dockerfile                         canonical hosting-neutral runtime image
@@ -144,7 +154,6 @@ npm run typecheck:test
 npm run lint
 npm run lint:architecture
 npm run docs:check
-npm run skill:validate
 npm run test:run
 npm run test:coverage
 npm run test:critical-coverage
@@ -204,7 +213,7 @@ that the process exists.
 Fork this repository when possible, then retain it as an upstream remote:
 
 ```bash
-git remote add upstream https://github.com/daski-io/provider.git
+git remote add upstream https://github.com/daski-io/provider-full.git
 git fetch upstream
 git merge upstream/develop
 ```

@@ -17,8 +17,8 @@ RUN npm prune --omit=dev
 FROM ${NODE_IMAGE} AS runtime
 WORKDIR /app
 
-LABEL org.opencontainers.image.source="https://github.com/daski-io/provider" \
-      org.opencontainers.image.description="Daski provider runtime"
+LABEL org.opencontainers.image.source="https://github.com/daski-io/provider-full" \
+      org.opencontainers.image.description="Daski provider-full runtime"
 
 COPY --chown=node:node package.json package-lock.json ./
 COPY --chown=node:node --from=builder /app/node_modules ./node_modules

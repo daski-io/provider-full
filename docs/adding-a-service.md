@@ -478,7 +478,6 @@ npm run typecheck:test
 npm run lint
 npm run lint:architecture
 npm run docs:check
-npm run skill:validate
 npm run test:run
 npm run test:coverage
 npm run test:critical-coverage

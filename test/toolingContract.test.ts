@@ -39,13 +39,10 @@ describe("starter tooling contracts", () => {
     expect(output.result.artifacts.map((artifact) => artifact.name)).toContain(artifactName);
   });
 
-  it("keeps documentation and the portable skill machine-validatable", () => {
+  it("keeps documentation machine-validatable", () => {
     const docs = runNode(["scripts/docs-check.mjs"]);
-    const skill = runNode(["scripts/validate-skill.mjs"]);
 
     expect(docs.status, docs.stderr).toBe(0);
     expect(docs.stdout).toContain("documentation checks passed");
-    expect(skill.status, skill.stderr).toBe(0);
-    expect(skill.stdout).toContain("Agent Skill validation passed");
   });
 });
