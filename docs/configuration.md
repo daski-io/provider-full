@@ -109,6 +109,12 @@ that the registry's wallet binding matches the configured signing key.
 Registration is a chain mutation and is never performed by doctor or boot
 merely to fix configuration.
 
+After deployment and explicit operator review, `npm run daski:register --
+--gateway <origin>` owns provider identity reconciliation, service
+registration, splitter activation, and runtime-catalog promotion. It may sign
+artifacts and send transactions. `--service <slug>` narrows the run;
+`--retire 0x<SERVICE_ID>` is a separate guarded retirement operation.
+
 ## Standard Exact-EVM rail
 
 These values are issued or reviewed as one environment-specific set. Missing,
@@ -126,16 +132,18 @@ extra, expired, differently signed, or inconsistent values fail closed.
 | `EAS_RUNTIME_CODE_HASH` | Non-zero reviewed EAS runtime code hash. |
 | `EAS_OUTCOME_SCHEMA_UID` | Reviewed bytes32 outcome schema uid. |
 | `SANCTIONS_ORACLE_ADDRESS` | Standard-rail sanctions oracle coordinate. Service/provider screening remains a separate product policy. |
-| `STANDARD_RAIL_PROVIDER_CONTROL_PROFILE_HASH` | Provider control profile committed by outcomes and servicing artifacts. |
-| `STANDARD_RAIL_OUTCOMES_JSON` | Compressed/encoded provider outcome configuration supplied for the exact reviewed paid outcome set. Secret-like signed configuration; do not edit. |
+| `STANDARD_RAIL_PROVIDER_CONTROL_PROFILE_HASH` | Provider control profile committed by runtime listings and servicing artifacts. |
+| `STANDARD_RAIL_GLOBAL_POLICY_JSON` | Daski-issued JSON containing signed chain-evidence, active-rail, and capability envelopes plus reviewed global code hashes. Preserve exactly. |
 | `STANDARD_RAIL_SERVICING_ADMISSION_JSON` | Signed servicing admission envelope for owner actions. Do not edit or self-sign. |
 | `STANDARD_RAIL_ASSET_ACTION_CATALOG_JSON` | Signed exact action catalog. Action ids, destructiveness, replay policy, schemas, and validity must match code. |
 | `STANDARD_RAIL_FINALITY_CONFIRMATIONS` | Standard evidence confirmation requirement; must be positive and agree with the release profile. |
 
-The configured outcome ids must exactly equal
-`src/providerLaunchPolicy.ts`. The signed action catalog must exactly equal its
-reviewed action definitions. A provider cannot locally grant itself an outcome
-or action by changing the allowlist.
+Paid skills and asset-action definitions derive from installed service
+contracts. Registration must promote a gateway-verified runtime listing for
+each paid skill; boot warns on an unlisted installed skill and rejects foreign
+or inconsistent heads. The signed action catalog must exactly equal installed
+action definitions. A provider cannot locally grant itself a listing or action
+by changing configuration.
 
 ## Application secrets and protected data
 

@@ -65,7 +65,7 @@ export async function loadEscalationContext(
 
 export function summarizeEscalationContext(context: EscalationContext): string {
   const review = context.escalation;
-  const protectedCase = review.source === "email_agent" || review.source === "screening";
+  const protectedCase = review.source === "email_agent" || review.assignee === "human";
   const lines = [
     `Review ${review.id}`,
     `  status: ${review.status}`,

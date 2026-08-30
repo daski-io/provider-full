@@ -88,6 +88,14 @@ export async function startServer(
     (req as express.Request & { rawBody?: Buffer }).rawBody = buf;
   };
   app.use(
+    "/webhooks/postmark/inbound",
+    express.json({
+      limit: `${config.POSTMARK_INBOUND_MAX_REQUEST_BYTES}b`,
+      inflate: false,
+      verify: captureRawBody,
+    }),
+  );
+  app.use(
     "/standard-rail",
     (req, res, next) => {
       if (req.method !== "POST" && req.method !== "PUT") {
@@ -144,13 +152,13 @@ export async function startServer(
     }),
   );
 
-  // Rate limits. Tight on service-cost paths and separately bounded on
-  // direct public free-skill calls.
+  // Service-owned routes and direct public free-skill calls have separate
+  // limits so one surface cannot consume the other's budget.
   // Operator can whitelist gateway egress IPs via RATE_LIMIT_BYPASS_IPS
   // so server-to-server traffic doesn't share a bucket with anonymous
   // callers.
-  const serviceRouteLimiter = makeRateLimiter({
-    namespace: "service-route",
+  const serviceLimiter = makeRateLimiter({
+    namespace: "service",
     capacity: config.RATE_LIMIT_SERVICE_CAPACITY,
     perMinute: config.RATE_LIMIT_SERVICE_PER_MIN,
     bypassIps,
@@ -185,13 +193,14 @@ export async function startServer(
   app.use("/webhooks", postmarkWebhookRouter);
   app.use("/services", requireCurrentProviderIdentity);
 
-  // Service-mounted routes attach below /services/<slug> and use the
-  // tighter service-route limiter.
+  // Service-mounted routes: each ServiceModule.protocol.routes hook attaches
+  // additional Express handlers under /services/<slug>/ behind the dedicated
+  // service-route limiter.
   for (const module of getAllServices()) {
     if (module.protocol.routes) {
       const r = Router();
       module.protocol.routes(r);
-      app.use(`/services/${module.manifest.slug}`, serviceRouteLimiter, r);
+      app.use(`/services/${module.manifest.slug}`, serviceLimiter, r);
     }
   }
 

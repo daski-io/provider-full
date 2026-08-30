@@ -110,7 +110,7 @@ succeeded.
 src/core/                         service-neutral Daski runtime
 src/services/dummy/               reference ServiceModule, docs, and tests
 src/providerServices.ts           installed-service composition
-src/providerLaunchPolicy.ts       exact reviewed paid outcome/action ids
+src/registerGatewayServices.ts    reviewed self-registration/update CLI
 src/providerScreening.ts          optional provider-policy composition
 test/                              core and cross-service tests
 docs/                              canonical integration and onboarding guides
@@ -134,9 +134,10 @@ them. The architecture and static gates enforce these boundaries.
 | Mainnet | Whitelisted, reviewed production provider on Base | Dummy removed, production gates pass, and Daski grants admission |
 
 A copied `.env.example` is not bootable by design. Daski onboarding issues a
-mutually consistent set of Testnet contract coordinates, signer bindings, and
-signed outcome, servicing-admission, and action-catalog artifacts. Providers
-must not generate or edit them.
+mutually consistent set of Testnet contract coordinates, signer bindings,
+signed global policy, servicing-admission, and action-catalog artifacts. Paid
+runtime listings are derived from each published service contract and promoted
+by the registration workflow. Providers must not invent or edit these values.
 
 The provider can run locally while pointing at Testnet. A fully private local
 payment topology would require a complete contract deployment, facilitator,
@@ -177,6 +178,33 @@ newer, runtime-injected secrets, the required outbound API/RPC access, and at
 least one continuously available provider process while services are active.
 Route traffic only when `/health/ready` succeeds; `/health/live` proves only
 that the process exists.
+
+## Register with Daski
+
+Unlike the minimal starter, `provider-full` owns the reviewed self-registration
+workflow. After the public provider is deployed, configuration passes, and the
+operator has reviewed the wallet, chain, gateway, and possible transaction
+costs, run on Testnet:
+
+```bash
+npm run daski:register -- --gateway https://<daski-testnet-gateway>
+```
+
+The command reconciles the configured ERC-8004 provider identity, publishes
+every active service contract, obtains gateway-signed preparations, persists chain writes
+before broadcast, verifies activation evidence, and atomically promotes the
+runtime catalog. `--service <slug>` limits a run. Re-running an unchanged
+service is convergent.
+
+Retirement is separate and explicit:
+
+```bash
+npm run daski:register -- --retire 0x<SERVICE_ID>
+```
+
+It first proves the service has no active work or assets and records the
+retirement locally and at the gateway. Never use registration or retirement
+against Mainnet without the coordinated, whitelisted release procedure.
 
 ## Documentation
 

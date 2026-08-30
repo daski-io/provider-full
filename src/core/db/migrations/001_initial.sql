@@ -1988,3 +1988,155 @@ CREATE POLICY provider_chain_writes_standard_runtime ON public.provider_chain_wr
 
 
 SET check_function_bodies = true;
+
+-- Durable, encrypted email attachments for supplier correspondence relay.
+-- Message rows remain the delivery/idempotency anchor; ordinal preserves
+-- the supplier's attachment order and makes webhook retries convergent.
+ALTER TABLE emails_outbound
+  ADD COLUMN reply_to TEXT
+  CHECK (reply_to IS NULL OR reply_to LIKE 'daski:v1:%');
+
+CREATE TABLE email_attachments (
+    id                  UUID PRIMARY KEY,
+    inbound_id          UUID REFERENCES emails_inbound(id) ON DELETE CASCADE,
+    outbound_id         UUID REFERENCES emails_outbound(id) ON DELETE CASCADE,
+    ordinal             INTEGER NOT NULL CHECK (ordinal BETWEEN 0 AND 49),
+    filename            TEXT NOT NULL CHECK (filename LIKE 'daski:v1:%'),
+    content_type        TEXT NOT NULL CHECK (length(content_type) BETWEEN 1 AND 255),
+    content_id          TEXT CHECK (content_id IS NULL OR content_id LIKE 'daski:v1:%'),
+    content_disposition TEXT NOT NULL
+      CHECK (content_disposition IN ('attachment','inline')),
+    content_encrypted   TEXT NOT NULL CHECK (content_encrypted LIKE 'daski:v1:%'),
+    content_sha256      TEXT NOT NULL CHECK (content_sha256 ~ '^[0-9a-f]{64}$'),
+    content_bytes       INTEGER NOT NULL CHECK (content_bytes >= 0),
+    relay_eligible      BOOLEAN NOT NULL,
+    quarantine_reason   TEXT CHECK (
+      quarantine_reason IS NULL OR
+      quarantine_reason IN (
+        'unsupported_content_type',
+        'invalid_content',
+        'attachment_too_large'
+      )
+    ),
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK ((inbound_id IS NOT NULL)::int + (outbound_id IS NOT NULL)::int = 1),
+    CHECK (relay_eligible = (quarantine_reason IS NULL))
+);
+
+CREATE UNIQUE INDEX email_attachments_inbound_ordinal_idx
+  ON email_attachments(inbound_id, ordinal)
+  WHERE inbound_id IS NOT NULL;
+CREATE UNIQUE INDEX email_attachments_outbound_ordinal_idx
+  ON email_attachments(outbound_id, ordinal)
+  WHERE outbound_id IS NOT NULL;
+CREATE INDEX email_attachments_sha256_idx ON email_attachments(content_sha256);
+
+-- Postmark-derived verdicts are persisted at the authenticated webhook
+-- boundary. Service handlers must not reinterpret raw message headers.
+ALTER TABLE emails_inbound
+  ADD COLUMN postmark_sender_authenticated BOOLEAN NOT NULL DEFAULT false,
+  ADD COLUMN postmark_spam_safe BOOLEAN NOT NULL DEFAULT false;
+
+-- Durable provider-side orchestration for gateway enrollment. The exact
+-- prepared response is stored before any permissionless splitter broadcast.
+ALTER TABLE provider_chain_writes
+  DROP CONSTRAINT provider_chain_writes_purpose_check;
+
+ALTER TABLE provider_chain_writes
+  ADD CONSTRAINT provider_chain_writes_purpose_check CHECK (purpose IN (
+    'reputation_attestation',
+    'refund_approval',
+    'refund',
+    'service_registration',
+    'service_uri_update',
+    'nonce_cancel',
+    'standard_reputation_outcome',
+    'splitter_deployment'
+  ));
+
+DROP POLICY IF EXISTS provider_chain_writes_standard_runtime
+  ON provider_chain_writes;
+
+CREATE POLICY provider_chain_writes_standard_runtime
+  ON provider_chain_writes
+  USING (purpose IN (
+    'service_registration',
+    'service_uri_update',
+    'standard_reputation_outcome',
+    'splitter_deployment'
+  ))
+  WITH CHECK (purpose IN (
+    'service_registration',
+    'service_uri_update',
+    'standard_reputation_outcome',
+    'splitter_deployment'
+  ));
+
+CREATE TABLE provider_gateway_registrations (
+  id UUID PRIMARY KEY,
+  gateway_origin TEXT NOT NULL,
+  service_row_id UUID NOT NULL REFERENCES services(id),
+  service_id BYTEA NOT NULL CHECK (octet_length(service_id) = 32),
+  card_contract_hash BYTEA NOT NULL CHECK (octet_length(card_contract_hash) = 32),
+  state TEXT NOT NULL CHECK (state IN (
+    'INTENT_READY','PREPARED','BROADCAST','EVIDENCE_SUBMITTED','ACTIVE','ATTENTION'
+  )),
+  idempotency_key TEXT NOT NULL CHECK (length(idempotency_key) BETWEEN 8 AND 128),
+  gateway_registration_id UUID,
+  canonical_intent JSONB NOT NULL,
+  prepared_response JSONB,
+  canonical_evidence JSONB,
+  last_error_code TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (gateway_origin, service_id),
+  UNIQUE (gateway_origin, idempotency_key)
+);
+
+CREATE INDEX provider_gateway_registrations_state_idx
+  ON provider_gateway_registrations(state, updated_at);
+
+CREATE TABLE provider_gateway_splitter_writes (
+  listing_id UUID PRIMARY KEY,
+  gateway_registration_local_id UUID NOT NULL
+    REFERENCES provider_gateway_registrations(id),
+  expected_splitter_address TEXT NOT NULL
+    CHECK (expected_splitter_address ~ '^0x[0-9a-f]{40}$'),
+  canonical_transaction JSONB NOT NULL,
+  provider_write_id UUID REFERENCES provider_chain_writes(id),
+  transaction_hash TEXT
+    CHECK (transaction_hash IS NULL OR transaction_hash ~ '^0x[0-9a-f]{64}$'),
+  state TEXT NOT NULL CHECK (state IN (
+    'PREPARED','BROADCAST','CONFIRMED','REVERTED','ATTENTION'
+  )),
+  last_error_code TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX provider_gateway_splitter_writes_registration_idx
+  ON provider_gateway_splitter_writes(gateway_registration_local_id, state);
+
+-- Append-only provider runtime catalog: one immutable listing version per
+-- admitted runtime commitment, with one active head per service skill.
+CREATE TABLE provider_runtime_listing_versions (
+  id UUID PRIMARY KEY,
+  gateway_origin TEXT NOT NULL,
+  service_id BYTEA NOT NULL CHECK (octet_length(service_id) = 32),
+  skill_id TEXT NOT NULL CHECK (length(skill_id) BETWEEN 1 AND 96),
+  listing_id UUID NOT NULL,
+  listing_key BYTEA NOT NULL CHECK (octet_length(listing_key) = 32),
+  payment_required BOOLEAN NOT NULL,
+  runtime_commitment_hash BYTEA NOT NULL CHECK (
+    octet_length(runtime_commitment_hash) = 32
+  ),
+  runtime_commitment JSONB NOT NULL,
+  bundle JSONB NOT NULL,
+  promoted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  superseded_at TIMESTAMPTZ,
+  UNIQUE (gateway_origin, service_id, skill_id, runtime_commitment_hash)
+);
+
+CREATE UNIQUE INDEX provider_runtime_listing_heads
+  ON provider_runtime_listing_versions(gateway_origin, service_id, skill_id)
+  WHERE superseded_at IS NULL;

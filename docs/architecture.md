@@ -10,7 +10,6 @@ service modules implement the product being sold.
 src/bootstrap.ts
   └─ index.ts
        ├─ providerServices.ts ───────────> services/<slug>/
-       ├─ providerLaunchPolicy.ts
        ├─ providerScreening.ts
        └─ core/
             ↑
@@ -41,7 +40,7 @@ src/
   providerExtensions/
     <name>/                   optional provider policy/vendor implementation
   providerServices.ts         installed services
-  providerLaunchPolicy.ts     exact paid outcome/action allowlist
+  registerGatewayServices.ts  registration, activation, and retirement CLI
   providerScreening.ts        optional policy extension composition
 test/                         core and cross-service tests
 docs/                         public provider integration guidance
@@ -85,9 +84,12 @@ proven. In broad order it:
 4. installs the optional provider screening extension;
 5. registers each `ServiceModule` and its docs/catalog;
 6. validates operator and email tool registries;
-7. parses the signed standard-rail outcome set;
-8. parses the servicing admission and exact asset-action catalog;
-9. verifies reviewed contracts, runtime code, identity, wallet, and catalog;
+7. derives paid skills/actions from installed service contracts and loads the
+   promoted runtime-listing catalog;
+8. parses the signed global rail policy, servicing admission, and exact
+   asset-action catalog;
+9. verifies reviewed contracts, runtime commitments, identity, wallet, and
+   catalog;
 10. starts required workers and readiness monitors; and
 11. starts the HTTP listener.
 
@@ -114,7 +116,7 @@ reads that create no durable product state.
 A paid order crosses several independent bindings:
 
 1. The provider quote validates service arguments and returns exact atomic USDC.
-2. Daski binds the quote to the reviewed listing/outcome and payment recipe.
+2. Daski binds the quote to the promoted runtime listing and payment recipe.
 3. The buyer authorizes a standard Exact-EVM USDC transfer.
 4. The facilitator verifies the payment and the gateway records finalized
    standard evidence.
@@ -127,6 +129,21 @@ A paid order crosses several independent bindings:
 9. The provider writes a replay-safe terminal reputation outcome.
 
 The adapter never receives authority to reinterpret payment evidence.
+
+## Registration and runtime catalog
+
+`npm run daski:register` is the only generic registration composition entry.
+It derives the published service/skill contracts from installed modules,
+ensures the provider identity and on-chain service, signs provider intent,
+verifies gateway preparations and canonical splitter transactions, persists
+every chain write before broadcast, waits for finality, submits evidence, and
+cross-checks the gateway's runtime commitments. All skill versions for a
+service promote atomically into an append-only catalog.
+
+Unchanged listings remain on their original commitment; changed contracts
+append a new version and supersede the old head. Safe retirement is a separate
+explicit command and fails while active tasks, assets, jobs, supplier
+operations, or reviews remain.
 
 ## Assets and wallet actions
 

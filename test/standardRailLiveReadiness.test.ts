@@ -61,13 +61,26 @@ function liveOutcome(outcomeId: string): ProviderOutcomeConfig {
 }
 
 const outcomes = new Map([
-  "dummy-create-note",
-  "sample-create-item",
-  "sample-regulated-item",
+  "paid-alpha",
+  "paid-beta",
+  "form-wyoming-llc",
 ].map((outcomeId) => [outcomeId, liveOutcome(outcomeId)]));
 const config = {
   evidenceRpcUrls: ["https://rpc.example"],
   outcomes,
+  globalPolicy: {
+    chainEvidencePolicy: {
+      payload: {
+        canonicalToken: token,
+        canonicalTokenRuntimeCodeHash: keccak256(tokenCode),
+        tokenImplementationAddress: implementation,
+        tokenImplementationRuntimeCodeHash: keccak256(implementationCode),
+        tokenImplementationSlot: implementationSlot,
+        tokenDomainSeparator: domainSeparator,
+      },
+    },
+    sanctionsOracleRuntimeCodeHash: keccak256(oracleCode),
+  },
   sanctionsOracleAddress: oracle,
   easAddress: eas,
   easRuntimeCodeHash: keccak256(easCode),

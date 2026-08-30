@@ -1,5 +1,8 @@
+// The dummy service is a compiled, tested reference implementation of
+// the ServiceModule contract — the starting point for building a real
+// service (docs/adding-a-service.md).
+
 export const DUMMY_SLUG = "dummy";
-export const DUMMY_OUTCOME_ID = "dummy-create-note";
 export const NOTE_ASSET_TYPE = "note";
 
 /// Retail price of create-note in atomic USDC (6 decimals): $0.10.

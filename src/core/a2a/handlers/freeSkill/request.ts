@@ -4,7 +4,10 @@ import { isPaymentRequired } from "../../../pricing/index.js";
 import { extractDataFromParts } from "../../parts.js";
 import { DASKI_ERR, JSON_RPC } from "../../jsonrpc.js";
 import { missingRequiredFields } from "../requiredFields.js";
-import { getService } from "../../../serviceRegistry/registry.js";
+import {
+  getService,
+  validateSkillInput,
+} from "../../../serviceRegistry/registry.js";
 import type { TaskDurability } from "../../../serviceRegistry/types.js";
 import { validateFreeSkillInput } from "./inputValidation.js";
 import type { DaskiMetadata, FreeSkillError } from "./types.js";
@@ -88,6 +91,15 @@ export async function resolveFreeSkillRequest(args: {
       ok: false,
       code: JSON_RPC.INVALID_PARAMS,
       message: input.message,
+    };
+  }
+  try {
+    validateSkillInput(args.serviceSlug, skillId, data);
+  } catch {
+    return {
+      ok: false,
+      code: JSON_RPC.INVALID_PARAMS,
+      message: "Input does not match the published skill contract",
     };
   }
   const missing = missingRequiredFields(skill, data);

@@ -7,6 +7,7 @@ import {
   protectedLookupHashes,
 } from "../../chain/encryption.js";
 import { redactSensitiveValue } from "../../security/redaction.js";
+import type { Queryable } from "../queryable.js";
 
 // Inbound + outbound email storage. Backs the Postmark webhook handler
 // (writes to emails_inbound) and the outbound sender (writes to
@@ -46,6 +47,7 @@ export interface OutboundEmailRow {
   body_html: string | null;
   in_reply_to: string | null;
   thread_root: string | null;
+  reply_to: string | null;
   customer_id: string | null;
   service_id: string | null;
   transaction_id: string | null;
@@ -120,6 +122,7 @@ function decryptOutboundEmailRow(row: OutboundEmailRow): OutboundEmailRow {
     body_html: decryptOptional(row.body_html, "body_html"),
     in_reply_to: decryptOptional(row.in_reply_to, "in_reply_to"),
     thread_root: decryptOptional(row.thread_root, "thread_root"),
+    reply_to: decryptOptional(row.reply_to, "reply_to"),
   };
 }
 
@@ -143,9 +146,9 @@ export async function insertInboundEmail(args: {
   classification_reason?: string | null;
   processing_mode?: "email-agent" | "interceptor" | null;
   processing_service_slug?: string | null;
-}): Promise<InsertInboundResult> {
+}, db: Queryable = pool): Promise<InsertInboundResult> {
   const id = randomUUID();
-  const result = await pool.query(
+  const result = await db.query(
     `INSERT INTO emails_inbound (
        id, message_id, rfc_message_id, from_address, to_address, subject,
        body_text, body_html, headers,
@@ -192,7 +195,7 @@ export async function insertInboundEmail(args: {
     // ON CONFLICT skipped — a row with this message_id already exists.
     // Fetch it and signal the caller this was a duplicate delivery so it
     // doesn't re-dispatch the Email Agent.
-    const existing = await pool.query(
+    const existing = await db.query(
       `SELECT * FROM emails_inbound WHERE message_id = $1`,
       [args.message_id],
     );
@@ -388,20 +391,21 @@ export async function insertOutboundEmail(args: {
   in_reply_to?: string | null;
   thread_root?: string | null;
   customer_id?: string | null;
+  reply_to?: string | null;
   service_id?: string | null;
   transaction_id?: string | null;
   inbound_id?: string | null;
   sent_by: "email_agent" | "operator_agent" | "admin" | "system";
   idempotency_key?: string | null;
-}): Promise<{ row: OutboundEmailRow; inserted: boolean }> {
+}, db: Queryable = pool): Promise<{ row: OutboundEmailRow; inserted: boolean }> {
   const id = randomUUID();
-  const result = await pool.query(
+  const result = await db.query(
     `INSERT INTO emails_outbound (
        id, message_id, from_address, to_address, subject,
        body_text, body_html, in_reply_to, thread_root, thread_root_hash,
-       customer_id, service_id, transaction_id, inbound_id, sent_by, idempotency_key,
+       customer_id, service_id, transaction_id, inbound_id, sent_by, idempotency_key, reply_to,
        delivery_status
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'send_pending')
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'send_pending')
      ON CONFLICT (idempotency_key) DO NOTHING
      RETURNING *`,
     [
@@ -421,12 +425,13 @@ export async function insertOutboundEmail(args: {
       args.inbound_id ?? null,
       args.sent_by,
       args.idempotency_key ?? null,
+      encryptOptionalEmailValue(args.reply_to, "outbound", id, "reply_to"),
     ],
   );
   if (result.rows[0]) {
     return { row: decryptOutboundEmailRow(result.rows[0] as OutboundEmailRow), inserted: true };
   }
-  const existing = await pool.query(
+  const existing = await db.query(
     `SELECT * FROM emails_outbound WHERE idempotency_key = $1`,
     [args.idempotency_key],
   );

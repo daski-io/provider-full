@@ -639,10 +639,8 @@ export class StandardDispatchService {
   }): Promise<{ asset: AssetRow | null; linkOwnership: boolean }> {
     if (!args.requiresOwnership) return { asset: null, linkOwnership: false };
     const module = getService(args.serviceSlug);
-    const identifier = await module?.assets?.assetIdentifierFromData?.(
-      args.skillId,
-      args.request,
-    );
+    const identifier = await module?.assets?.assetIdentifierFromData?.(args.skillId, args.request)
+      ?? (args.request.domain as string | undefined);
     if (!identifier) throw new Error("Standard asset identifier is missing");
     const statuses = module?.assets?.assetLookupStatuses?.(args.skillId);
     const policy = module?.assets?.assetOwnershipPolicy?.(args.skillId) ?? "owner-only";

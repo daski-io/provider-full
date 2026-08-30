@@ -80,7 +80,7 @@ const inboundEmailFields = [
       : {}),
 }));
 const outboundEmailFields = [
-  "to_address", "subject", "body_text", "body_html", "in_reply_to", "thread_root",
+  "to_address", "subject", "body_text", "body_html", "in_reply_to", "thread_root", "reply_to",
 ].map((field) => ({
   column: field,
   context: (row: Row) => sinkContext("email-content", "emails_outbound", sinkText(row, "id"), field),
@@ -88,6 +88,16 @@ const outboundEmailFields = [
     ? { lookup: { column: "thread_root_hash", purpose: "email-thread" } }
     : {}),
 }));
+const emailAttachmentFields = ["filename", "content_id", "content_encrypted"].map((field) => ({
+  column: field,
+  context: (row: Row) => sinkContext(
+    field === "content_encrypted" ? "email-attachment" : "email-attachment-metadata",
+    "email_attachments",
+    sinkText(row, "id"),
+    field,
+  ),
+}));
+
 
 const coreProtectedDataSinks: ProtectedDataSink[] = [
   createDirectSink({
@@ -172,6 +182,12 @@ const coreProtectedDataSinks: ProtectedDataSink[] = [
   }),
   createDirectSink({ name: "outbound-email", table: "emails_outbound", cursorColumn: "id", fields: outboundEmailFields }),
   createDirectSink({
+    name: "email-attachments",
+    table: "email_attachments",
+    cursorColumn: "id",
+    fields: emailAttachmentFields,
+  }),
+  createDirectSink({
     name: "operator-chat",
     table: "operator_chats",
     cursorColumn: "id",
@@ -215,7 +231,8 @@ const coreProtectedDataSinks: ProtectedDataSink[] = [
     cursorColumn: "id",
     fields: [...fulfillmentHoldAttemptEvidenceFields, fulfillmentHoldAttemptErrorField],
   }),
-  // Generic encrypted fields revealed only through buyer-facing artifacts.
+  // transfer_artifacts retired (audit 4.6): the EPP auth code now lives in
+  // the generic artifact_secrets sink below.
   createDirectSink({
     name: "artifact-secrets",
     table: "artifact_secrets",

@@ -1,15 +1,64 @@
-import Ajv, { type ValidateFunction } from "ajv";
+import Ajv, { type ErrorObject, type ValidateFunction } from "ajv";
 import Ajv2020 from "ajv/dist/2020.js";
+import {
+  assertBoundedJsonValue,
+  REQUEST_JSON_BUDGET,
+  RESPONSE_JSON_BUDGET,
+} from "./jsonBounds.js";
 
 const ajv = new Ajv({ allErrors: true, strict: true });
 const ajv2020 = new Ajv2020({ allErrors: true, strict: true });
 const UNSAFE_PROPERTY_NAMES = new Set(["__proto__", "constructor", "prototype"]);
+const RECORD_REQUIRED_KEYS = [
+  "type", "properties", "additionalProperties", "maxProperties", "propertyNames",
+] as const;
+const RECORD_ALLOWED_KEYS = new Set<string>([
+  ...RECORD_REQUIRED_KEYS, "minProperties", "description",
+]);
+
+// A bounded dynamic record declares supplier-defined keys whose values are
+// bounded at runtime by the shared JSON budget, not by schema shape. The
+// schema must therefore pin the key bounds, and a record may never form a
+// whole request or result on its own.
+function assertBoundedDynamicRecord(
+  current: Record<string, unknown>,
+  path: string,
+  depth: number,
+): void {
+  if (depth === 0) {
+    throw new Error("Provider request schema must not use a dynamic record at the root");
+  }
+  const properties = current.properties;
+  const propertyNames = current.propertyNames as Record<string, unknown> | null | undefined;
+  const maxProperties = current.maxProperties;
+  const minProperties = current.minProperties;
+  const valid =
+    Object.keys(current).every((key) => RECORD_ALLOWED_KEYS.has(key)) &&
+    RECORD_REQUIRED_KEYS.every((key) => key in current) &&
+    properties !== null && typeof properties === "object" && !Array.isArray(properties) &&
+    Object.keys(properties as Record<string, unknown>).length === 0 &&
+    Number.isSafeInteger(maxProperties) &&
+    (maxProperties as number) >= 1 && (maxProperties as number) <= 128 &&
+    (minProperties === undefined ||
+      (Number.isSafeInteger(minProperties) && (minProperties as number) >= 0 &&
+        (minProperties as number) <= (maxProperties as number))) &&
+    (current.description === undefined || typeof current.description === "string") &&
+    propertyNames !== null && typeof propertyNames === "object" &&
+    !Array.isArray(propertyNames) &&
+    Object.keys(propertyNames as Record<string, unknown>).length === 1 &&
+    Number.isSafeInteger((propertyNames as Record<string, unknown>).maxLength) &&
+    ((propertyNames as Record<string, unknown>).maxLength as number) >= 1 &&
+    ((propertyNames as Record<string, unknown>).maxLength as number) <= 128;
+  if (!valid) {
+    throw new Error(`Provider request schema has an invalid bounded dynamic record at ${path}`);
+  }
+}
 
 function assertRecursivelyClosed(schema: Record<string, unknown>): void {
   const forbiddenKeywords = [
     "$ref", "$defs", "definitions", "patternProperties", "unevaluatedProperties",
     "dependentSchemas", "allOf", "anyOf", "oneOf", "not", "if", "then", "else",
-    "contains", "prefixItems", "propertyNames",
+    "contains", "prefixItems",
   ] as const;
   let nodes = 0;
   const visit = (node: unknown, path: string, depth: number): void => {
@@ -23,14 +72,24 @@ function assertRecursivelyClosed(schema: Record<string, unknown>): void {
     if (unsupported) {
       throw new Error(`Provider request schema uses unsupported keyword ${unsupported} at ${path}`);
     }
+    if ("propertyNames" in current && current.additionalProperties !== true) {
+      throw new Error(`Provider request schema uses unsupported keyword propertyNames at ${path}`);
+    }
     if (!["object", "array", "string", "number", "integer", "boolean", "null"].includes(
       current.type as string,
     )) throw new Error(`Provider request schema must declare an explicit type at ${path}`);
     if (current.type === "object") {
       if (
-        current.additionalProperties !== false ||
-        !current.properties || typeof current.properties !== "object" || Array.isArray(current.properties)
-      ) throw new Error(`Provider request schema must close object at ${path}`);
+        !current.properties || typeof current.properties !== "object" ||
+        Array.isArray(current.properties)
+      ) throw new Error(`Provider request schema must declare object properties at ${path}`);
+      if (current.additionalProperties === true) {
+        assertBoundedDynamicRecord(current, path, depth);
+        return;
+      }
+      if (current.additionalProperties !== false) {
+        throw new Error(`Provider request schema must close or bound object at ${path}`);
+      }
       const properties = current.properties as Record<string, unknown>;
       if (Object.keys(properties).some((name) => UNSAFE_PROPERTY_NAMES.has(name))) {
         throw new Error(`Provider request schema contains an unsafe property name at ${path}`);
@@ -61,9 +120,53 @@ export function compileProviderSchema(schema: Record<string, unknown>): Validate
     : ajv).compile(schema);
 }
 
+/// Field-precise mismatch detail built ONLY from schema-derived data
+/// (paths, Ajv keyword messages, allowed values) plus property NAMES —
+/// never the submitted values, which may be protected payloads.
+function describeSchemaErrors(errors: ErrorObject[] | null | undefined): string {
+  if (!errors || errors.length === 0) return "";
+  const shown = errors.slice(0, 3).map((error) => {
+    const where = error.instancePath
+      ? `'${error.instancePath.slice(1).replaceAll("/", ".")}' `
+      : "";
+    let detail = `${where}${error.message ?? "is invalid"}`;
+    const params = error.params as Record<string, unknown>;
+    if (Array.isArray(params.allowedValues)) {
+      const preview = params.allowedValues
+        .slice(0, 12)
+        .map((allowed) => JSON.stringify(allowed));
+      const more =
+        params.allowedValues.length > preview.length
+          ? `, … (${params.allowedValues.length} values)`
+          : "";
+      detail += `: ${preview.join(", ")}${more}`;
+    } else if (typeof params.allowedValue === "string") {
+      detail += `: ${JSON.stringify(params.allowedValue)}`;
+    } else if (typeof params.additionalProperty === "string") {
+      detail += ` ('${params.additionalProperty.slice(0, 64)}')`;
+    }
+    return detail;
+  });
+  const suffix = errors.length > 3 ? `; +${errors.length - 3} more` : "";
+  return ` — ${shown.join("; ")}${suffix}`;
+}
+
 export function validateProviderRequest(
   validate: ValidateFunction,
   value: unknown,
+  label: "Request" | "Response" = "Request",
 ): asserts value is Record<string, unknown> {
-  if (!validate(value)) throw new Error("Request does not match the provider outcome schema");
+  // One cumulative instance budget per value: dynamic-record contents are
+  // invisible to the schema, so structural bounds must hold for the whole
+  // document rather than per subtree.
+  assertBoundedJsonValue(
+    value,
+    label === "Request" ? REQUEST_JSON_BUDGET : RESPONSE_JSON_BUDGET,
+    label,
+  );
+  if (!validate(value)) {
+    throw new Error(
+      `${label} does not match the provider outcome schema${describeSchemaErrors(validate.errors)}`,
+    );
+  }
 }

@@ -93,8 +93,7 @@ const resolveOperationalReview: ReviewActionTool = {
       throw new Error("direct review approval is required");
     }
     const row = await reviewForContext(ctx.escalationId);
-    const manualSources = new Set(["operator"]);
-    if (row.review_kind !== "unclassified_review" || !manualSources.has(row.source)) {
+    if (row.review_kind !== "unclassified_review" || row.source !== "operator") {
       throw new Error("review requires its service-specific resolution action");
     }
     const outcome = text(args.outcome, "outcome");

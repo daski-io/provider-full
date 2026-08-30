@@ -1,9 +1,16 @@
 import { pool } from "./pool.js";
 import { withSessionAdvisoryLock } from "./sessionAdvisoryLock.js";
 
-// Cross-replica cycle lease for interval workers that poll suppliers or the
-// chain. A PostgreSQL session advisory lock ensures one replica performs a
-// cycle; per-item conditional writes remain the correctness boundary.
+// Cross-replica cycle lease (audit 4.2): interval workers that poll
+// suppliers or the chain (reputation recorder, lifecycle poller, catalog
+// sync) take a PostgreSQL session advisory lock for the
+// duration of one cycle, so N replicas do the work once instead of N
+// times. The lock auto-releases if the holder dies mid-cycle — no stale
+// lease to sweep. A busy lease skips the cycle (the holder is doing the
+// same work); per-item safety still comes from the underlying conditional
+// writes, so this is an optimization plus duplicate-effect suppression,
+// never the sole correctness mechanism.
+
 export async function withCycleLease<T>(
   name: string,
   fn: () => Promise<T>,

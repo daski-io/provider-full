@@ -12,9 +12,9 @@ import type { ProviderStandardRailConfig } from "./config.js";
 import type { SignedEnvelope } from "./types.js";
 import { compileProviderSchema, validateProviderRequest } from "./schema.js";
 import type {
-  AssetActionReplayPolicy,
   ProviderWalletLaunchPolicy,
 } from "./launchPolicy.js";
+import type { AssetActionReplayPolicy } from "../serviceRegistry/manifestTypes.js";
 
 export interface ProviderServicingAdmissionV1 {
   providerAgentId: string;
@@ -145,11 +145,14 @@ export async function loadProviderWalletConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<ProviderWalletConfig> {
   const reviewedActions = new Map(
-    launchPolicy.assetActions.map((action) => [action.actionId, action]),
+    launchPolicy.assetActions.map((action) => [
+      `${action.serviceSlug}:${action.actionId}`,
+      action,
+    ]),
   );
   if (
     reviewedActions.size !== launchPolicy.assetActions.length ||
-    [...reviewedActions.keys()].some((actionId) => actionId.trim().length === 0)
+    [...reviewedActions.keys()].some((actionKey) => actionKey.trim().length === 0)
   ) {
     throw new Error("Provider wallet launch policy is invalid");
   }
@@ -186,7 +189,7 @@ export async function loadProviderWalletConfig(
     admission.actionCatalogEpoch !== catalog.actionCatalogEpoch
   ) throw new Error("wallet servicing artifacts are inconsistent");
   const delay = 600;
-  const actionIds = new Set<string>();
+  const actionKeys = new Set<string>();
   for (const action of catalog.actions) {
     assertExactKeys(action, [
       "providerAgentId", "serviceId", "serviceSlug", "actionId", "assetType", "ownershipPolicy",
@@ -195,11 +198,17 @@ export async function loadProviderWalletConfig(
       "replayPolicy", "retentionSeconds", "validFrom", "validBefore", "actionDefinitionHash",
     ], "asset action definition");
     const { actionDefinitionHash, ...preimage } = action;
-    const reviewedAction = reviewedActions.get(action.actionId);
+    const actionKey = `${action.serviceSlug}:${action.actionId}`;
+    const reviewedAction = reviewedActions.get(actionKey);
     if (
-      actionIds.has(action.actionId) || action.providerAgentId !== catalog.providerAgentId ||
-      reviewedAction === undefined || action.destructive !== reviewedAction.destructive ||
+      actionKeys.has(actionKey) || action.providerAgentId !== catalog.providerAgentId ||
+      reviewedAction === undefined ||
+      action.destructive !== (reviewedAction.effect === "destructive") ||
       action.replayPolicy !== reviewedAction.replayPolicy ||
+      canonicalHash(action.requestSchema) !==
+        canonicalHash(reviewedAction.inputSchema) ||
+      canonicalHash(action.responseSchema) !==
+        canonicalHash(reviewedAction.resultSchema) ||
       action.ownershipPolicy !== "owner-only" || canonicalHash(preimage) !== actionDefinitionHash ||
       (action.destructive !== (action.confirmationSummarySchema !== null && action.confirmationSummaryTemplate !== null)) ||
       action.validFrom > Math.floor(Date.now() / 1_000) || action.validBefore <= Math.floor(Date.now() / 1_000)
@@ -219,12 +228,12 @@ export async function loadProviderWalletConfig(
         throw new Error("destructive confirmation summary must bind a request field");
       }
     }
-    actionIds.add(action.actionId);
+    actionKeys.add(actionKey);
   }
   if (
-    actionIds.size !== reviewedActions.size ||
-    [...reviewedActions.keys()].some((actionId) => !actionIds.has(actionId))
-  ) throw new Error("asset action catalog does not contain the exact reviewed launch action set");
+    actionKeys.size !== reviewedActions.size ||
+    [...reviewedActions.keys()].some((actionKey) => !actionKeys.has(actionKey))
+  ) throw new Error("asset action catalog differs from installed service action contracts");
   const responsePrivateKey = standard.providerAuthorityPrivateKey;
   const assetResponseKey = standard.providerAuthorityKey;
   const cursorSource = need(env, "PROVIDER_DATA_ENCRYPTION_KEY");

@@ -1,9 +1,8 @@
-import type {
-  ServiceManifest,
-  SkillDefinition,
-} from "../../core/serviceRegistry/types.js";
+import type { ServiceManifest } from "../../core/serviceRegistry/types.js";
+import { defineSkills } from "../../core/serviceRegistry/types.js";
 import { DUMMY_SLUG, NOTE_ASSET_TYPE, NOTE_PRICE_ATOMIC } from "./config.js";
 
+import { dummySkillContracts } from "./skillContracts.js";
 // Reference manifest. The slug + version feed ServiceRegistry's
 // computeServiceId; the provider's ERC-8004 agentId comes from env
 // (PROVIDER_AGENT_ID), never from the manifest. A real service also
@@ -23,7 +22,6 @@ export const manifest: ServiceManifest = {
   serviceLifecycle: "asset-lifecycle",
   dispatchMode: "one-shot",
   defaultFulfillmentMode: "automated",
-  defaultTags: ["dummy"],
   // Buyer-facing lifecycle for the note asset type, surfaced on the
   // AgentCard so agents can reason about reversibility before calling a
   // terminal-state skill. Vocabulary must match the AssetStatus values
@@ -39,7 +37,7 @@ export const manifest: ServiceManifest = {
   },
 };
 
-export const skills: SkillDefinition[] = [
+export const skills = defineSkills([
   {
     id: "echo",
     name: "Echo",
@@ -89,4 +87,4 @@ export const skills: SkillDefinition[] = [
     tags: ["dummy"],
     sortOrder: 1,
   },
-];
+], dummySkillContracts);

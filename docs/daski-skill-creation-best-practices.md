@@ -37,6 +37,16 @@ Avoid skills that:
 Required and optional fields must be explicit and disjoint. Document types,
 bounds, normalization, conditional rules, and examples.
 
+## Write for discovery
+
+Marketplace text search matches exact tokens in the published service name and
+description and each skill's name, description, and tags. Examples and schemas
+are not searched. Include the truthful product names and common synonyms a
+buyer will actually type; do not rely only on internal taxonomy vocabulary or
+advertise a product the schema cannot accept. Presentation copy is outside the
+hashed skill contract, so a copy-only correction republishes on AgentCard
+refresh without a new listing commitment.
+
 ## Choose the access model
 
 ### Open free read
@@ -151,7 +161,8 @@ the complete integration contract. Keep them consistent.
 - Are external writes journaled and ambiguity reconciled?
 - Is the asset lifecycle accurate?
 - Is destructive behavior classified conservatively?
-- Are action and outcome ids admitted in the exact launch policy?
+- Do published action and paid-skill contracts match the reviewed catalog and
+  runtime listings exactly?
 - Are protected fields excluded from logs, prompts, errors, and artifacts?
 - Do co-located tests cover invalid, replay, concurrency, cancellation, and
   ambiguous paths?

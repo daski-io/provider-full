@@ -1,9 +1,17 @@
 import { pool } from "../pool.js";
 
-// Generic encrypted-at-rest, time-bounded artifact fields. A service stores
-// a redacted placeholder in its event and the ciphertext here; response
-// assembly reveals the value only inside its validity window.
-// revealed_count is a one-way consumption marker.
+// Generic encrypted-at-rest show-once artifact fields. Generalizes the
+// transfer_artifacts pattern: a skill persists its artifact with a
+// redacted placeholder at the secret's field path, writes the real value
+// here (AES-256-GCM envelope via core/chain/encryption.ts), and
+// responseBuilder consumes the decrypted value into the first assembled
+// buyer response while the row is inside its validity window.
+// After expiry the buyer permanently sees the redacted placeholder —
+// recovery goes through whatever wallet-authorized rotation skill the service offers.
+//
+// `revealed_count` is a one-way consumption marker. Subsequent task reads
+// keep the persisted redacted placeholder.
+
 export interface ArtifactSecretRow {
   id: string;
   transaction_id: string;

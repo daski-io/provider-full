@@ -237,7 +237,7 @@ export interface SupplierOperationArgs<T extends Record<string, unknown>> {
   transactionId?: string | null;
   /** Logical identity of the mutation, e.g. `renew:asset-1:2027`. */
   opKey: string;
-  /** Machine-readable operation kind, e.g. `sample.create`. */
+  /** Machine-readable operation kind, e.g. `namecom.renew`. */
   kind: string;
   /** The exact request payload the intent covers (fingerprinted). */
   request?: unknown;

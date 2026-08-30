@@ -9,9 +9,8 @@ import {
   type EncryptionContext,
 } from "../../chain/encryption.js";
 
-// Provider-managed asset state is independent from financial state.
-// Services may use suspended or expired for reversible lifecycle states;
-// transferred_out and deleted are terminal and release the identifier.
+// Provider-managed assets. Status reflects supplier state only; financial
+// actions such as refunds do not mutate asset lifecycle state.
 
 export type AssetStatus =
   | "active"
@@ -20,12 +19,15 @@ export type AssetStatus =
   | "transferred_out"
   | "deleted";
 
-/// Statuses under which an asset still holds its unique identifier.
+/// The statuses under which an asset still "holds" its identifier (matches
+/// the assets_live_unique partial-index predicate). A deleted, transferred-
+/// out asset frees the identifier.
 export const LIVE_ASSET_STATUSES: AssetStatus[] = [
   "active",
   "suspended",
   "expired",
 ];
+
 export interface AssetRow {
   id: string;
   service_id: string;
@@ -42,8 +44,8 @@ interface StoredAssetRow extends AssetRow {
 }
 
 // ── Protected asset identifiers ───────────────────────────────────────
-// Some asset identifiers contain protected customer data. The owning
-// service registers a scheme and core
+// Some asset types carry PII in the identifier itself. The owning service
+// registers a scheme and core
 // encrypts on write / decrypts on read — core never names asset types
 // itself. The context a scheme builds is the AAD binding for existing
 // rows and must stay byte-stable forever.
@@ -145,12 +147,14 @@ export async function getActiveAssetByIdentifier(
 }
 
 /// Look up an asset holding this identifier in one of the given statuses.
-/// Services whose skills operate on non-active assets declare the statuses
-/// per skill via ServiceModule.assets.assetLookupStatuses;
+/// Services whose skills operate on non-active assets (for example, renewing
+/// an expired subscription during its grace window)
+/// declare the statuses per skill via ServiceModule.assets.assetLookupStatuses;
 /// the handlers default to ['active'].
 ///
 /// Resolution is deterministic when history contains terminal duplicates:
-/// live statuses first, then the newest created_at value.
+/// live-statuses-first, then newest created_at. A historical terminal row
+/// must never shadow a live asset with the same identifier.
 export async function getAssetByIdentifierWithStatuses(
   serviceId: string,
   identifier: string,
@@ -245,8 +249,7 @@ export async function mergeAssetMetadata(
   return row ? revealAsset(row) : null;
 }
 
-/// Update the identifier of an existing asset. The caller has already
-/// pre-checked collisions;
+/// Update an existing asset identifier. The caller has already pre-checked collisions;
 /// assets_live_unique is the backstop.
 export async function updateAssetIdentifier(
   id: string,

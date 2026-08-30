@@ -94,7 +94,7 @@ export function signFinalResponse(
     throw new Error("completed action result is unavailable");
   }
   if (status === "completed") {
-    validateProviderRequest(compileProviderSchema(definition.responseSchema), result);
+    validateProviderRequest(compileProviderSchema(definition.responseSchema), result, "Response");
   }
   const payload: ProviderAssetActionResponseV1 = {
     providerAgentId: context.wallet.providerAgentId,

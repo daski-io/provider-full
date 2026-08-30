@@ -75,7 +75,7 @@ export function jsonRpcError(
 
 /// Log the full error server-side under a short correlation id and return a
 /// JSON-RPC error carrying only `publicMessage` + that id — never the raw
-/// exception string, which can leak internal service/RPC/DB/internal detail to an
+/// exception string, which can leak supplier/RPC/DB/internal detail to an
 /// untrusted buyer agent. Quote the `ref` id in support requests to find the
 /// full detail in the logs.
 export function jsonRpcInternalError(
@@ -94,9 +94,10 @@ export function jsonRpcInternalError(
     error: err instanceof Error ? err.message : String(err),
     stack: err instanceof Error ? err.stack : undefined,
   });
-  // Mirror internal errors into the admin Platform Log as well as process or
-  // hosting-platform logs. emitEvent is fire-and-forget: observability must
-  // not change the response path.
+  // Mirror into the events table so internal errors are visible in the
+  // admin Platform Log (not only in the process/Railway logs) and can be
+  // correlated back via the same ref id. Fire-and-forget: emitEvent never
+  // throws, and observability must not change the error response path.
   void emitEvent({
     transactionId:
       typeof logContext?.transactionId === "string"

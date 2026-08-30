@@ -5,8 +5,8 @@
 // one place ensures the wire string (`-$12.50`) is consistent.
 
 /// USD number → USDC atomic units via fixed-point string math (no IEEE-754
-/// drift). Generic money conversion belongs in core so every service uses
-/// byte-identical formatting.
+/// drift). Generic money conversion lives in core so sibling services never
+/// need to import each other.
 export function usdToUsdcAtomic(usd: number): bigint {
   if (!Number.isFinite(usd) || usd < 0) {
     throw new Error(`invalid USD price: ${usd}`);

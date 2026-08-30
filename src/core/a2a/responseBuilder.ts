@@ -91,9 +91,12 @@ async function getTransactionArtifacts(transactionId: string): Promise<ArtifactL
   });
 }
 
-/// Reveal unexpired encrypted-at-rest artifact fields before returning them
-/// to the buyer. Persisted event payloads keep only redacted placeholders;
-/// service code stores the ciphertext in the generic artifact_secrets table.
+/// Reveal encrypted-at-rest secrets in artifacts before they're shipped
+/// to the buyer: any artifact may have `artifact_secrets` rows keyed by
+/// (transaction, artifact name, field path). The persisted event payload
+/// holds a redacted placeholder at each path; the decrypted value is
+/// grafted back here while the row is unexpired. Services can use this for
+/// one-time credentials, recovery codes, or other bounded secret delivery.
 async function revealArtifactSecrets(
   transactionId: string,
   artifacts: ArtifactLike[],

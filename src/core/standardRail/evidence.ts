@@ -12,7 +12,7 @@ import {
   type Hex,
 } from "viem";
 import { logWarn } from "../logger.js";
-import { assertExactKeys, canonicalHash, recipeNonce } from "./canonical.js";
+import { assertExactKeys, canonicalHash, recipeNonce, recipeNonceV2 } from "./canonical.js";
 import { loadLogsPaged } from "./chainLogPagination.js";
 import { assertActivationCheckpoint } from "./evidenceCheckpoint.js";
 import {
@@ -117,10 +117,12 @@ export class ProviderEvidenceVerifier {
   private async verifyLiveReadinessOnClient(
     client: (typeof this.clients)[number]["client"],
   ): Promise<bigint> {
-    // The configuration loader requires every reviewed outcome to share one
-    // canonical-token implementation policy and sanctions-oracle code hash.
-    const outcome = this.config.outcomes.values().next().value;
-    if (!outcome) throw new Error("At least one standard-rail outcome is required");
+    // Global chain facts come from the deployment-owned rail policy, so an
+    // empty catalog (pre-bootstrap boot: the provider must be up to serve
+    // its cards before any listing can be registered) still proves the
+    // oracle, EAS, and canonical-token evidence.
+    const policy = this.config.globalPolicy.chainEvidencePolicy.payload;
+    const token = getAddress(policy.canonicalToken);
 
     const head = await client.getBlockNumber();
     const [oracleCode, easCode, tokenCode, implementationStorage, domainSeparator] =
@@ -130,20 +132,23 @@ export class ProviderEvidenceVerifier {
           blockNumber: head,
         }),
         client.getCode({ address: this.config.easAddress, blockNumber: head }),
-        client.getCode({ address: getAddress(outcome.token), blockNumber: head }),
+        client.getCode({ address: token, blockNumber: head }),
         client.getStorageAt({
-          address: getAddress(outcome.token),
-          slot: outcome.tokenImplementationSlot,
+          address: token,
+          slot: policy.tokenImplementationSlot,
           blockNumber: head,
         }),
         client.readContract({
-          address: getAddress(outcome.token),
+          address: token,
           abi: tokenPolicyAbi,
           functionName: "DOMAIN_SEPARATOR",
           blockNumber: head,
         }),
       ]);
-    if (!oracleCode || keccak256(oracleCode) !== outcome.sanctionsOracleRuntimeCodeHash) {
+    if (
+      !oracleCode ||
+      keccak256(oracleCode) !== this.config.globalPolicy.sanctionsOracleRuntimeCodeHash
+    ) {
       throw new Error("Sanctions oracle runtime code is unavailable or changed");
     }
     if (!easCode || keccak256(easCode) !== this.config.easRuntimeCodeHash) {
@@ -159,11 +164,11 @@ export class ProviderEvidenceVerifier {
     });
     if (
       !tokenCode ||
-      keccak256(tokenCode) !== outcome.tokenRuntimeCodeHash ||
-      implementation !== getAddress(outcome.tokenImplementationAddress) ||
+      keccak256(tokenCode) !== policy.canonicalTokenRuntimeCodeHash ||
+      implementation !== getAddress(policy.tokenImplementationAddress) ||
       !implementationCode ||
-      keccak256(implementationCode) !== outcome.tokenImplementationRuntimeCodeHash ||
-      domainSeparator !== outcome.tokenDomainSeparator
+      keccak256(implementationCode) !== policy.tokenImplementationRuntimeCodeHash ||
+      domainSeparator !== policy.tokenDomainSeparator
     ) throw new Error("Canonical token runtime evidence changed");
     return head;
   }
@@ -318,7 +323,22 @@ export class ProviderEvidenceVerifier {
             canonicalRequestHash: args.dispatch.canonicalRequestHash,
             orderNonce: args.dispatch.orderNonce,
           })
-        : null;
+        : args.dispatch.bindingProfile === "recipe-bound-v2"
+          // Option A slot layout: the two deal-document slots carry the
+          // runtime listing commitment hash and the provider intent hash.
+          ? recipeNonceV2({
+              chainId: args.dispatch.chainId,
+              canonicalToken: getAddress(args.outcome.token),
+              payer: getAddress(args.dispatch.payer),
+              splitter: getAddress(args.outcome.splitter),
+              grossAmount: BigInt(args.dispatch.grossAmount),
+              runtimeCommitmentHash: args.dispatch.listingManifestHash,
+              providerIntentHash: args.dispatch.providerOfferHash,
+              quoteHash: args.dispatch.quoteHash,
+              canonicalRequestHash: args.dispatch.canonicalRequestHash,
+              orderNonce: args.dispatch.orderNonce,
+            })
+          : null;
       const authorizationNonce = selectDepositAuthorization(usedByPayer, {
         depositLogIndex: args.dispatch.depositLogIndex,
         expectedNonce,

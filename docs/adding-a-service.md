@@ -7,7 +7,7 @@ the [architecture](architecture.md) and [security model](../SECURITY.md).
 
 ## 1. Define the offering with Daski
 
-Before coding, agree on the public service and paid outcome with your Daski
+Before coding, agree on the public service and paid skill contract with your Daski
 provider-onboarding contact:
 
 - service slug, version, taxonomy, and jurisdictions;
@@ -16,11 +16,12 @@ provider-onboarding contact:
 - one-shot versus durable fulfillment;
 - asset types, lifecycle, ownership, and any owner-only actions;
 - supplier/compliance dependencies and human-party data;
-- outcome id, request schema, deadlines, capacity, and Testnet admission.
+- closed input/result schemas, deadlines, capacity, and Testnet admission.
 
-A skill id is an operation inside your service. A standard-rail outcome id is
-the reviewed marketplace listing/payment coordinate. They may differ, as
-`create-note` and `dummy-create-note` do.
+A skill id is an operation inside your service. Registration hashes its
+immutable contract and creates the reviewed runtime listing/payment coordinate.
+Changing schema, pricing, capacity, deadline, ownership, or action semantics
+creates a new contract version and requires renewed Testnet registration.
 
 Do not invent signed artifact values. Daski onboarding issues a consistent
 Testnet set after the service contract is reviewed.
@@ -67,8 +68,9 @@ folders only when the service actually needs them.
 ```typescript
 import type {
   ServiceManifest,
-  SkillDefinition,
 } from "../../core/serviceRegistry/types.js";
+import { defineSkills } from "../../core/serviceRegistry/types.js";
+import { reportSkillContracts } from "./skillContracts.js";
 
 export const manifest: ServiceManifest = {
   slug: "report-builder",
@@ -82,7 +84,6 @@ export const manifest: ServiceManifest = {
   serviceLifecycle: "asset-lifecycle",
   dispatchMode: "one-shot",
   defaultFulfillmentMode: "automated",
-  defaultTags: ["reports"],
   supplier: "report-engine",
   assetLifecycle: {
     report: {
@@ -96,7 +97,7 @@ export const manifest: ServiceManifest = {
   },
 };
 
-export const skills: SkillDefinition[] = [
+export const skills = defineSkills([
   {
     id: "create-report",
     name: "Create Report",
@@ -110,7 +111,31 @@ export const skills: SkillDefinition[] = [
     optionalFields: ["format"],
     humanParties: "none",
   },
-];
+], reportSkillContracts);
+```
+
+Define the closed machine contract separately in `skillContracts.ts` so input
+and terminal results are both bounded and hashable:
+
+```typescript
+import type { SkillContractDefinition } from "../../core/serviceRegistry/types.js";
+import { inputContract, schema } from "../../core/serviceRegistry/types.js";
+
+export const reportSkillContracts: Record<string, SkillContractDefinition> = {
+  "create-report": {
+    inputSchema: inputContract(["title", "source"], ["format"], {
+      title: schema.string(120),
+      source: schema.string(20_000),
+      format: schema.optionalString(20),
+    }),
+    resultSchema: schema.object({
+      reportId: schema.string(128),
+      summary: schema.string(2_000),
+    }, ["reportId", "summary"]),
+    capacity: { maxOpenOrders: 20 },
+    deadlines: { dispatchSeconds: 300, fulfillmentSeconds: 120 },
+  },
+};
 ```
 
 Rules enforced at registration include:
@@ -453,18 +478,27 @@ If the service requires a provider screening policy, implement it under
 install it through `src/providerScreening.ts`. The service declares
 subjects/scopes; the extension declares policy/vendor.
 
-## 13. Coordinate the launch policy
+## 13. Register the reviewed contracts
 
-For every paid outcome, replace the dummy id in
-`src/providerLaunchPolicy.ts` with the reviewed outcome id. Add only asset
-actions present in the signed catalog, including the exact destructive and
-replay classifications.
+Paid skills and asset actions are derived from the installed `ServiceModule`
+contracts; do not create a second allowlist. Add only action definitions that
+match the reviewed signed catalog, including exact destructive and replay
+classifications.
 
-The provider rejects signed configuration with a missing, extra, duplicate, or
-differently classified id. That exact-set validation is a release boundary, not
-a nuisance to bypass.
+After deploying the public candidate and receiving Testnet approval, run with
+explicit operator authorization:
 
-Send the final manifest, skill/request schema, pricing mode, service and skill
+```bash
+npm run daski:register -- --gateway https://<daski-testnet-gateway> \
+  --service report-builder
+```
+
+Registration rejects missing, extra, duplicate, stale, differently hashed, or
+differently classified contracts. It verifies gateway preparations and runtime
+commitments before promoting append-only catalog heads. That exactness is a
+release boundary, not a nuisance to bypass.
+
+Send the final manifest, input/result schemas, pricing mode, service and skill
 ids, provider identity, and action definitions through Daski Testnet
 onboarding. Install the returned artifacts together.
 

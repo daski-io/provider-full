@@ -4,15 +4,14 @@ import { inTransaction } from "../db/queryable.js";
 import { recordMandatoryAudit } from "../events/emitter.js";
 
 // Encrypted-at-rest credential store for service "suppliers" — the
-// external backing services that a Daski service
+// external backing services (APIs, MCP servers, fulfillment platforms, …) that a Daski service
 // uses to fulfil skills. Note: "supplier" is operator terminology distinct
 // from the on-chain "Provider" entity (PROVIDER_AGENT_ID env). One row per
 // supplier identifier, keyed by string.
 //
 // Each row holds:
 //   - `credentials_encrypted` (TEXT): an opaque JSON blob from the
-//     supplier client's perspective, e.g. { apiUser, apiToken } for
-//     { apiKey }, or { username, token }. Encrypted with
+//     supplier client's perspective, e.g. { apiUser, apiToken }. Encrypted with
 //     PROVIDER_DATA_ENCRYPTION_KEY via core/chain/encryption.ts.
 //   - `config` (JSONB): operator-tunable knobs that don't deserve their
 //     own column — markup_pct, rate limits, regional flags, etc. Shape

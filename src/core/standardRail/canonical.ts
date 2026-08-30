@@ -15,7 +15,14 @@ function assertValidUnicode(input: string): void {
   }
 }
 
-function value(input: unknown): string {
+// Backstop for values hashed before request validation runs (for example the
+// quote path hashes the raw request first): recursion depth is capped and
+// keys aliasing Object.prototype members are rejected.
+const CANONICAL_MAX_DEPTH = 64;
+const UNSAFE_CANONICAL_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+function value(input: unknown, depth: number): string {
+  if (depth > CANONICAL_MAX_DEPTH) throw new Error("Canonical JSON is too deeply nested");
   if (input === null) return "null";
   if (typeof input === "string") {
     assertValidUnicode(input);
@@ -26,18 +33,21 @@ function value(input: unknown): string {
     if (!Number.isFinite(input)) throw new Error("Noncanonical number");
     return JSON.stringify(input);
   }
-  if (Array.isArray(input)) return `[${input.map(value).join(",")}]`;
+  if (Array.isArray(input)) {
+    return `[${input.map((item) => value(item, depth + 1)).join(",")}]`;
+  }
   if (!input || typeof input !== "object") throw new Error("Unsupported canonical value");
   const object = input as Record<string, unknown>;
   return `{${Object.keys(object).sort().map((key) => {
     assertValidUnicode(key);
+    if (UNSAFE_CANONICAL_KEYS.has(key)) throw new Error("Canonical JSON contains an unsafe key");
     if (object[key] === undefined) throw new Error("Undefined canonical value");
-    return `${JSON.stringify(key)}:${value(object[key])}`;
+    return `${JSON.stringify(key)}:${value(object[key], depth + 1)}`;
   }).join(",")}}`;
 }
 
-export const canonicalJson = (input: unknown): string => value(input);
-export const canonicalHash = (input: unknown): Hex => keccak256(stringToHex(value(input)));
+export const canonicalJson = (input: unknown): string => value(input, 1);
+export const canonicalHash = (input: unknown): Hex => keccak256(stringToHex(value(input, 1)));
 
 export function recipeNonce(input: {
   chainId: number;
@@ -62,6 +72,41 @@ export function recipeNonce(input: {
       keccak256(stringToHex("DaskiStandardExactOrderV1")), BigInt(input.chainId),
       input.canonicalToken, input.payer, input.splitter, input.grossAmount,
       input.listingManifestHash, input.providerOfferHash, input.quoteHash,
+      input.canonicalRequestHash, input.orderNonce,
+    ],
+  ));
+}
+
+/**
+ * V2 order binding for dynamic-catalog listings: identical slot layout to
+ * V1 with the listing manifest hash replaced by the runtime listing
+ * commitment hash and the provider offer hash replaced by the provider
+ * intent hash. Verifiers must additionally check the intent hash equals the
+ * one embedded in the runtime commitment.
+ */
+export function recipeNonceV2(input: {
+  chainId: number;
+  canonicalToken: Address;
+  payer: Address;
+  splitter: Address;
+  grossAmount: bigint;
+  runtimeCommitmentHash: Hex;
+  providerIntentHash: Hex;
+  quoteHash: Hex;
+  canonicalRequestHash: Hex;
+  orderNonce: Hex;
+}): Hex {
+  return keccak256(encodeAbiParameters(
+    [
+      { type: "bytes32" }, { type: "uint256" }, { type: "address" },
+      { type: "address" }, { type: "address" }, { type: "uint256" },
+      { type: "bytes32" }, { type: "bytes32" }, { type: "bytes32" },
+      { type: "bytes32" }, { type: "bytes32" },
+    ],
+    [
+      keccak256(stringToHex("DaskiStandardExactOrderV2")), BigInt(input.chainId),
+      input.canonicalToken, input.payer, input.splitter, input.grossAmount,
+      input.runtimeCommitmentHash, input.providerIntentHash, input.quoteHash,
       input.canonicalRequestHash, input.orderNonce,
     ],
   ));

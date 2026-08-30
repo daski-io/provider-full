@@ -30,13 +30,16 @@ addresses, signer, and funded wallet before use:
   reconciles the provider identity, wallet binding, AgentIndex entry, and
   marketplace listing. It sends transactions and may spend ETH and USDC.
   `--update-uri` also changes the on-chain agent URI.
+- `npm run daski:register -- --gateway <origin>` registers every active
+  service contract with the gateway, persists splitter writes before
+  broadcast, submits activation evidence, and promotes runtime-catalog heads.
+  It can send transactions and mutate gateway/database state. `--service
+  <slug>` narrows an intentional update. `--retire 0x<SERVICE_ID>` is a
+  separate guarded retirement and must not be combined with `--service`.
 - `node --env-file=.env scripts/probe-identity.mjs` reads the configured
   Base Sepolia identity and registry state.
 - `node --env-file=.env scripts/probe-tokenuri.mjs <agentId>...` reads
   Base Sepolia identity URIs.
-- Build first, then use `npm run standard-rail:sign-offer -- ...` to create a
-  signed offer with the compiled standard-rail CLI. Treat its output as a
-  signed security artifact.
 
 `probe-identity.mjs` and `probe-tokenuri.mjs` are intentionally pinned to
 Base Sepolia. Do not repurpose them for mainnet by changing only the RPC URL.

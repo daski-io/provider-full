@@ -1,3 +1,4 @@
+import type { ValidateFunction } from "ajv";
 import type { FulfillmentAdapter, ServiceModule } from "./types.js";
 import { pool } from "../db/pool.js";
 import { registerServiceProtectedData } from "../security/protectedDataSinks.js";
@@ -9,10 +10,14 @@ import { config } from "../config.js";
 import { logInfo } from "../logger.js";
 import { runModuleMigrations } from "./moduleMigrations.js";
 import { requireScreeningScopes } from "../screening/registry.js";
+import {
+  compileProviderSchema,
+  validateProviderRequest,
+} from "../standardRail/schema.js";
 
 const REGISTERED: Map<string, ServiceModule> = new Map();
 const FULFILLMENT_MODES = new Set(["automated", "human", "hybrid"]);
-
+const SKILL_INPUT_VALIDATORS = new Map<string, ValidateFunction>();
 /**
  * Registers a ServiceModule with core. Side effects:
  *   1. Validates manifest (slug shape, pricing JSONB on every skill).
@@ -41,6 +46,14 @@ export async function registerService(module: ServiceModule): Promise<void> {
   if (!manifest.slug || !/^[a-z0-9-]+$/.test(manifest.slug)) {
     throw new Error(
       `Invalid service slug: ${manifest.slug} (kebab-case alphanumerics only)`,
+    );
+  }
+  if (
+    !/^[a-z0-9][a-z0-9-]{0,127}$/.test(manifest.categoryFamily) ||
+    !/^[a-z0-9][a-z0-9-]{0,127}$/.test(manifest.serviceType)
+  ) {
+    throw new Error(
+      `Service ${manifest.slug}: category and service type must be normalized open identifiers`,
     );
   }
   if (REGISTERED.has(manifest.slug)) {
@@ -78,6 +91,71 @@ export async function registerService(module: ServiceModule): Promise<void> {
           `automated, human, or hybrid`,
       );
     }
+    if (!/^[a-z0-9][a-z0-9-]{0,95}$/.test(skill.id)) {
+      throw new Error(`Service ${manifest.slug}: skill id is invalid`);
+    }
+    const inputValidator = compileProviderSchema(skill.inputSchema);
+    compileProviderSchema(skill.resultSchema);
+    const properties = Object.keys(
+      skill.inputSchema.properties as Record<string, unknown>,
+    ).sort();
+    const declared = [
+      ...(skill.requiredFields ?? []),
+      ...(skill.optionalFields ?? []),
+    ].sort();
+    if (
+      properties.length !== declared.length ||
+      properties.some((field, index) => field !== declared[index]) ||
+      new Set(declared).size !== declared.length
+    ) {
+      throw new Error(
+        `Service ${manifest.slug}: skill "${skill.id}" field lists differ from inputSchema`,
+      );
+    }
+    const action = skill.assetAction;
+    if (action) {
+      const destructive = action.effect === "destructive";
+      const hasConfirmation =
+        action.confirmationSummarySchema !== undefined &&
+        action.confirmationSummaryTemplate !== undefined;
+      if (
+        !skill.requiresAssetOwnership ||
+        action.ownershipPolicy !== "owner-only" ||
+        !["read", "mutate", "destructive"].includes(action.effect) ||
+        !["stable-result", "regenerate-ephemeral", "redacted-after-window"].includes(
+          action.replayPolicy,
+        ) ||
+        !Number.isSafeInteger(action.retentionSeconds) ||
+        action.retentionSeconds < 1 ||
+        action.retentionSeconds > 31_536_000 ||
+        destructive !== hasConfirmation ||
+        (action.replayPolicy === "redacted-after-window" &&
+          action.retentionSeconds > 604_800) ||
+        (destructive && action.retentionSeconds <= 600)
+      ) {
+        throw new Error(
+          `Service ${manifest.slug}: skill "${skill.id}" asset action contract is unsafe`,
+        );
+      }
+      if (destructive) {
+        const confirmation = compileProviderSchema(
+          action.confirmationSummarySchema!,
+        );
+        validateProviderRequest(
+          confirmation,
+          action.confirmationSummaryTemplate,
+        );
+      }
+    }
+    if (
+      skill.capacity !== undefined &&
+      (!Number.isSafeInteger(skill.capacity.maxOpenOrders) ||
+        skill.capacity.maxOpenOrders < 1 ||
+        skill.capacity.maxOpenOrders > 100_000)
+    ) {
+      throw new Error(`Service ${manifest.slug}: skill capacity is invalid`);
+    }
+    SKILL_INPUT_VALIDATORS.set(`${manifest.slug}:${skill.id}`, inputValidator);
     try {
       validatePricing(skill.pricing);
     } catch (err) {
@@ -187,6 +265,16 @@ export function getService(slug: string): ServiceModule | null {
 
 export function getAllServices(): ServiceModule[] {
   return Array.from(REGISTERED.values());
+}
+
+export function validateSkillInput(
+  serviceSlug: string,
+  skillId: string,
+  value: unknown,
+): void {
+  const validator = SKILL_INPUT_VALIDATORS.get(`${serviceSlug}:${skillId}`);
+  if (!validator) throw new Error("Skill input contract is unavailable");
+  validateProviderRequest(validator, value);
 }
 
 export function getAdapter(slug: string): FulfillmentAdapter {

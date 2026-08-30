@@ -52,6 +52,7 @@ export function destructiveClaim(args: {
   validateProviderRequest(
     compileProviderSchema(args.definition.confirmationSummarySchema!),
     effectSummary,
+    "Response",
   );
   const confirmationHash = canonicalHash({
     request: args.request,

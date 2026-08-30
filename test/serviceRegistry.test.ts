@@ -48,6 +48,13 @@ const {
 } = await import("../src/core/serviceRegistry/registry.js");
 
 let slugCounter = 0;
+const emptySchema = {
+  type: "object",
+  properties: {},
+  required: [],
+  additionalProperties: false,
+} as const;
+
 function nextSlug(prefix = "test-svc"): string {
   return `${prefix}-${++slugCounter}-${Math.floor(Math.random() * 1e8)}`;
 }
@@ -128,6 +135,8 @@ describe("serviceRegistry: in-process surface", () => {
         taskDurability: "ephemeral",
         fulfillmentMode: "human",
         requiresAssetOwnership: true,
+        inputSchema: emptySchema,
+        resultSchema: emptySchema,
       }],
       protocol: {
         docs: {
@@ -174,6 +183,8 @@ describe("serviceRegistry: agent_domain defaulting", () => {
       pricing: { USDC: { type: "one-time" as const, fixed_amount: "0" } },
       requiresAssetOwnership: false,
       requiresCapability: false,
+      inputSchema: emptySchema,
+      resultSchema: emptySchema,
     };
     await registerService(
       makeModule({
@@ -181,7 +192,7 @@ describe("serviceRegistry: agent_domain defaulting", () => {
           ...makeModule().manifest,
           slug: nextSlug("taxonomy"),
           categoryFamily: "communications",
-          serviceType: "sample-service",
+          serviceType: "agent-mailbox",
           jurisdictions: ["global"],
           defaultFulfillmentMode: "automated",
         },
@@ -201,7 +212,7 @@ describe("serviceRegistry: agent_domain defaulting", () => {
     expect(upsertServiceMock).toHaveBeenCalledWith(
       expect.objectContaining({
         category_family: "communications",
-        service_type: "sample-service",
+        service_type: "agent-mailbox",
         jurisdictions: ["global"],
       }),
     );

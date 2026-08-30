@@ -22,7 +22,6 @@ import {
   stopOperatorEscalationWorker,
 } from "./core/agents/operatorAgent/escalationWorker.js";
 import { providerServices } from "./providerServices.js";
-import { providerLaunchPolicy } from "./providerLaunchPolicy.js";
 import {
   installProviderScreening,
   startProviderScreeningWorkers,
@@ -33,6 +32,7 @@ import {
   stopProviderIdentityMonitor,
 } from "./core/chain/providerIdentity.js";
 import { loadProviderStandardRailConfig } from "./core/standardRail/config.js";
+import { logListingCommitmentDrift } from "./core/gatewayRegistration/commitmentDriftBoot.js";
 import { startStandardRailReadiness } from "./core/standardRail/readiness.js";
 import { startStandardTaskWatchdog } from "./core/standardRail/taskWatchdog.js";
 import { base, baseSepolia } from "viem/chains";
@@ -47,6 +47,7 @@ import {
 import { enforceInitialChainReadiness } from "./core/startupChainGate.js";
 import { loadProviderWalletConfig } from "./core/standardRail/walletConfig.js";
 import { startReputationOutcomeWorker } from "./core/standardRail/reputationOutcome.js";
+import { deriveProviderLaunchPolicy } from "./core/standardRail/launchPolicy.js";
 import { startStandardReviewResolutionWorker } from "./core/standardRail/reviewResolutionWorker.js";
 
 let shuttingDown = false;
@@ -78,11 +79,19 @@ async function main(): Promise<void> {
   validateEmailAgentTools();
   validateOperatorAgentTools();
 
-  const standardRailConfig = loadProviderStandardRailConfig(providerLaunchPolicy);
+  const providerLaunchPolicy = deriveProviderLaunchPolicy(providerServices);
+  const standardRailConfig = await loadProviderStandardRailConfig(
+    providerLaunchPolicy,
+    process.env,
+    { warn: (message) => logInfo(message) },
+  );
   const walletConfig = await loadProviderWalletConfig(
     standardRailConfig,
     providerLaunchPolicy,
   );
+  // Non-fatal by design: a drifted build must boot so its new card can be
+  // re-registered; the sweep's job is the loud error, not a refusal.
+  void logListingCommitmentDrift(standardRailConfig.gatewayOrigin);
   stopStandardRailReadiness = await startStandardRailReadiness(
     standardRailConfig,
     config.CHAIN_ID === 8453 ? base : baseSepolia,
@@ -172,6 +181,10 @@ process.on("uncaughtException", (error) => {
 });
 
 main().catch((error) => {
-  logError("Startup failed", errorExtra(error));
+  // The cause must live in the MESSAGE (redacted like any logged string):
+  // platform log viewers render only the message, and structured fields
+  // alone left the 2026-08-28 boot loop diagnosable only via the log API.
+  const cause = error instanceof Error ? error.message : String(error);
+  logError(`Startup failed: ${cause}`, errorExtra(error));
   void shutdown("startup failure", 1);
 });

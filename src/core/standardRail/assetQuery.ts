@@ -136,7 +136,24 @@ export class ProviderAssetQueryService {
   ): void {
     const message = body.authorization.message;
     const grant = body.grant.payload;
+    // The wallet signs the gateway-level query pre-image
+    // {providerAgentId, limit, cursor}: scoped to this provider, or a
+    // null-scoped first-page fan-out (the gateway admits a null scope only
+    // with a null cursor). The per-provider body behind canonicalRequestHash
+    // drops providerAgentId, so the wallet binding is checked against the
+    // reconstructed candidates.
+    const walletRequestHashes = [
+      requestHash({
+        providerAgentId: this.wallet.providerAgentId,
+        limit: body.request.limit,
+        cursor: body.request.cursor,
+      }),
+      ...(body.request.cursor === null
+        ? [requestHash({ providerAgentId: null, limit: body.request.limit, cursor: null })]
+        : []),
+    ];
     if (
+      !walletRequestHashes.includes(message.requestHash) ||
       message.providerAgentId !== "0" || message.serviceId !== ZERO_HASH ||
       message.providerControlProfileHash !== ZERO_HASH || message.servicingAdmissionHash !== ZERO_HASH ||
       message.actionCatalogHash !== ZERO_HASH || message.actionCatalogSchemaHash !== ZERO_HASH ||

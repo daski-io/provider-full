@@ -40,7 +40,7 @@ beforeEach(() => {
       return {
         rows: [{
           id: "job-1",
-          queue: "asset-recovery",
+          queue: "fulfillment-sync",
           attempts: 12,
           max_attempts: 12,
           last_error: "supplier unavailable",
@@ -74,14 +74,14 @@ describe("stalled automation Reviews", () => {
     expect(h.createHumanEscalation).toHaveBeenCalledWith(
       expect.objectContaining({
         source: "auto",
-        question: "Asset recovery stopped and needs a retry decision.",
+        question: "fulfillment sync stopped and needs a retry decision.",
         review: expect.objectContaining({
           kind: STALLED_AUTOMATION_REVIEW_KIND,
           severity: "critical",
           target: { type: "durable_job", id: "job-1" },
           evidence: expect.objectContaining({
             jobId: "job-1",
-            queue: "asset-recovery",
+            queue: "fulfillment-sync",
             attempts: 12,
           }),
         }),

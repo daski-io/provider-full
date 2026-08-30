@@ -44,7 +44,7 @@ export async function regenerateEphemeralAssetActionResult(args: {
   );
   if (result.status !== "completed") throw new Error("ephemeral result unavailable");
   const sanitized = await sanitizedResult(args.taskId, result);
-  validateProviderRequest(compileProviderSchema(args.definition.responseSchema), sanitized);
+  validateProviderRequest(compileProviderSchema(args.definition.responseSchema), sanitized, "Response");
   return sanitized;
 }
 
@@ -131,7 +131,7 @@ export async function executeAssetAction(args: {
       };
     }
     const result = await sanitizedResult(args.taskId, adapterResult);
-    validateProviderRequest(compileProviderSchema(args.definition.responseSchema), result);
+    validateProviderRequest(compileProviderSchema(args.definition.responseSchema), result, "Response");
     await completeAssetAction({
       executionId: args.executionId,
       status: "completed",

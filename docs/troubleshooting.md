@@ -142,7 +142,7 @@ development in a deployed service to bypass them.
 
 ### `SIGNED_ARTIFACTS` says configuration is malformed
 
-Do not hand-edit compressed outcome data or signed envelopes. Confirm the
+Do not hand-edit the global-policy JSON, runtime catalog, or signed envelopes. Confirm the
 entire value survived secret-manager/environment transport without line breaks,
 shell expansion, truncation, or escaping changes. If uncertain, reinstall the
 exact artifact supplied by onboarding.
@@ -156,16 +156,27 @@ Check that all artifacts belong to the same environment/revision and agree on:
 - provider/gateway origins;
 - provider agent id and control profile;
 - validity window; and
-- outcome/action exact sets.
+- runtime-listing/action exact sets.
 
 Ask Daski for a new set when any reviewed contract changes. Do not resign it
 with the provider key.
 
-### Outcome set differs from launch policy
+### Runtime listing differs from the installed contract
 
-`src/providerLaunchPolicy.ts` and `STANDARD_RAIL_OUTCOMES_JSON` must contain the
-same paid outcome ids, with no missing, extra, or duplicate entries. Updating
-only code or only the artifact is invalid; coordinate the release.
+Paid skills derive from installed service contracts. A promoted runtime head
+must reproduce the same service/skill id, contract hash, price, schema,
+capacity, deadline, provider intent, and splitter provenance. A foreign,
+duplicate, or inconsistent head fails closed.
+
+If boot reports an installed paid skill without a runtime listing, it is not
+purchasable yet. Deploy the reviewed AgentCard and run the authorized
+`npm run daski:register -- --gateway <origin> [--service <slug>]` workflow.
+Do not insert or update catalog rows manually.
+
+If boot logs `listing commitment drift`, the running build publishes a changed
+skill contract while the old catalog head is still promoted. Startup remains
+non-fatal so the gateway can read the new AgentCard; promptly run the reviewed
+re-registration or the gateway will quarantine the service on card refresh.
 
 ### Asset-action catalog differs
 
@@ -192,9 +203,10 @@ changing the service id.
 
 ### Registration helper would create or update state unexpectedly
 
-Stop. `scripts/register-provider.mjs` is mutating. Review its chain banner,
-addresses, agent id, origin, wallet, balances, and flags with the onboarding
-contact before authorizing it. Doctor never invokes registration.
+Stop. Both `scripts/register-provider.mjs` and `npm run daski:register` are
+mutating. Review their chain, addresses, agent/service ids, origin, wallet,
+balances, gateway, and selected service/retirement flags with the onboarding
+contact before authorizing them. Doctor and boot never invoke registration.
 
 ### RPC is reachable but reports the wrong chain
 

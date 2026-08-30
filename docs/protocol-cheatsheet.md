@@ -4,9 +4,9 @@ The provider accepts paid work only through the standard Exact-EVM rail.
 
 ## Payment and dispatch
 
-1. The gateway obtains a provider-signed quote for an admitted outcome.
+1. The gateway obtains a provider-signed quote for a promoted runtime listing.
 2. The buyer signs an EIP-3009 `transferWithAuthorization` for exact USDC.
-3. The facilitator submits that authorization directly to the outcome's
+3. The facilitator submits that authorization directly to the listing's
    immutable splitter.
 4. The gateway independently verifies the deposit event and sends a signed,
    recipe-bound dispatch to the provider.
@@ -24,7 +24,8 @@ router, or alternate payment-rail selector.
 open, free skills. `GetTask` polls a public free task when the initial call
 does not return a terminal result. `SubscribeToTask` and `ListTasks` return
 an explicit unsupported-operation error; `CancelTask` and push-configuration
-methods are not implemented. Paid and order-bound work always enters through
+methods are not implemented and AgentCards advertise push as unavailable.
+Paid and order-bound work always enters through
 the Daski gateway and standard rail.
 
 ## Provider endpoints

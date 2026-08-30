@@ -2,8 +2,8 @@ import { pool } from "../pool.js";
 import { inTransaction } from "../queryable.js";
 import { recordMandatoryAudit } from "../../events/emitter.js";
 
-// Provider-side service grouping. One row per logical service (e.g.
-// service offering, which maps 1:1 to a ServiceRegistry entry
+// Provider-side service grouping. One row per logical service, which maps
+// 1:1 to a ServiceRegistry entry
 // on-chain once registered. Skills (off-chain operations) live in the
 // `skills` table; this row is their parent.
 //

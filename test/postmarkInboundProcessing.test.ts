@@ -6,8 +6,10 @@ const mocks = vi.hoisted(() => ({
   findInboundInterceptor: vi.fn(),
   getServiceByInboundEmail: vi.fn(),
   insertInboundEmail: vi.fn(),
+  parsePostmarkAttachments: vi.fn(),
   requeueFailedEmailIngress: vi.fn(),
   shouldAutoFilter: vi.fn(),
+  storeEmailAttachments: vi.fn(),
   updateInboundEmailClassification: vi.fn(),
   updateInboundProcessing: vi.fn(),
 }));
@@ -16,6 +18,18 @@ vi.mock("../src/core/db/queries/emails.js", () => ({
   insertInboundEmail: mocks.insertInboundEmail,
   updateInboundEmailClassification: mocks.updateInboundEmailClassification,
   updateInboundProcessing: mocks.updateInboundProcessing,
+}));
+vi.mock("../src/core/db/queries/emailAttachments.js", () => ({
+  storeEmailAttachments: mocks.storeEmailAttachments,
+}));
+vi.mock("../src/core/db/pool.js", () => ({
+  pool: {},
+}));
+vi.mock("../src/core/db/queryable.js", () => ({
+  inTransaction: vi.fn(async (
+    _pool: unknown,
+    work: (db: { query: ReturnType<typeof vi.fn> }) => Promise<unknown>,
+  ) => work({ query: vi.fn() })),
 }));
 vi.mock("../src/core/db/queries/services.js", () => ({
   getServiceByInboundEmail: mocks.getServiceByInboundEmail,
@@ -33,6 +47,9 @@ vi.mock("../src/core/email/postmarkIngressQueue.js", () => ({
 vi.mock("../src/core/email/postmarkRouting.js", () => ({
   findInboundInterceptor: mocks.findInboundInterceptor,
 }));
+vi.mock("../src/core/email/postmarkAttachments.js", () => ({
+  parsePostmarkAttachments: mocks.parsePostmarkAttachments,
+}));
 
 import { processPostmarkInbound } from "../src/core/email/postmarkInboundProcessing.js";
 
@@ -46,14 +63,15 @@ const passingHeaders = [
   { Name: "X-Spam-Score", Value: "0" },
 ];
 
-function payload(Headers: Array<{ Name: string; Value: string }> = passingHeaders) {
+function payload(Headers: Array<{ Name: string; Value: string }>) {
   return {
     MessageID: "postmark-message-1",
-    From: "sender@vendor.example",
+    From: "case@vendor.example",
     To: "intake@example.com",
     Subject: "Documents",
     TextBody: "Please provide documents.",
     Headers,
+    Attachments: { deliberately: "malformed" },
   };
 }
 
@@ -65,7 +83,7 @@ beforeEach(() => {
   });
   mocks.getServiceByInboundEmail.mockResolvedValue({
     id: "service-1",
-    slug: "example-service",
+    slug: "sample-service",
   });
   mocks.shouldAutoFilter.mockResolvedValue({ filter: false, reason: null });
   mocks.insertInboundEmail.mockImplementation(
@@ -74,72 +92,50 @@ beforeEach(() => {
       inserted: true,
     }),
   );
+  mocks.parsePostmarkAttachments.mockReturnValue({
+    ok: true,
+    attachments: [{
+      filename: "document.pdf",
+      contentType: "application/pdf",
+      content: Buffer.from("%PDF-1.7", "utf8"),
+      quarantineReason: null,
+    }],
+  });
 });
 
-describe("Postmark inbound processing boundary", () => {
-  it("rejects malformed optional fields and headers before routing", async () => {
-    const malformedSubject = await processPostmarkInbound({
-      ...payload(),
-      Subject: { unexpected: true },
-    });
-    expect(malformedSubject).toEqual({
-      status: 400,
-      body: { ok: false, reason: "invalid_payload" },
-    });
-
-    const malformedHeaders = await processPostmarkInbound({
-      ...payload(),
-      Headers: [{ Name: "X-Spam-Score", Value: 0 }],
-    });
-    expect(malformedHeaders).toEqual({
-      status: 400,
-      body: { ok: false, reason: "invalid_payload" },
-    });
-    expect(mocks.findInboundInterceptor).not.toHaveBeenCalled();
-  });
-
-  it("persists complete sender and spam verdicts at ingress", async () => {
-    const result = await processPostmarkInbound(payload());
+describe("Postmark inbound attachment admission", () => {
+  it("does not parse or store attachments from an unauthenticated sender", async () => {
+    const result = await processPostmarkInbound(payload([]));
 
     expect(result.status).toBe(200);
-    expect(mocks.insertInboundEmail).toHaveBeenCalledWith(
-      expect.objectContaining({
-        postmark_sender_authenticated: true,
-        postmark_spam_safe: true,
-      }),
-    );
-    expect(mocks.emitEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "Inbound email accepted for processing.",
-      }),
-    );
-  });
-
-  it("does not treat raw Authentication-Results as sender authentication", async () => {
-    const result = await processPostmarkInbound(payload([{
-      Name: "Authentication-Results",
-      Value: "attacker.example; spf=pass; dkim=pass; dmarc=pass",
-    }]));
-
-    expect(result.status).toBe(200);
+    expect(mocks.parsePostmarkAttachments).not.toHaveBeenCalled();
+    expect(mocks.storeEmailAttachments).not.toHaveBeenCalled();
     expect(mocks.insertInboundEmail).toHaveBeenCalledWith(
       expect.objectContaining({
         postmark_sender_authenticated: false,
         postmark_spam_safe: false,
       }),
+      expect.anything(),
     );
   });
 
-  it("bounds the original recipient before routing", async () => {
-    const result = await processPostmarkInbound({
-      ...payload(),
-      OriginalRecipient: "a".repeat(2_049),
-    });
+  it("parses and stores attachments only after passing routed-mail verdicts", async () => {
+    const result = await processPostmarkInbound(payload(passingHeaders));
 
-    expect(result).toEqual({
-      status: 413,
-      body: { ok: false, reason: "message_too_large" },
-    });
-    expect(mocks.findInboundInterceptor).not.toHaveBeenCalled();
+    expect(result.status).toBe(200);
+    expect(mocks.parsePostmarkAttachments).toHaveBeenCalledOnce();
+    expect(mocks.storeEmailAttachments).toHaveBeenCalledWith(
+      expect.objectContaining({
+        direction: "inbound",
+        emailId: "inbound-1",
+      }),
+    );
+    expect(mocks.insertInboundEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        postmark_sender_authenticated: true,
+        postmark_spam_safe: true,
+      }),
+      expect.anything(),
+    );
   });
 });

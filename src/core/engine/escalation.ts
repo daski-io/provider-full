@@ -85,8 +85,8 @@ export interface CreateHumanEscalationArgs {
 /// Human-only escalation (core change 8). Inserts the row directly in
 /// 'awaiting_human' (assignee 'human') and creates the bound chat thread
 /// immediately with a summary message + optional suggested actions — so
-/// the operator lands in a ready conversation, not an empty shell. Used by
-/// every provider-defined human-only review. These escalations never pass through
+/// the operator lands in a ready conversation, not an empty shell. These
+/// escalations never pass through
 /// the autonomous Operator-Agent stage (the agent has no authority over
 /// compliance or committed-spend decisions) and are never auto-resolved by
 /// the escalation-timeout worker (scoped to source='pre_execute').

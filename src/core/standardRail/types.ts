@@ -137,7 +137,7 @@ export interface StandardRailDispatchV2 {
   listingManifestHash: Hex;
   providerOfferHash: Hex;
   quoteHash: Hex;
-  bindingProfile: "stock-fixed-v1" | "recipe-bound-v1";
+  bindingProfile: "stock-fixed-v1" | "recipe-bound-v1" | "recipe-bound-v2";
   canonicalRequestHash: Hex;
   orderNonce: Hex;
   buyerIdentityProofHash: Hex;
@@ -171,7 +171,7 @@ export interface StandardRailReceiptV2 {
   payer: Hex;
   providerAgentId: string;
   outcomeId: string;
-  bindingProfile: "stock-fixed-v1" | "recipe-bound-v1";
+  bindingProfile: "stock-fixed-v1" | "recipe-bound-v1" | "recipe-bound-v2";
   activeRailProfileHash: Hex;
   listingManifestHash: Hex;
   providerOfferHash: Hex;
@@ -311,7 +311,14 @@ export interface ProviderOutcomeConfig {
   commissionBps: number;
   maxOpenOrders: number;
   dispatchDeadlineSeconds: number;
-  bindingProfile: "stock-fixed-v1" | "recipe-bound-v1";
+  /**
+   * recipe-bound-v2 reuses the V1 slot layout: listingManifestHash carries
+   * the runtime listing commitment hash and providerOfferHash carries the
+   * provider intent hash (the approved Option A binding). The intent hash
+   * is additionally required to equal the one embedded in the runtime
+   * commitment at materialization time.
+   */
+  bindingProfile: "stock-fixed-v1" | "recipe-bound-v1" | "recipe-bound-v2";
   requestSchema: {
     type: "object";
     properties: Record<string, { type?: string }>;

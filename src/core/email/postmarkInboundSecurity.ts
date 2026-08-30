@@ -25,7 +25,7 @@ function spamTests(value: string | null): Set<string> {
 }
 
 /**
- * Convert Postmark's ingress headers into fail-closed verdicts at the
+ * Convert Postmark's SpamAssassin headers into fail-closed verdicts at the
  * authenticated webhook boundary. Duplicate or incomplete verdict headers
  * are rejected so message-supplied lookalikes cannot win by ordering.
  */

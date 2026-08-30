@@ -65,8 +65,8 @@ export async function processInboundEmail(inboundId: string): Promise<void> {
     listActiveRulesForLlm({ service_id: service.id, scope: "email_agent" }),
   ]);
 
-  // The manifest's support policy lets the agent give service-accurate
-  // guidance instead of generic advice.
+  // The manifest's support policy (email-authoritative vs skill-required)
+  // lets the agent give service-accurate guidance instead of generic advice.
   const support = getService(service.slug)?.manifest.support;
 
   const promptInbound: InboundEmailRow = {
@@ -113,7 +113,8 @@ export async function processInboundEmail(inboundId: string): Promise<void> {
     fromAddress,
     authorization: { kind: "unauthenticated" },
   };
-  // Scope tools to shared triage plus this email's resolved service.
+  // Only the tools in scope for this email's resolved service: the shared
+  // triage tools plus whatever this service contributes.
   const tools = toolsForService(service.slug);
   const toolsByName = new Map(tools.map((t) => [t.definition.function.name, t]));
   const toolDefs = tools.map((t) => t.definition);

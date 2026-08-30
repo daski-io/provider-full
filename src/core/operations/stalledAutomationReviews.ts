@@ -10,7 +10,6 @@ const OPEN_REVIEW_STATES =
   "'pending','in_agent_review','awaiting_human','resolution_attention'";
 const SELF_SURFACING_QUEUES = ["operator-escalation", "escalation-resolution"];
 const QUEUE_LABELS: Record<string, string> = {
-  "asset-recovery": "Asset recovery",
   "email-ingress": "Inbound email processing",
 };
 

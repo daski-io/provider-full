@@ -47,7 +47,9 @@ describe("validatePublicUrl: scheme + url shape", () => {
   });
 
   it("permits http:// when allowHttp = true", async () => {
-    const r = await validatePublicUrl("http://example.com/", { allowHttp: true });
+    // This assertion is about scheme permission; a public IP avoids making
+    // the test depend on DNS latency under a loaded parallel test battery.
+    const r = await validatePublicUrl("http://8.8.8.8/", { allowHttp: true });
     expect(r.ok).toBe(true);
   });
 

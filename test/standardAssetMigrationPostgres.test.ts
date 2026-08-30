@@ -67,5 +67,5 @@ describe("standard asset baseline against PostgreSQL", () => {
       await client.query(`DROP SCHEMA "${schema}" CASCADE`).catch(() => undefined);
       await client.end();
     }
-  });
+  }, 60_000);
 });

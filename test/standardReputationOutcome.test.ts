@@ -1,8 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { encodeAbiParameters, encodeEventTopics, parseAbi, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { encodeGzipBase64Json } from "../src/core/standardRail/compressedJson.js";
-import { standardSplitterFixture } from "./standardRailOutcomeFixture.js";
 
 /// Everything the reputation outcome worker touches sits behind four module
 /// boundaries: the pg pool, the provider write coordinator, the chain client,
@@ -69,16 +67,32 @@ import {
   startReputationOutcomeWorker,
 } from "../src/core/standardRail/reputationOutcome.js";
 import { loadProviderStandardRailConfig } from "../src/core/standardRail/config.js";
+import {
+  buildGlobalPolicyFixture,
+  buildRuntimeHeadFixture,
+  encodeGlobalPolicy,
+  testGatewaySigner,
+} from "./runtimeCatalogFixture.js";
 
 const providerWalletKey = `0x${"44".repeat(32)}` as Hex;
+const providerWallet = privateKeyToAccount(providerWalletKey).address;
 const hash = (byte: string) => `0x${byte.repeat(64)}`;
 const outcomeLaunchPolicy = {
-  outcomeIds: [
-    "dummy-create-note",
-    "sample-create-item",
-    "sample-regulated-item",
+  paidSkills: [
+    { serviceSlug: "catalog-a", skillId: "paid-alpha" },
+    { serviceSlug: "catalog-b", skillId: "paid-beta" },
+    { serviceSlug: "catalog-c", skillId: "paid-gamma" },
   ],
 } as const;
+
+const globalPolicy = await buildGlobalPolicyFixture();
+const fixtureHeads = () => outcomeLaunchPolicy.paidSkills.map((skill) =>
+  buildRuntimeHeadFixture({
+    globalPolicy,
+    serviceSlug: skill.serviceSlug,
+    skillId: skill.skillId,
+    agentWallet: providerWallet,
+  }));
 
 /// Same fixture as standardRailConfig.test.ts: the real loader turns it into
 /// the ProviderStandardRailConfig the worker consumes, so the reviewed retry
@@ -99,60 +113,16 @@ function environment(): NodeJS.ProcessEnv {
     STANDARD_RAIL_GATEWAY_AUDIENCE: "https://gateway.example",
     STANDARD_RAIL_GATEWAY_ORIGIN: "https://gateway.example",
     STANDARD_RAIL_PROVIDER_AUDIENCE: "https://provider.example",
-    STANDARD_RAIL_GATEWAY_SIGNER: "0x4444444444444444444444444444444444444444",
-    STANDARD_RAIL_OUTCOMES_JSON: (() => {
-      const outcome = {
-        outcomeId: "dummy-create-note",
-        serviceSlug: "dummy",
-        serviceId: hash("0"),
-        skillId: "create-note",
-        listingManifestHash: hash("1"),
-        providerOfferHash: hash("2"),
-        pricingMode: "dynamic",
-        fixedGrossAmount: "0",
-        quoteMaximumLifetimeSeconds: 120,
-        quoteMinimumPaymentWindowSeconds: 30,
-        providerControlProfileHash: hash("3"),
-        activeRailProfileHash: hash("9"),
-        customerIdentityPolicyId: "none",
-        ...standardSplitterFixture(),
-        tokenRuntimeCodeHash: hash("5"),
-        tokenImplementationAddress: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        tokenImplementationRuntimeCodeHash: hash("a"),
-        tokenImplementationSlot: hash("b"),
-        tokenDomainSeparator: hash("c"),
-        sanctionsOracleRuntimeCodeHash: hash("d"),
-        providerControlledWallets: [],
-        maximumSourceLagBlocks: 3,
-        maximumLogPageEvents: 10_000,
-        listingCommitmentHash: hash("6"),
-        outcomeIdHash: hash("7"),
-        policyVersionHash: hash("8"),
-        listingEpoch: "1",
-        providerTerminalAttestationKey: privateKeyToAccount(providerWalletKey).address,
-        commissionBps: 500,
-        maxOpenOrders: 10,
-        dispatchDeadlineSeconds: 300,
-        bindingProfile: "recipe-bound-v1",
-        requestSchema: {
-          type: "object",
-          properties: { text: { type: "string" } },
-          required: ["text"],
-          additionalProperties: false,
-        },
-      };
-      return encodeGzipBase64Json([
-        { ...outcome, outcomeId: "dummy-create-note", serviceSlug: "dummy", skillId: "create-note" },
-        { ...outcome, outcomeId: "sample-create-item", serviceSlug: "sample-catalog", skillId: "create-item" },
-        { ...outcome, outcomeId: "sample-regulated-item", serviceSlug: "sample-workflow", skillId: "create-record" },
-      ]);
-    })(),
+    STANDARD_RAIL_GATEWAY_SIGNER: testGatewaySigner,
+    STANDARD_RAIL_PROVIDER_CONTROL_PROFILE_HASH: hash("3"),
+    STANDARD_RAIL_GLOBAL_POLICY_JSON: encodeGlobalPolicy(globalPolicy),
   };
 }
 
-const maybeConfig = loadProviderStandardRailConfig(
+const maybeConfig = await loadProviderStandardRailConfig(
   outcomeLaunchPolicy,
   environment(),
+  { headsOverride: fixtureHeads() },
 );
 if (!maybeConfig) throw new Error("standard rail test environment did not produce a config");
 const railConfig = maybeConfig;
@@ -340,11 +310,11 @@ afterEach(() => {
 
 describe("standard reputation outcome recovery", () => {
   describe("configuration guards", () => {
-    it("rejects malformed schema uids at load", () => {
+    it("rejects malformed schema uids at load", async () => {
       const badUid = environment();
       badUid.EAS_OUTCOME_SCHEMA_UID = "0x1234";
-      expect(() => loadProviderStandardRailConfig(outcomeLaunchPolicy, badUid))
-        .toThrow("EAS_OUTCOME_SCHEMA_UID must be bytes32");
+      await expect(loadProviderStandardRailConfig(outcomeLaunchPolicy, badUid, { headsOverride: [] }))
+        .rejects.toThrow("EAS_OUTCOME_SCHEMA_UID must be bytes32");
     });
   });
 

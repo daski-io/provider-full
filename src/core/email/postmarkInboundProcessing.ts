@@ -4,15 +4,22 @@ import {
   updateInboundEmailClassification,
   updateInboundProcessing,
 } from "../db/queries/emails.js";
+import {
+  storeEmailAttachments,
+  type EmailAttachmentInput,
+} from "../db/queries/emailAttachments.js";
+import { pool } from "../db/pool.js";
+import { inTransaction } from "../db/queryable.js";
+import { parsePostmarkAttachments } from "./postmarkAttachments.js";
+import {
+  assessPostmarkInboundSecurity,
+  type PostmarkHeader,
+} from "./postmarkInboundSecurity.js";
 import { getServiceByInboundEmail } from "../db/queries/services.js";
 import { emitEvent } from "../events/emitter.js";
 import { shouldAutoFilter } from "./preFilter.js";
 import { enqueueEmailIngress, requeueFailedEmailIngress } from "./postmarkIngressQueue.js";
 import { findInboundInterceptor } from "./postmarkRouting.js";
-import {
-  assessPostmarkInboundSecurity,
-  type PostmarkHeader,
-} from "./postmarkInboundSecurity.js";
 import { computeThreadRoot, normalizeMessageId } from "./threading.js";
 
 interface PostmarkInboundPayload {
@@ -24,6 +31,7 @@ interface PostmarkInboundPayload {
   TextBody?: string;
   HtmlBody?: string;
   Headers?: PostmarkHeader[];
+  Attachments?: unknown;
 }
 
 export interface PostmarkIngressResult {
@@ -122,27 +130,47 @@ export async function processPostmarkInbound(payloadValue: unknown): Promise<Pos
   const mode = routing.failed || filter.filter || !service
     ? null
     : interceptor ? "interceptor" as const : "email-agent" as const;
-  const { row, inserted } = await insertInboundEmail({
-    message_id: messageId,
-    rfc_message_id: rfcMessageId,
-    from_address: from,
-    to_address: recipient,
-    subject: payload.Subject ?? null,
-    body_text: payload.TextBody ?? null,
-    body_html: payload.HtmlBody ?? null,
-    headers: headersObject(payload),
-    postmark_sender_authenticated: security.senderAuthenticated,
-    postmark_spam_safe: security.spamSafe,
-    in_reply_to: inReplyTo,
-    thread_root: threadRoot,
-    service_id: service?.id ?? null,
-    customer_id: null,
-    classification: routing.failed ? "unknown" : filter.filter ? "auto_filtered" : null,
-    classification_reason: routing.failed
-      ? "inbound routing matcher failed; human review required"
-      : filter.reason ?? null,
-    processing_mode: mode,
-    processing_service_slug: service?.slug ?? null,
+  let attachments: EmailAttachmentInput[] = [];
+  if (mode && security.senderAuthenticated && security.spamSafe) {
+    const parsed = parsePostmarkAttachments(payload.Attachments);
+    if (!parsed.ok) {
+      const status = parsed.reason === "message_too_large" ? 413 : 400;
+      return { status, body: { ok: false, reason: parsed.reason } };
+    }
+    attachments = parsed.attachments;
+  }
+  const { row, inserted } = await inTransaction(pool, async (db) => {
+    const persisted = await insertInboundEmail({
+      message_id: messageId,
+      rfc_message_id: rfcMessageId,
+      from_address: from,
+      to_address: recipient,
+      subject: payload.Subject ?? null,
+      body_text: payload.TextBody ?? null,
+      body_html: payload.HtmlBody ?? null,
+      headers: headersObject(payload),
+      postmark_sender_authenticated: security.senderAuthenticated,
+      postmark_spam_safe: security.spamSafe,
+      in_reply_to: inReplyTo,
+      thread_root: threadRoot,
+      service_id: service?.id ?? null,
+      customer_id: null,
+      classification: routing.failed ? "unknown" : filter.filter ? "auto_filtered" : null,
+      classification_reason: routing.failed
+        ? "inbound routing matcher failed; human review required"
+        : filter.reason ?? null,
+      processing_mode: mode,
+      processing_service_slug: service?.slug ?? null,
+    }, db);
+    if (persisted.inserted && attachments.length > 0) {
+      await storeEmailAttachments({
+        direction: "inbound",
+        emailId: persisted.row.id,
+        attachments,
+        db,
+      });
+    }
+    return persisted;
   });
   if (!inserted) {
     if (routing.failed) {

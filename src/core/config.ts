@@ -5,8 +5,9 @@ import {
   BASE_MAINNET_EXTERNAL_CONTRACTS,
 } from "./chain/reviewedDeployments.js";
 
-// Core environment schema. Service-specific settings belong in each
-// src/services/<slug>/config.ts module and must fail fast during registration.
+// Core env schema. Service-specific knobs live in their own
+// services/<slug>/config.ts so a misconfigured service fails fast on
+// registration without polluting core.
 
 const TRUE_BOOLEAN_VALUES = new Set(["1", "true", "yes", "on"]);
 const FALSE_BOOLEAN_VALUES = new Set(["0", "false", "no", "off"]);
@@ -55,22 +56,14 @@ const adminTokenSchema = z.string().min(32).refine(
   { message: "must be a high-entropy secret and not a documented placeholder" },
 );
 const UINT256_MAX = (1n << 256n) - 1n;
-const uint256Schema = z.preprocess(
-  (value) =>
-    typeof value === "string" && /^\d+$/.test(value.trim())
-      ? BigInt(value.trim())
-      : value,
-  z.bigint({ invalid_type_error: "must be an unsigned decimal integer" }).refine(
-    (value) => value >= 0n && value <= UINT256_MAX,
-    { message: "must fit an unsigned 256-bit integer" },
-  ),
+const uint256Schema = z.coerce.bigint().refine(
+  (value) => value >= 0n && value <= UINT256_MAX,
+  { message: "must fit an unsigned 256-bit integer" },
 );
 
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().default(4000),
-  // Optional public build/deployment identifier shown on the health summary.
-  DEPLOYMENT_REVISION: z.string().trim().min(1).max(128).optional(),
   BASE_URL: z.string().url(),
   CHAIN_MODE: z.enum(["live", "mock"]).default("live"),
   MOCK_BUYER_AGENT_ID: uint256Schema.default(99n),
@@ -121,7 +114,7 @@ const envSchema = z.object({
   DATABASE_STATEMENT_TIMEOUT_MS: z.coerce.number().int().min(100).max(120_000).default(30_000),
   DATABASE_IDLE_TX_TIMEOUT_MS: z.coerce.number().int().min(100).max(120_000).default(30_000),
   DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(100).default(20),
-  DATABASE_APPLICATION_NAME: z.string().min(1).max(63).default("daski-provider-full"),
+  DATABASE_APPLICATION_NAME: z.string().min(1).max(63).default("daski-provider"),
   BASE_RPC_URL: httpsUrlSchema,
   // Comma-separated ordered failover RPC endpoints tried after
   // BASE_RPC_URL. Empty = single-endpoint behavior. Ignored entirely under
@@ -146,10 +139,7 @@ const envSchema = z.object({
     message: "CHAIN_ID must be Base (8453) or Base Sepolia (84532)",
   }),
   CHAIN_WRITE_FINALITY_CONFIRMATIONS: z.coerce.number().int().min(1).max(10_000).default(12),
-  PROVIDER_WALLET_PRIVATE_KEY: z.string().regex(
-    /^0x[0-9a-fA-F]{64}$/,
-    "must be 0x followed by exactly 64 hexadecimal characters",
-  ),
+  PROVIDER_WALLET_PRIVATE_KEY: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
   IDENTITY_REGISTRY_ADDRESS: addressSchema,
   SERVICE_REGISTRY_ADDRESS: addressSchema,
   // The provider's ERC-8004 agentId. Constant across all services.
@@ -158,7 +148,7 @@ const envSchema = z.object({
 
   // LLM client (core). Used by the pre-execute agent runner. Per-service
   // prompts override only the system prompt; the model + key are global.
-  OPENAI_API_KEY: z.string().default(""),
+  OPENAI_API_KEY: z.string(),
   LLM_MODEL: z.string().default("gpt-5.4-mini"),
   // Per-agent model overrides. Both fall back to LLM_MODEL when unset, so
   // existing deploys keep working. The tool-using triage / operator agents
@@ -187,9 +177,14 @@ const envSchema = z.object({
   // Without these, /webhooks/postmark/inbound 503s and outbound sends
   // throw, but the rest of the system runs.
   POSTMARK_SERVER_TOKEN: z.string().optional(),
-  // Non-mainnet deployments default to Postmark's reserved test token so the
-  // send path is exercised without delivering mail. Set explicitly to
-  // override. Parsed strictly because z.coerce.boolean() treats "false" as true.
+  // On testnet the provider emails the FAKE addresses used in test
+  // transactions (e.g. office@harborandpine.com), which hard-bounce and get
+  // Postmark-suppressed → 422 "inactive recipient" failures. In test mode the
+  // outbound sender swaps in Postmark's reserved test token (POSTMARK_API_TEST):
+  // the send path still executes and is recorded, but Postmark delivers nothing
+  // and skips suppression checks. Defaults ON for any non-mainnet CHAIN_ID;
+  // set explicitly (true/false) to override. Parsed by hand — z.coerce.boolean()
+  // treats the string "false" as true.
   POSTMARK_TEST_MODE: strictBooleanEnv.optional(),
   // Shared secret that gates the inbound + delivery webhooks. When set,
   // a request must prove knowledge of it via ONE of (see
@@ -204,6 +199,10 @@ const envSchema = z.object({
   POSTMARK_INBOUND_MAX_SUBJECT_CHARS: z.coerce.number().int().min(1).max(10_000).default(500),
   POSTMARK_INBOUND_MAX_BODY_CHARS: z.coerce.number().int().min(1).max(500_000).default(50_000),
   POSTMARK_INBOUND_MAX_HEADERS: z.coerce.number().int().min(1).max(500).default(100),
+  POSTMARK_INBOUND_MAX_ATTACHMENTS: z.coerce.number().int().min(0).max(50).default(10),
+  POSTMARK_INBOUND_MAX_ATTACHMENT_BYTES: z.coerce.number().int().min(1).max(25_000_000).default(10_000_000),
+  POSTMARK_INBOUND_MAX_TOTAL_ATTACHMENT_BYTES: z.coerce.number().int().min(1).max(50_000_000).default(20_000_000),
+  POSTMARK_INBOUND_MAX_REQUEST_BYTES: z.coerce.number().int().min(1_000_000).max(75_000_000).default(30_000_000),
   EMAIL_AGENT_MAX_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
 
   // Comma-separated list of origins permitted to call this provider from
@@ -212,8 +211,11 @@ const envSchema = z.object({
   // Origin header and bypass CORS. Empty string = no browser origins.
   CORS_ORIGINS: z.string().default(""),
 
-  // Dedicated 32-byte key for protected provider data. It is intentionally
-  // separate from the provider wallet key to limit blast radius.
+  // Encryption key for at-rest secrets (transfer auth codes today;
+  // registrant PII later). 32-byte hex string. Different from
+  // PROVIDER_WALLET_PRIVATE_KEY for blast-radius reasons. Optional during
+  // local dev — features that require it (transfer-out) gate on it
+  // dynamically and surface a clear error if missing.
   PROVIDER_DATA_ENCRYPTION_KEY: z
     .string()
     .regex(/^0x[0-9a-fA-F]{64}$/, "PROVIDER_DATA_ENCRYPTION_KEY must be 32-byte hex"),
@@ -242,8 +244,9 @@ const envSchema = z.object({
   // only gates the scheme.
   PUSH_NOTIFICATION_ALLOW_HTTP: strictBooleanEnv.default(false),
 
-  // Per-IP token-bucket rate limits. `_CAPACITY` is the burst size and
-  // `_PER_MIN` is the sustained rate.
+  // Per-IP token-bucket rate limits. `_CAPACITY` is the burst size;
+  // `_PER_MIN` is the sustained rate. Service-owned routes have a separate
+  // budget from /a2a/* and the standard rail.
   RATE_LIMIT_SERVICE_CAPACITY: z.coerce.number().default(30),
   RATE_LIMIT_SERVICE_PER_MIN: z.coerce.number().default(30),
   RATE_LIMIT_A2A_CAPACITY: z.coerce.number().default(120),
@@ -448,31 +451,11 @@ const envSchema = z.object({
 
 export type Config = z.infer<typeof envSchema>;
 
-export class ConfigurationError extends Error {
-  constructor(issues: string[]) {
-    super(
-      "Invalid configuration:\n" +
-        issues.map((issue) => `- ${issue}`).join("\n"),
-    );
-    this.name = "ConfigurationError";
-  }
-}
-
 export function parseConfig(env: NodeJS.ProcessEnv): Config {
   if (env.PAYMENT_RAIL !== undefined) {
-    throw new ConfigurationError([
-      "PAYMENT_RAIL is retired; the provider always uses standard Exact-EVM",
-    ]);
+    throw new Error("PAYMENT_RAIL is retired; the provider always uses standard Exact-EVM");
   }
-  const parsed = envSchema.safeParse(env);
-  if (!parsed.success) {
-    const issues = parsed.error.issues.map((issue) => {
-      const path = issue.path.length > 0 ? issue.path.join(".") : "environment";
-      return `${path}: ${issue.message}`;
-    });
-    throw new ConfigurationError([...new Set(issues)]);
-  }
-  return parsed.data;
+  return envSchema.parse(env);
 }
 
 export const config: Config = parseConfig(process.env);

@@ -34,7 +34,7 @@ export interface EmitEventArgs {
   source: EventSource;
   severity?: EventSeverity;
   /// Machine-readable event type, dotted lowercase, e.g.
-  /// `adapter.sample.create`, `email.received`, `chain.refund.confirmed`,
+  /// `adapter.namecom.register`, `email.received`, `chain.refund.confirmed`,
   /// `admin.refund.issued`, `transaction.message.user`,
   /// `transaction.artifact.created`. The convention is
   /// `<source>.<noun>.<verb_or_state>`.

@@ -13,7 +13,7 @@ import { z } from "zod";
 
 const atomicAmount = z
   .string()
-  .regex(/^[0-9]+$/, "pricing amount must be a non-negative integer string");
+  .regex(/^(?:0|[1-9][0-9]{0,77})$/, "pricing amount must be a canonical uint256 string");
 
 const intervalUnit = z.enum(["day", "week", "month", "year"]);
 
@@ -43,6 +43,21 @@ const currencyPricingSchema = z
     interval: intervalSchema.optional(),
   })
   .superRefine((p, ctx) => {
+    if (
+      p.fixed_amount !== undefined &&
+      (
+        p.min_amount !== undefined ||
+        p.max_amount !== undefined ||
+        p.price_list !== undefined ||
+        p.amount_per_unit !== undefined
+      )
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "fixed_amount cannot be combined with another amount mechanism",
+      });
+    }
     if (p.type === "usage") {
       if (!p.amount_per_unit) {
         ctx.addIssue({

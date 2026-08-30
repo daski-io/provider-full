@@ -35,7 +35,9 @@ provider-specific code from another repository.
   validation, configuration, migrations, docs, workers, supplier integration,
   protected-data declarations, admin extensions, and tests.
 - `src/providerServices.ts` is the single installed-service composition.
-- `src/providerLaunchPolicy.ts` is the exact reviewed outcome/action allowlist.
+- Paid skills and asset actions are derived from installed service contracts.
+- `src/registerGatewayServices.ts` owns reviewed gateway registration,
+  activation, catalog promotion, and safe retirement.
 - `src/providerScreening.ts` is the optional provider-policy composition.
 
 Core must never import from services. Services must never import sibling
@@ -51,6 +53,7 @@ only core and cross-service tests.
 ```bash
 npm run dev:db:up
 npm run doctor -- --stage=testnet
+npm run daski:register -- --gateway <reviewed-testnet-origin>
 npm run try-skill -- dummy echo
 npm run docs:check
 npm run dev
@@ -71,6 +74,8 @@ development database; `npm run dev:db:stop` preserves its named volume.
 `doctor` is read-only and redacted. Unit tests need no live database, RPC, or
 supplier. PostgreSQL security/migration scripts require an explicit disposable
 database.
+`daski:register` can sign, write to chain, and mutate gateway/catalog state;
+listing it here is not authorization to run it.
 
 ## Change workflow
 
@@ -109,8 +114,9 @@ adding another large branch to an already-large module.
   endpoints, bounded requests/responses, and SSRF protection.
 - Declare workers and live supplier invariants through service readiness so
   `/health/ready` fails closed.
-- Treat `providerLaunchPolicy` changes as coordinated Daski release changes.
-  Signed artifacts must contain the exact same set.
+- Treat published skill contracts, prices, and action definitions as
+  coordinated Daski release changes. Registration must produce matching
+  gateway preparations and runtime commitments; never edit catalog rows.
 
 ## Configuration and environments
 

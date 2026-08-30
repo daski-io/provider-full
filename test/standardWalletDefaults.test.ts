@@ -20,16 +20,17 @@ const hash = (nibble: string): Hex => `0x${nibble.repeat(64)}`;
 const FAR_FUTURE = 4_000_000_000;
 
 const actions = [
-  ["read-item", false, "stable-result"],
-  ["rotate-secret", false, "redacted-after-window"],
-  ["delete-item", true, "stable-result"],
+  ["get-item-info", false, "stable-result"],
+  ["list-item-components", false, "stable-result"],
+  ["set-item-component", false, "stable-result"],
+  ["delete-item-component", false, "stable-result"],
+  ["get-secondary-item-info", false, "stable-result"],
+  ["rotate-item-secret", false, "redacted-after-window"],
+  ["delete-secondary-item", true, "stable-result"],
+  ["get-tertiary-item-info", false, "stable-result"],
+  ["list-tertiary-item-artifacts", false, "stable-result"],
+  ["download-tertiary-item-artifact", false, "regenerate-ephemeral"],
 ] as const;
-
-const walletLaunchPolicy = {
-  assetActions: actions.map(([actionId, destructive, replayPolicy]) => ({
-    actionId, destructive, replayPolicy,
-  })),
-};
 
 const schema = (field: string) => ({
   type: "object",
@@ -37,6 +38,17 @@ const schema = (field: string) => ({
   required: [field],
   additionalProperties: false,
 });
+
+const walletLaunchPolicy = {
+  assetActions: actions.map(([actionId, destructive, replayPolicy]) => ({
+    serviceSlug: "service",
+    actionId,
+    effect: destructive ? "destructive" as const : "mutate" as const,
+    replayPolicy,
+    inputSchema: schema("target"),
+    resultSchema: schema("status"),
+  })),
+};
 
 function action(
   actionId: string,
@@ -98,6 +110,19 @@ function standard(): ProviderStandardRailConfig {
     terminalAttestationKey: provider.address,
     evidenceRpcUrls: ["https://rpc.example/"],
     outcomes: new Map(),
+    globalPolicy: {
+      chainEvidencePolicy: {
+        payload: {
+          canonicalToken: "0x6666666666666666666666666666666666666666",
+          canonicalTokenRuntimeCodeHash: hash("1"),
+          tokenImplementationAddress: "0x7777777777777777777777777777777777777777",
+          tokenImplementationRuntimeCodeHash: hash("2"),
+          tokenImplementationSlot: hash("3"),
+          tokenDomainSeparator: hash("4"),
+        },
+      },
+      sanctionsOracleRuntimeCodeHash: hash("d"),
+    } as unknown as ProviderStandardRailConfig["globalPolicy"],
     finalityConfirmations: 12,
     sanctionsOracleAddress: "0x5555555555555555555555555555555555555555",
     reputationContract: "0x4545454545454545454545454545454545454545",
@@ -171,7 +196,7 @@ describe("provider wallet launch defaults", () => {
       await envelope("ProviderServicingAdmissionV1", admission.payload),
     );
     await expect(loadProviderWalletConfig(standard(), walletLaunchPolicy, env))
-      .rejects.toThrow(/exact reviewed launch action set/);
+      .rejects.toThrow(/installed service action contracts/);
   });
 
   it("rejects duplicate IDs in provider wallet launch policy", async () => {

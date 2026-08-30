@@ -10,6 +10,10 @@ import {
   type OutboundEmailRow,
 } from "../../../db/queries/emails.js";
 import { listAllServices } from "../../../db/queries/services.js";
+import {
+  mountEmailAttachmentDownloads,
+  renderEmailAttachmentsCard,
+} from "./emailAttachments.js";
 import { walletShortFromReq } from "../util.js";
 import {
   escapeAttr,
@@ -209,6 +213,8 @@ export async function renderInboundEmailDetail(
       </tbody></table>
     </div>
 
+    ${await renderEmailAttachmentsCard("inbound", email.id)}
+
     <div class="card">
       <h2>Body (text)</h2>
       ${email.body_text
@@ -279,6 +285,8 @@ export async function renderOutboundEmailDetail(
       </tbody></table>
     </div>
 
+    ${await renderEmailAttachmentsCard("outbound", email.id)}
+
     <div class="card">
       <h2>Body (text)</h2>
       ${email.body_text
@@ -303,6 +311,7 @@ export async function renderOutboundEmailDetail(
 }
 
 export function mountEmailsPage(router: Router): void {
+  mountEmailAttachmentDownloads(router);
   router.get("/emails", async (req: Request, res: Response) => {
     const wallet = (req as Request & { _adminWallet?: string })._adminWallet;
     const walletShort = wallet ? wallet.slice(0, 6) + "…" + wallet.slice(-4) : undefined;

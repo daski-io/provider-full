@@ -62,13 +62,14 @@ function rejectUntrustedForwardingHeaders(trustedCidrs: string[]) {
     const forwardedHost = req.get("x-forwarded-host");
     const hasForwarding = Boolean(forwardedFor || forwardedProto || forwardedHost);
     if (config.TRUST_PROXY_HOPS === 0) {
-      // No proxy topology is declared (local dev, or a managed edge whose peer
-      // ranges are not published). Client attribution uses the socket peer
-      // because Express's trust proxy is disabled at zero hops. Strip forwarded
-      // headers so no manual reader can be spoofed, and let the request through.
-      // Rejecting would 400 every request on platforms that unconditionally add
-      // X-Forwarded-For at their edge. Declared topologies — required on
-      // mainnet — keep the fail-closed checks below.
+      // No proxy topology is declared (local dev, or a managed edge whose
+      // peer ranges aren't published — e.g. the Railway sandbox). Client
+      // attribution already uses the socket peer because express's trust
+      // proxy is disabled at zero hops; strip the headers so no manual
+      // reader can be spoofed, and let the request through. Rejecting here
+      // would 400 every request on platforms that unconditionally add
+      // X-Forwarded-For at their edge. Declared topologies — mainnet
+      // config requires one — keep the fail-closed checks below.
       if (hasForwarding) {
         delete req.headers["x-forwarded-for"];
         delete req.headers["x-forwarded-proto"];

@@ -22,7 +22,7 @@ export interface SkillRow {
   asset_type: string | null;
   sort_order: number;
   is_active: boolean;
-  /// Agent-first human-representative marker (migration 009):
+  /// Agent-first human-representative marker:
   /// 'required' | 'varies' | 'none' | null (unspecified). See the migration
   /// for semantics. Declared per skill; surfaced on the AgentCard.
   human_parties: string | null;

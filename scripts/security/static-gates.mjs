@@ -38,6 +38,7 @@ if (!bootstrapSource.includes("npm run doctor -- --stage=testnet")) {
   );
 }
 for (const script of [
+  "daski:register",
   "doctor",
   "docs:check",
   "typecheck",
@@ -366,6 +367,7 @@ const reusableCoreEntrypoints = [
 const pending = [
   join(root, "src/bootstrap.ts"),
   join(root, "src/rotateProtectedData.ts"),
+  join(root, "src/registerGatewayServices.ts"),
   join(root, "src/core/standardRail/offerCli.ts"),
   ...reusableCoreEntrypoints.map((path) => join(root, path)),
 ];

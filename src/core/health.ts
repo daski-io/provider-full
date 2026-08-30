@@ -181,7 +181,7 @@ healthRouter.get("/", (_req, res) => {
   res.status(200).json({
     status: "alive",
     timestamp: new Date().toISOString(),
-    revision: config.DEPLOYMENT_REVISION ?? "unknown",
+    commit: process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 12) ?? "unknown",
   });
 });
 

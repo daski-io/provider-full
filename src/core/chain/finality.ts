@@ -9,6 +9,35 @@ export interface CanonicalReceipt {
   blockHash: Hex;
 }
 
+/**
+ * The observation stayed internally inconsistent after bounded re-reads:
+ * the receipt's block hash never matched the chain's block at that height.
+ * This is AMBIGUOUS — the transaction may still be canonical (RPC views can
+ * lag or serve pre-confirmation state) — so callers must reconcile later
+ * and must never treat it as reverted or re-broadcast over it.
+ */
+export class AmbiguousReceiptError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AmbiguousReceiptError";
+  }
+}
+
+const OBSERVATION_ATTEMPTS = 5;
+const OBSERVATION_RETRY_MS = 2_000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Assert the transaction is final (configured confirmation depth) and
+ * canonical, from coherent observations: each attempt RE-READS the receipt,
+ * the head, and the block at the receipt's height together, so a stale or
+ * pre-confirmation receipt from an earlier read can never be compared
+ * against a newer chain view. Persistent incoherence raises
+ * AmbiguousReceiptError instead of a false "non-canonical" verdict.
+ */
 export async function assertCanonicalFinalReceipt(
   receipt: CanonicalReceipt,
   expectedHash: Hex,
@@ -16,18 +45,39 @@ export async function assertCanonicalFinalReceipt(
   if (receipt.transactionHash.toLowerCase() !== expectedHash.toLowerCase()) {
     throw new Error("Receipt transaction hash does not match the submitted transaction");
   }
-  const latest = await publicClient.getBlockNumber() as bigint;
-  const confirmations = latest >= receipt.blockNumber ? latest - receipt.blockNumber + 1n : 0n;
-  if (confirmations < BigInt(config.CHAIN_WRITE_FINALITY_CONFIRMATIONS)) {
+  let lastConfirmations = 0n;
+  for (let attempt = 1; attempt <= OBSERVATION_ATTEMPTS; attempt += 1) {
+    // One coherent observation: a FRESH receipt plus the head and the block
+    // at that receipt's own height.
+    const observed = attempt === 1
+      ? receipt
+      : await publicClient.getTransactionReceipt({
+          hash: expectedHash,
+        }) as CanonicalReceipt;
+    const [latest, canonical] = await Promise.all([
+      publicClient.getBlockNumber() as Promise<bigint>,
+      publicClient.getBlock({ blockNumber: observed.blockNumber }),
+    ]);
+    lastConfirmations = latest >= observed.blockNumber
+      ? latest - observed.blockNumber + 1n
+      : 0n;
+    const deepEnough =
+      lastConfirmations >= BigInt(config.CHAIN_WRITE_FINALITY_CONFIRMATIONS);
+    const coherent = canonical.hash !== null &&
+      canonical.hash.toLowerCase() === observed.blockHash.toLowerCase();
+    if (deepEnough && coherent) return;
+    if (attempt < OBSERVATION_ATTEMPTS) await sleep(OBSERVATION_RETRY_MS);
+  }
+  if (lastConfirmations < BigInt(config.CHAIN_WRITE_FINALITY_CONFIRMATIONS)) {
     throw new Error(
-      `Transaction has ${confirmations} confirmation(s); `
+      `Transaction has ${lastConfirmations} confirmation(s); `
       + `${config.CHAIN_WRITE_FINALITY_CONFIRMATIONS} required`,
     );
   }
-  const canonical = await publicClient.getBlock({ blockNumber: receipt.blockNumber });
-  if (!canonical.hash || canonical.hash.toLowerCase() !== receipt.blockHash.toLowerCase()) {
-    throw new Error("Transaction receipt is no longer in the canonical chain");
-  }
+  throw new AmbiguousReceiptError(
+    "Receipt and canonical block observations stayed inconsistent; "
+    + "treat the write as AMBIGUOUS and reconcile later",
+  );
 }
 
 export async function waitForCanonicalFinalReceipt(hash: Hex): Promise<CanonicalReceipt> {

@@ -16,6 +16,20 @@ async function markdownFiles(directory) {
   return found;
 }
 
+async function publicSourceFiles(directory) {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const found = [];
+  for (const entry of entries) {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      found.push(...await publicSourceFiles(path));
+    } else if (/\.(?:ts|js|mjs|json|sql|md|ya?ml)$/.test(entry.name)) {
+      found.push(path);
+    }
+  }
+  return found;
+}
+
 const files = [
   join(ROOT, "README.md"),
   join(ROOT, "SECURITY.md"),
@@ -81,10 +95,20 @@ for (const variable of exampleVariables) {
   }
 }
 
-const genericSources = [...sources.entries()]
-  .filter(([path]) => !path.endsWith("CHANGELOG.md"))
-  .map(([, source]) => source)
-  .join("\n");
+const genericityFiles = [
+  ...files,
+  join(ROOT, ".env.example"),
+  join(ROOT, "package.json"),
+  ...await publicSourceFiles(join(ROOT, "src")),
+  ...await publicSourceFiles(join(ROOT, "test")),
+  ...await publicSourceFiles(join(ROOT, "scripts")),
+].filter((path) =>
+  !path.endsWith("CHANGELOG.md") &&
+  !path.endsWith("scripts/docs-check.mjs")
+);
+const genericSources = (await Promise.all(
+  [...new Set(genericityFiles)].map((path) => readFile(path, "utf8")),
+)).join("\n");
 for (const forbidden of [
   "Blue T Group",
   "OpenSRS",
@@ -98,7 +122,7 @@ for (const forbidden of [
   "daski-exact",
 ]) {
   if (genericSources.toLowerCase().includes(forbidden.toLowerCase())) {
-    failures.push(`public documentation contains forbidden legacy/provider term: ${forbidden}`);
+    failures.push(`public starter contains forbidden legacy/provider term: ${forbidden}`);
   }
 }
 

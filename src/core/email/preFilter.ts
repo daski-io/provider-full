@@ -25,8 +25,9 @@ const THREAD_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 // Postmark runs inbound mail through SpamAssassin and surfaces the verdict
 // in standard headers (X-Spam-Status: Yes/No, X-Spam-Score: <float>). We
 // drop on its verdict so junk never reaches the Email Agent (saves tokens
-// and removes a malware/phishing vector). SpamAssassin's conventional spam
-// cutoff is 5.0; gate on the explicit Yes verdict OR a score at/above it.
+// and reduces unsolicited-content exposure). SpamAssassin's conventional
+// spam cutoff is 5.0; gate on the explicit Yes verdict OR a score at/above it.
+// Postmark does not make attachments malware-safe.
 // NOTE: Postmark does NOT detect prompt-injection (LLM-specific) — that is
 // handled separately in src/core/email/injectionFilter.ts.
 const SPAM_SCORE_THRESHOLD = 5.0;

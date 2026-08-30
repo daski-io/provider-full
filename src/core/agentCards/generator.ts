@@ -7,6 +7,11 @@ import {
   buildSkillEntries,
   buildSkillMetadata,
 } from "./skillMetadata.js";
+import { getService } from "../serviceRegistry/registry.js";
+import {
+  buildContractExtension,
+  DASKI_CONTRACT_EXTENSION_URI,
+} from "./contractExtension.js";
 import {
   buildServicePricing,
   buildSupportBlock,
@@ -50,6 +55,12 @@ export function generateAgentCard(
           "pricing and fulfillment, on-chain service linkage " +
           "(serviceSlug/serviceVersion), and payment binding.",
         required: false,
+      }, {
+        uri: DASKI_CONTRACT_EXTENSION_URI,
+        description:
+          "Daski provider-driven service and skill contracts, including " +
+          "closed schemas, pricing, availability, and asset-action semantics.",
+        required: false,
       }],
     },
     skills: buildSkillEntries(service, activeSkills),
@@ -84,6 +95,11 @@ export function generateAgentCard(
         },
         skills: buildSkillMetadata(service, activeSkills),
       },
+      [DASKI_CONTRACT_EXTENSION_URI]: (() => {
+        const module = getService(service.slug);
+        if (!module) throw new Error(`Service contract is unavailable: ${service.slug}`);
+        return buildContractExtension(service, skills, module);
+      })(),
     },
   };
 }

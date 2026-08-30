@@ -3,6 +3,15 @@ import { getScreeningExtension } from "../../screening/registry.js";
 import { getAllServices } from "../../serviceRegistry/registry.js";
 import { coreReviewActionTools } from "./coreReviewActions.js";
 
+const REVIEW_ACTION_NAMES = new Set([
+  "clear_screening_hold",
+  "confirm_screening_match",
+  "advance_compliance_case",
+  "withhold_refund",
+  "block_identity",
+  "unblock_identity",
+]);
+
 export interface ReviewActionTool {
   name: string;
   description: string;
@@ -10,17 +19,16 @@ export interface ReviewActionTool {
 }
 
 export function listReviewActionTools(): ReviewActionTool[] {
-  const providerTools: OperatorTool[] = [];
+  const tools: OperatorTool[] = [];
   for (const service of getAllServices()) {
-    providerTools.push(...(service.agents?.operatorAgentActionTools?.() ?? []));
+    tools.push(...(service.agents?.operatorAgentActionTools?.() ?? []));
   }
-  providerTools.push(...(getScreeningExtension()?.operatorTools?.() ?? []));
-
+  tools.push(...(getScreeningExtension()?.operatorTools?.() ?? []));
   const unique = new Map<string, ReviewActionTool>();
   for (const tool of coreReviewActionTools()) unique.set(tool.name, tool);
-  for (const tool of providerTools) {
+  for (const tool of tools) {
     const name = tool.definition.function.name;
-    if (unique.has(name)) throw new Error(`Duplicate review action tool: ${name}`);
+    if (!REVIEW_ACTION_NAMES.has(name) || unique.has(name)) continue;
     unique.set(name, {
       name,
       description: tool.definition.function.description,

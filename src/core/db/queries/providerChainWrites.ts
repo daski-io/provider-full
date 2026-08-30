@@ -5,7 +5,8 @@ import type { Queryable } from "../queryable.js";
 export type ProviderWritePurpose =
   | "service_registration"
   | "service_uri_update"
-  | "standard_reputation_outcome";
+  | "standard_reputation_outcome"
+  | "splitter_deployment";
 
 export type ProviderWriteStatus =
   | "prepared"

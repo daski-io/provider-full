@@ -68,6 +68,6 @@ Never leave the review in agent state without a disposition.${context}`;
 A signed-in human is participating in this review thread. Help investigate and
 carry out only the human's explicit instruction through the shared confirmation
 and typed-action boundaries. Typed reviews must close through their specific
-typed action; do not substitute a generic close. Email replies must go only to
+action; do not substitute a generic close. Email replies must go only to
 the inbound sender bound to this review.${context}`;
 }

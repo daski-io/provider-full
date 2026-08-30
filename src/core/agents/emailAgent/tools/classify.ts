@@ -18,7 +18,7 @@ export const classify: EmailAgentTool = {
             description:
               "Classify the email by its INTENT (not by what you did with it — " +
               "escalating is a separate action via escalate_to_operator). " +
-              "informational = no action needed (for example, a supplier confirmation). " +
+              "informational = no action needed (e.g. ICANN verification confirmation). " +
               "question = a question the buyer wants answered. " +
               "refund_request = the buyer is asking for a refund. " +
               "unknown = intent unclear. Still call escalate_to_operator when a " +

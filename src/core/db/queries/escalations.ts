@@ -31,8 +31,6 @@ export type EscalationStatus =
   | "resolution_executing"
   | "resolution_result_ready"
   | "resolution_attention";
-// Sources are deliberately generic; service-specific review behavior belongs
-// in the service module that creates and resolves the review.
 export type EscalationSource =
   | "pre_execute"
   | "email_agent"
@@ -192,9 +190,10 @@ export async function createEscalation(args: {
 /// rather than holding funds indefinitely. Provider-configuration holds use
 /// the same backstop; ambiguous supplier outcomes remain excluded.
 ///
-/// Only pre-execute and provider-configuration holds enter the automatic
-/// timeout path. Screening and ambiguous supplier outcomes remain human-only
-/// and therefore cannot be refunded by this query.
+/// SCOPE GUARD: this positive source filter is load-bearing. Human-only,
+/// post-supplier-spend, ambiguous-outcome, and compliance reviews must never
+/// be auto-resolved with a refund. Widen this WHERE clause only after proving
+/// that invariant remains intact.
 export async function getStalePendingEscalations(
   olderThan: Date,
   limit = 50,

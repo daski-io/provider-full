@@ -8,12 +8,22 @@ const mocks = vi.hoisted(() => ({
   updateOutboundDeliveryStatus: vi.fn(),
   emitEvent: vi.fn(),
   boundedFetch: vi.fn(),
+  storeEmailAttachments: vi.fn(),
 }));
 
 vi.mock("../src/core/db/queries/emails.js", () => ({
   insertOutboundEmail: mocks.insertOutboundEmail,
   setOutboundMessageId: mocks.setOutboundMessageId,
   updateOutboundDeliveryStatus: mocks.updateOutboundDeliveryStatus,
+}));
+vi.mock("../src/core/db/queries/emailAttachments.js", () => ({
+  storeEmailAttachments: mocks.storeEmailAttachments,
+}));
+vi.mock("../src/core/db/pool.js", () => ({ pool: {} }));
+vi.mock("../src/core/db/queryable.js", () => ({
+  inTransaction: vi.fn(async (
+    _pool: unknown, work: (db: { query: ReturnType<typeof vi.fn> }) => Promise<unknown>,
+  ) => work({ query: vi.fn() })),
 }));
 vi.mock("../src/core/events/emitter.js", () => ({ emitEvent: mocks.emitEvent }));
 vi.mock("../src/core/security/outboundHttp.js", () => ({ boundedFetch: mocks.boundedFetch }));
@@ -44,6 +54,7 @@ function outboundRow(overrides: Partial<OutboundEmailRow> = {}): OutboundEmailRo
     body_html: null,
     in_reply_to: null,
     thread_root: null,
+    reply_to: null,
     customer_id: baseArgs.customerId ?? null,
     service_id: baseArgs.serviceId ?? null,
     transaction_id: baseArgs.transactionId ?? null,
@@ -74,6 +85,7 @@ beforeEach(() => {
   mocks.emitEvent.mockResolvedValue(undefined);
   mocks.setOutboundMessageId.mockResolvedValue(undefined);
   mocks.updateOutboundDeliveryStatus.mockResolvedValue(undefined);
+  mocks.storeEmailAttachments.mockResolvedValue([]);
 });
 
 describe("Postmark outbound replay safety", () => {

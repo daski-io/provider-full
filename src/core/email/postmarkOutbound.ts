@@ -4,6 +4,9 @@ import {
   updateOutboundDeliveryStatus,
   type OutboundEmailRow,
 } from "../db/queries/emails.js";
+import { storeEmailAttachments } from "../db/queries/emailAttachments.js";
+import { pool } from "../db/pool.js";
+import { inTransaction } from "../db/queryable.js";
 import { sendPostmarkMessage } from "./postmarkClient.js";
 import {
   preparePostmarkMessage,
@@ -19,7 +22,16 @@ export type { SendEmailArgs } from "./postmarkMessage.js";
 
 export async function sendEmail(args: SendEmailArgs): Promise<OutboundEmailRow> {
   const prepared = preparePostmarkMessage(args);
-  const inserted = await insertOutboundEmail(prepared.insert);
+  const inserted = await inTransaction(pool, async (db) => {
+    const persisted = await insertOutboundEmail(prepared.insert, db);
+    await storeEmailAttachments({
+      direction: "outbound",
+      emailId: persisted.row.id,
+      attachments: prepared.attachments,
+      db,
+    });
+    return persisted;
+  });
   const row = inserted.row;
 
   if (!inserted.inserted) {

@@ -40,7 +40,7 @@ const STANDARD_RAIL_ENV = [
   "EAS_OUTCOME_SCHEMA_UID",
   "SANCTIONS_ORACLE_ADDRESS",
   "STANDARD_RAIL_PROVIDER_CONTROL_PROFILE_HASH",
-  "STANDARD_RAIL_OUTCOMES_JSON",
+  "STANDARD_RAIL_GLOBAL_POLICY_JSON",
   "STANDARD_RAIL_SERVICING_ADMISSION_JSON",
   "STANDARD_RAIL_ASSET_ACTION_CATALOG_JSON",
 ];
@@ -80,7 +80,8 @@ export async function checkRepository() {
     "AGENTS.md",
     "package.json",
     "src/providerServices.ts",
-    "src/providerLaunchPolicy.ts",
+    "src/registerGatewayServices.ts",
+    "src/core/gatewayRegistration/runtimeCatalog.ts",
     "src/core/db/migrations/001_initial.sql",
   ];
   const missing = [];

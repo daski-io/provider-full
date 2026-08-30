@@ -178,7 +178,7 @@ Then implement the module using [Adding a service](adding-a-service.md):
 2. replace its public contract, validation, adapter, docs, and tests;
 3. add only the optional facets your product requires;
 4. install it in `src/providerServices.ts`;
-5. coordinate paid outcomes/actions in `src/providerLaunchPolicy.ts`; and
+5. coordinate the published paid-skill/action contracts with Daski; and
 6. remove `dummy` before Mainnet.
 
 Keep your API/MCP client behind explicit service operations. Never build a
@@ -194,11 +194,13 @@ The final Testnet `.env` must use one consistent set of:
 - provider identity and wallet binding;
 - provider and gateway HTTPS audiences;
 - gateway signer;
-- paid outcome definitions;
+- signed global rail policy and registration policy;
 - servicing admission and asset-action catalog; and
 - provider control profile and evidence contracts.
 
-Providers do not create or edit those signed artifacts. If an id, hash,
+Providers do not invent or edit Daski-signed artifacts. Paid runtime listings
+are created by the reviewed registration flow from the provider's own signed
+service contract. If an id, hash,
 audience, signer, service, skill, action classification, or expiry differs, the
 provider fails closed.
 
@@ -216,7 +218,7 @@ Add bounded public provider/RPC probes only after the provider is deployed:
 npm run doctor -- --stage=testnet --live
 ```
 
-Then start locally or through the Docker image:
+Start the deployed candidate locally or through the Docker image:
 
 ```bash
 npm run dev
@@ -226,6 +228,20 @@ The first full boot applies checksummed migrations, validates the database
 roles appropriate to the environment, registers service catalog rows, verifies
 signed standard-rail configuration, checks chain identity/catalog bindings,
 starts required workers, and only then opens the HTTP listener.
+
+Before registration, a paid skill can boot but is not purchasable. Once the
+public AgentCard is reachable and an operator has reviewed the wallet, chain,
+gateway origin, and possible Testnet transaction costs, register:
+
+```bash
+npm run daski:register -- --gateway https://<daski-testnet-gateway>
+```
+
+The command reconciles provider identity, registers all active services,
+persists/broadcasts splitter transactions, verifies finality and activation,
+and atomically promotes runtime-listing heads. Use `--service <slug>` to narrow
+an intentional update. It is externally mutating and is never run by doctor or
+normal boot.
 
 Inspect:
 
@@ -248,7 +264,7 @@ processes while both point at the reviewed Base Sepolia deployment:
 
 Use a TLS development tunnel or reverse proxy when a signed public audience
 must address a local process. Gateway and provider must agree exactly on
-origins, signer bindings, service/skill/outcome ids, and hashes.
+origins, signer bindings, service/skill/runtime-listing ids, and hashes.
 
 The contracts repository can be built and tested locally with Foundry. Point
 runtime integration at the reviewed Base Sepolia deployment unless you are

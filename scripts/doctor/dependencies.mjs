@@ -70,16 +70,19 @@ export async function checkSignedArtifacts(stage, runtimeOk) {
       await Promise.all([
         import("../../src/core/standardRail/config.ts"),
         import("../../src/core/standardRail/walletConfig.ts"),
-        import("../../src/providerLaunchPolicy.ts"),
+        import("../../src/core/standardRail/launchPolicy.ts"),
         import("../../src/providerServices.ts"),
       ]);
-    const standard = standardModule.loadProviderStandardRailConfig(
-      launchModule.providerLaunchPolicy,
+    const launchPolicy = launchModule.deriveProviderLaunchPolicy(
+      servicesModule.providerServices,
+    );
+    const standard = await standardModule.loadProviderStandardRailConfig(
+      launchPolicy,
       process.env,
     );
     const wallet = await walletModule.loadProviderWalletConfig(
       standard,
-      launchModule.providerLaunchPolicy,
+      launchPolicy,
       process.env,
     );
     if (wallet.providerAgentId !== process.env.PROVIDER_AGENT_ID) {
@@ -101,7 +104,7 @@ export async function checkSignedArtifacts(stage, runtimeOk) {
     return result(
       "SIGNED_ARTIFACTS",
       "pass",
-      "signatures, domains, exact outcome/action sets, and service references validate",
+      "signatures, domains, runtime listings/actions, and service references validate",
     );
   } catch (error) {
     return result(

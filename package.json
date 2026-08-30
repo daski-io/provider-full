@@ -18,6 +18,7 @@
     "build": "npm run clean && tsc && npm run copy-assets",
     "copy-assets": "node scripts/copy-assets.mjs",
     "start": "node --env-file-if-exists=.env dist/bootstrap.js",
+    "daski:register": "node --env-file-if-exists=.env --import=tsx src/registerGatewayServices.ts",
     "standard-rail:sign-offer": "node --env-file-if-exists=.env dist/core/standardRail/offerCli.js",
     "dev:db:up": "docker compose up -d postgres",
     "dev:db:stop": "docker compose stop postgres",

@@ -40,7 +40,7 @@ export async function evaluateScreening(
 
 export async function screenVendorSubject(
   subject: ScreeningSubject,
-  requiredScope = "vendor",
+  requiredScope = "dilisense",
 ): Promise<ScreeningVendorEntry[]> {
   return requireScreeningScopes([requiredScope]).screenVendorSubject(subject);
 }

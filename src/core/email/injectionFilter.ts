@@ -7,8 +7,9 @@
 // review). The prompt already fences untrusted content; this removes the
 // high-signal override phrases outright as defense-in-depth.
 //
-// Postmark handles spam + malware upstream (gated in preFilter.ts).
-// Prompt-injection is LLM-specific and not something Postmark detects, so
+// Postmark supplies SpamAssassin signals that are evaluated at ingress.
+// It does not make attachments malware-safe; those follow a separate,
+// human-reviewed relay policy. Prompt injection is LLM-specific, so
 // this stays ours.
 //
 // Conservative by design: it targets imperative override phrases that have

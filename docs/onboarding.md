@@ -15,14 +15,14 @@ the [Daski Discord](https://discord.gg/uyeMp7Q2HW).
 | Supplier | The upstream API, MCP server, or product vendor used by the provider, even when your organization owns it |
 | Service | One coherent product boundary published by the provider |
 | Skill | One buyer-visible operation within a service |
-| Outcome | Reviewed paid listing/payment coordinate for a skill |
+| Runtime listing | Reviewed paid listing/payment coordinate for a skill |
 | Asset | Durable product object owned by the wallet-authorized payer |
 | Asset action | Reviewed owner-only operation on an existing asset |
 | Gateway | Daski entrypoint that discovers providers, admits payment, and signs dispatch/lifecycle calls |
-| Signed artifacts | Daski-issued outcome, servicing-admission, and action-catalog release envelopes |
+| Signed artifacts | Daski-issued global-policy, servicing-admission, action-catalog, and gateway preparation envelopes |
 
 One provider can publish several services. A provider agent id is not a service
-id, and a skill id is not necessarily the paid outcome id.
+id, and a runtime listing binds one service/skill contract version.
 
 ## Who supplies what
 
@@ -32,7 +32,7 @@ id, and a skill id is not necessarily the paid outcome id.
 | Service manifest, skill docs, request schemas, examples, pricing behavior, lifecycle, actions, and tests | Taxonomy/service-type review and listing/admission decision |
 | Dedicated provider wallet and intended ERC-8004 identity | Current registries, index coordinates, signer bindings, and registration expectations |
 | Product mock/sandbox/charged-test/live modes, credentials, readiness, operations, and incident contacts | Testnet gateway origin and standard-rail environment bindings |
-| Provider payee/custody facts and any externally controlled wallets | Reviewed outcome definitions, control profile, evidence coordinates, and signed release artifacts |
+| Provider payee/custody facts and any externally controlled wallets | Global rail policy, control profile, evidence coordinates, and signed release artifacts |
 | Deployed provider and successful end-to-end Testnet evidence | Mainnet whitelist and coordinated release approval |
 
 Providers must not invent, edit, compress differently, resign, or work around
@@ -62,7 +62,7 @@ Send a concise, versioned packet before expecting signed configuration:
 11. protected data, retention, redaction, compliance/custody dependencies, and
     human review boundaries; and
 12. provider payee, provider-controlled wallets, capacity/deadlines, and the
-    proposed paid outcome ids.
+    proposed paid skills, capacity, deadlines, and action definitions.
 
 The checked-in service docs and tests should be the review packet's technical
 source, not a separate specification that can drift.
@@ -73,7 +73,7 @@ source, not a separate specification that can drift.
 
 Complete the worksheet in
 [Integrating an existing product](integrating-existing-product.md). Agree on
-service, skill, outcome, asset, and action boundaries before hardening the
+service, skill, runtime-listing, asset, and action boundaries before hardening the
 adapter around unstable ids.
 
 ### 2. Implement the service locally
@@ -95,7 +95,7 @@ account identity. See
 ### 3. Submit and review the packet
 
 Daski reviews discovery taxonomy, request/price behavior, standard-rail
-outcomes, assets/actions, evidence, and operational/security posture. Resolve
+listings, assets/actions, evidence, and operational/security posture. Resolve
 contract changes in code, docs, tests, and the packet together.
 
 ### 4. Establish public origins
@@ -110,9 +110,10 @@ configuration and must use `/health/ready` for traffic activation.
 ### 5. Receive one consistent Testnet set
 
 Install the Base Sepolia coordinates, gateway signer/audiences, provider
-control profile, outcome configuration, servicing admission, and action
+control profile, signed global rail policy, servicing admission, and action
 catalog exactly as issued. Check expiry and environment. Never combine fields
-from separate revisions.
+from separate revisions. Per-skill runtime listings are created and promoted
+by the registration flow rather than copied into an environment variable.
 
 ### 6. Prepare the Testnet wallet
 
@@ -128,11 +129,11 @@ for Testnet funds. Retain the wallet in an approved secret manager.
 npm run doctor -- --stage=testnet
 ```
 
-This validates the local schema, stage, audiences, signatures, exact
-outcome/action sets, service references, and read-only database connectivity.
+This validates the local schema, stage, audiences, signatures, promoted
+runtime-listing/action sets, service references, and read-only database connectivity.
 Fix every failure. Warnings should have an explicit owner and reason.
 
-### 8. Register the provider when authorized
+### 8. Register identity and services when authorized
 
 After Daski confirms the coordinates, origin, and intended identity, build and
 review the registration helper:
@@ -147,8 +148,18 @@ claim the Daski index entry, and pay a listing fee. Verify the displayed chain,
 contracts, signer, origin, and funded wallet before authorizing it. Put the
 minted/bound id in `PROVIDER_AGENT_ID`.
 
-Boot reconciles installed services with the service registry; it does not turn
-an unreviewed service into an admitted listing.
+After setting the minted/bound id, deploy the candidate so the gateway can read
+its AgentCards. Then register active service contracts:
+
+```bash
+npm run daski:register -- --gateway https://<daski-testnet-gateway>
+```
+
+This second command signs provider intent, verifies gateway preparations,
+persists splitter writes before broadcast, submits activation evidence,
+cross-checks runtime commitments, and atomically promotes catalog heads. Use
+`--service <slug>` only for an intentional narrowed run. Both commands are
+external mutations; doctor and boot invoke neither.
 
 ### 9. Prove deployed readiness and discovery
 
@@ -245,7 +256,7 @@ key, or signed artifacts into Mainnet.
 
 Before requesting the final release:
 
-- remove `src/services/dummy` and its launch outcome;
+- remove `src/services/dummy` and register the real service listings;
 - use Base chain id 8453 and `NODE_ENV=production`;
 - refuse mock, sandbox, and charged-test product modes in every service;
 - use canonical reviewed contracts and USDC;
@@ -266,7 +277,7 @@ Contact onboarding before changing a reviewed:
 
 - public provider or gateway audience/origin;
 - provider identity/wallet or payee;
-- service, skill, outcome, asset, or action id;
+- service, skill, runtime-listing, asset, or action id;
 - request, response, confirmation, or evidence schema;
 - fixed/dynamic price mode, commission, deadline, or capacity;
 - action destructiveness or replay policy;
