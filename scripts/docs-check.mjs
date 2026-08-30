@@ -103,8 +103,8 @@ const genericityFiles = [
   ...await publicSourceFiles(join(ROOT, "test")),
   ...await publicSourceFiles(join(ROOT, "scripts")),
 ].filter((path) =>
-  !path.endsWith("CHANGELOG.md") &&
-  !path.endsWith("scripts/docs-check.mjs")
+  path !== join(ROOT, "CHANGELOG.md") &&
+  path !== join(ROOT, "scripts", "docs-check.mjs")
 );
 const genericSources = (await Promise.all(
   [...new Set(genericityFiles)].map((path) => readFile(path, "utf8")),
