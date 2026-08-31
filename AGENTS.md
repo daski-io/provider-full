@@ -16,9 +16,9 @@ or multi-replica recovery. When every operation is fixed-price, automated,
 one-shot, and terminal within 50 seconds, prefer the smaller
 `https://github.com/daski-io/provider` starter.
 
-The repositories are alternatives. The portable agent skill is maintained only
-in `daski-io/provider`; after selecting this full starter, this file and this
-repository's docs are authoritative.
+The repositories are alternatives. The Daski Provider integration skill for
+coding agents is maintained only in `daski-io/provider`; after selecting this
+full starter, this file and this repository's docs are authoritative.
 
 The only marketplace service is `src/services/dummy`, a reference with free
 `echo` and paid `create-note` skills. It has no supplier/private policy and is

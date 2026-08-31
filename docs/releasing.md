@@ -41,8 +41,8 @@ protected-data cases.
 For the first stable release, set `package.json` to `1.0.0`, move completed
 changelog entries from `Unreleased`, rerun all gates, and record the exact
 approved commit/image. The portable agent skill is versioned and released only
-from [daski-io/provider](https://github.com/daski-io/provider); do not copy or
-retag it here.
+from the [Daski Provider integration skill guide](https://github.com/daski-io/provider/blob/develop/docs/agent-skill.md)
+in `daski-io/provider`; do not copy or retag it here.
 
 After explicit approval, update `main` through the reviewed branch process and
 create the annotated `v1.0.0` tag. The tag job verifies the package version,

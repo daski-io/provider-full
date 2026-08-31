@@ -17,8 +17,9 @@ provider.
 | `provider-full` (this repository) | Any operation needs dynamic quotes, long-running jobs, later input, cancellation, durable assets/actions, human review, email, admin, direct A2A, protected-data workflows, or multi-replica recovery. |
 
 The starters share the standard Exact-EVM rail but are alternatives, not
-layers. The portable agent skill is published only by `provider`; this full
-repository links to that canonical copy instead of maintaining a duplicate.
+layers. The **Daski Provider integration skill for coding agents** is published
+only by `provider`; this full repository links to that canonical copy instead
+of maintaining a duplicate.
 
 The starter is intentionally generic. Its only marketplace service is
 `src/services/dummy`, a small reference with a free `echo` skill and a paid
@@ -50,7 +51,7 @@ admission. A service adapter never decides whether a payment is valid.
 | Understand environment variables | [Configuration](docs/configuration.md) |
 | Prepare for Daski Testnet or Mainnet | [Onboarding](docs/onboarding.md) |
 | Fix setup, readiness, or integration errors | [Troubleshooting](docs/troubleshooting.md) |
-| Give a coding agent the workflow | [Daski provider Agent Skill](docs/agent-skill.md) |
+| Give a coding agent the workflow | [Daski Provider integration skill](docs/agent-skill.md) |
 
 Testnet is the normal first integration target. Mainnet is a separate,
 whitelisted release: ask for admission through the
@@ -232,7 +233,7 @@ against Mainnet without the coordinated, whitelisted release procedure.
 
 ### Work with coding agents
 
-- [Daski provider Agent Skill](docs/agent-skill.md)
+- [Daski Provider integration skill](docs/agent-skill.md)
 - [Repository agent guide](AGENTS.md)
 - [Contributing](CONTRIBUTING.md)
 

@@ -17,14 +17,15 @@ All notable changes to this project will be documented here.
   Testnet evidence, Mainnet allowlisting, configuration, and troubleshooting.
 - A loopback-only PostgreSQL 16 Compose service and a read-only, redacted
   `doctor` for local, Testnet, and Mainnet readiness diagnostics.
-- A harness-agnostic Agent Skill under `.agents/skills/` plus installation and
-  validation guidance for compatible coding agents.
-- Documentation, skill, and release-package validation gates.
+- Harness-neutral coding-agent guidance that links to the canonical Daski
+  Provider integration skill without duplicating it in this repository.
+- Documentation and release-package validation gates, including enforcement of
+  the canonical skill's single-copy boundary.
 
 ### Changed
 
-- Made the skill validator and doctor tooling portable across LF and CRLF
-  checkouts, and added a focused Windows tooling CI gate.
+- Made doctor tooling portable across LF and CRLF checkouts and added a focused
+  Windows tooling CI gate.
 - Clarified Provider versus upstream Supplier terminology and linked the
   official Base Sepolia faucet directory from Testnet wallet setup.
 - Made optional LLM configuration truly optional and added concise,
