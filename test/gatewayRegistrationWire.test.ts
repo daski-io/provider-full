@@ -80,7 +80,7 @@ function card() {
   }));
   return {
     extensions: {
-      "https://daski.xyz/a2a/v1": {
+      "https://daski.io/a2a/v1": {
         legal: {
           marketplaceTermsUrl: "https://daski.example/terms",
           marketplacePrivacyUrl: "https://daski.example/privacy",
@@ -89,7 +89,7 @@ function card() {
           providerPrivacyUrl: "https://provider.example/privacy",
         },
       },
-      "https://daski.xyz/a2a/v2": {
+      "https://daski.io/a2a/v2": {
         schemaVersion: 1,
         providerAgentId: "42",
         service: {
@@ -152,11 +152,11 @@ describe("gateway registration wire contract", () => {
     };
     const first = parsePublishedServiceContract(card(), expected);
     const refreshed = card();
-    refreshed.extensions["https://daski.xyz/a2a/v2"].service.turnaroundEstimate =
+    refreshed.extensions["https://daski.io/a2a/v2"].service.turnaroundEstimate =
       "two orbits";
     expect(parsePublishedServiceContract(refreshed, expected).serviceContractHash)
       .toBe(first.serviceContractHash);
-    refreshed.extensions["https://daski.xyz/a2a/v1"].legal.providerTermsUrl =
+    refreshed.extensions["https://daski.io/a2a/v1"].legal.providerTermsUrl =
       "https://provider.example/revised-terms";
     expect(parsePublishedServiceContract(refreshed, expected).serviceContractHash)
       .not.toBe(first.serviceContractHash);
@@ -164,7 +164,7 @@ describe("gateway registration wire contract", () => {
 
   it("rejects action drift that no longer matches the published contract hash", () => {
     const raw = card();
-    const extension = raw.extensions["https://daski.xyz/a2a/v2"];
+    const extension = raw.extensions["https://daski.io/a2a/v2"];
     extension.skills[0]!.contract.assetAction!.effect = "read";
     expect(() => parsePublishedServiceContract(raw, {
       cardUrl: "https://provider.example/agent-cards/orbital-logistics.json",

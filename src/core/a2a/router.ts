@@ -14,7 +14,7 @@ import { handleTasksGet } from "./handlers/tasksGet.js";
 import { logInfo } from "../logger.js";
 import { getProviderIdentityAuthorization } from "../chain/providerIdentity.js";
 
-const EXTENSION_URI = "https://daski.xyz/a2a/v1";
+const EXTENSION_URI = "https://daski.io/a2a/v1";
 
 export const a2aRouter = Router();
 

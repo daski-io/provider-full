@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { isOpenFreeA2aRequest } from "../src/core/security/openA2aBoundary.js";
 
-const EXT = "https://daski.xyz/a2a/v1";
+const EXT = "https://daski.io/a2a/v1";
 
 function request(metadata: Record<string, unknown>) {
   return {

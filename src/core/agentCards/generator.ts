@@ -21,7 +21,7 @@ import type { AgentCard } from "./types.js";
 
 // These constants are active gateway contracts. The generator is split by
 // concern, but their values and emitted shape stay stable.
-const DASKI_EXT_URI = "https://daski.xyz/a2a/v1";
+const DASKI_EXT_URI = "https://daski.io/a2a/v1";
 const PROVIDER_VERSION = "2.0.0";
 const A2A_PROTOCOL_VERSION = "1.0";
 

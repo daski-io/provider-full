@@ -83,9 +83,9 @@ vi.mock("../src/core/serviceRegistry/registry.js", async (importActual) => {
 
 const { generateAgentCard } = await import("../src/core/agentCards/generator.js");
 
-const DASKI_EXT_URI = "https://daski.xyz/a2a/v1";
+const DASKI_EXT_URI = "https://daski.io/a2a/v1";
 
-const DASKI_CONTRACT_EXT_URI = "https://daski.xyz/a2a/v2";
+const DASKI_CONTRACT_EXT_URI = "https://daski.io/a2a/v2";
 function makeService(overrides: Partial<ServiceRow> = {}): ServiceRow {
   return {
     id: "svc-1",

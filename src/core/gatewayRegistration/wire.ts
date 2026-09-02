@@ -28,8 +28,8 @@ const POLICY_KEYS = [
   "splitterFactoryRuntimeCodeHash",
   "intentMaximumLifetimeSeconds",
 ] as const;
-const V1_URI = "https://daski.xyz/a2a/v1";
-const V2_URI = "https://daski.xyz/a2a/v2";
+const V1_URI = "https://daski.io/a2a/v1";
+const V2_URI = "https://daski.io/a2a/v2";
 
 function object(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
