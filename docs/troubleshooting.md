@@ -264,6 +264,13 @@ Check the declared worker id, durable job queue, leases, heartbeat age,
 dead-letter/review state, and product dependency. Restarting a process must
 resume the same job; it must not repeat the original supplier mutation.
 
+The provider-write reconciler runs on every replica behind one cycle lease. A
+lease held by another replica's live session counts as a healthy cycle, so a
+rolling deploy stays ready, and ticks are jittered so replicas cannot
+phase-lock. A lease observed busy for more than five minutes is treated as a
+stuck peer and reported not ready, as are a failed cycle and active nonce-gap
+recovery.
+
 ## HTTP, proxy, and health behavior
 
 ### `/health/live` passes but `/health/ready` fails

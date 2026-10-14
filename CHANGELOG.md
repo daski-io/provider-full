@@ -41,6 +41,12 @@ All notable changes to this project will be documented here.
   repository.
 - Clarified standard-rail release accounting as an interval-based invariant.
 
+### Fixed
+
+- The provider-write reconciler stays ready while another replica's live
+  session holds its cycle lease, reports a lease stuck for five minutes, and
+  jitters its schedule so replicas cannot phase-lock.
+
 ### Removed
 
 - All source, configuration, migrations, documentation, and tests belonging to

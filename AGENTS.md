@@ -71,9 +71,9 @@ npm start
 
 Node 24 and PostgreSQL 16 are required. Compose starts a loopback-only
 development database; `npm run dev:db:stop` preserves its named volume.
-`doctor` is read-only and redacted. Unit tests need no live database, RPC, or
-supplier. PostgreSQL security/migration scripts require an explicit disposable
-database.
+`doctor` is read-only and redacted. Tests need no live RPC, gateway, or
+supplier. PostgreSQL-backed tests (`DATABASE_URL_TEST`) and security/migration
+scripts require an explicit disposable database.
 `daski:register` can sign, write to chain, and mutate gateway/catalog state;
 listing it here is not authorization to run it.
 
