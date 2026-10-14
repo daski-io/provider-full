@@ -52,19 +52,22 @@ export class ProviderAssetQueryService {
     ) throw new Error("asset query denied");
     const canonicalRequestHash = requestHash(body.request);
     const actionHash = utf8Hash("list-assets");
-    const walletHash = await verifyWalletAuthorization({
-      authorization: body.authorization,
-      chainId: this.chainId,
-      expectedPayer: getAddress(body.grant.payload.payer),
-      expectedActionHash: actionHash,
-      expectedAudienceHash: utf8Hash(this.standard.gatewayAudience),
-    });
+    // The gateway's grant first (offline, free), the payer signature second
+    // (a bounded chain call for a contract account): no unauthenticated
+    // request spends a verification.
     const grantHash = await verifyProviderGrant({
       envelope: body.grant,
       environment: this.standard.environment,
       chainId: this.chainId,
       providerAudience: this.standard.providerAudience,
       gatewayLifecycleSigner: this.standard.gatewayLifecycleSigner,
+    });
+    const walletHash = await verifyWalletAuthorization({
+      authorization: body.authorization,
+      chainId: this.chainId,
+      expectedPayer: getAddress(body.grant.payload.payer),
+      expectedActionHash: actionHash,
+      expectedAudienceHash: utf8Hash(this.standard.gatewayAudience),
     });
     this.validateBindings(body, walletHash, canonicalRequestHash, actionHash);
     await this.consumeAuthorizations(body, walletHash, grantHash, actionHash);

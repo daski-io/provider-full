@@ -95,6 +95,14 @@ All notable changes to this project will be documented here.
   pricing modes, including payer, request, listing, price and window
   coverage, and no longer caps how long after its quote a timely-paid order
   may be dispatched.
+- Lifecycle actions, wallet actions and asset queries verify payer EIP-712
+  signatures through one bounded verifier: EOAs recover offline, and with
+  `PAYER_ACCOUNT_TYPES=eoa,contract` a deployed ERC-1271 account answers one
+  gas-, size- and time-bounded `isValidSignature` read that must return the
+  exact zero-padded magic value. Counterfactual ERC-6492 wrappers are
+  refused, and a verification outage stays retryable instead of looking like
+  a wrong signature. Asset actions and queries verify the gateway grant
+  before the payer signature, so an ungranted request never spends RPC.
 - Published skill contracts carry the gateway's closed key set, including
   `purchaseReadiness: null`, and both deadlines explicitly; registration
   refuses a fulfillment window shorter than `dispatchSeconds + 300`, which a

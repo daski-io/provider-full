@@ -4,12 +4,17 @@ import {
   hashTypedData,
   keccak256,
   recoverMessageAddress,
-  recoverTypedDataAddress,
   stringToHex,
   type Address,
   type Hex,
 } from "viem";
 import { assertExactKeys, canonicalHash, SIGNED_ENVELOPE_KEYS, unsignedEnvelopeHash } from "./canonical.js";
+import {
+  isPayerSignatureShape,
+  PayerSignatureError,
+  verifyPayerTypedData,
+  type PayerSignatureVerifierOptions,
+} from "./payerSignature.js";
 import type { ProviderWalletActionGrantV1, SignedEnvelope, WalletActionAuthorizationV1 } from "./types.js";
 
 export const ZERO_HASH = `0x${"00".repeat(32)}` as Hex;
@@ -78,6 +83,8 @@ export async function verifyWalletAuthorization(args: {
   expectedActionHash: Hex;
   expectedAudienceHash: Hex;
   now?: number;
+  /** Test seam for the payer-signature policy and its RPC endpoints. */
+  payerSignature?: Partial<PayerSignatureVerifierOptions>;
 }): Promise<Hex> {
   assertExactKeys(args.authorization, ["message", "signature"], "wallet authorization");
   assertExactKeys(args.authorization.message, WALLET_ACTION_FIELDS, "wallet authorization message");
@@ -94,7 +101,7 @@ export async function verifyWalletAuthorization(args: {
     hashes.some((value) => !/^0x[0-9a-f]{64}$/.test(value)) ||
     !Number.isSafeInteger(message.actionCatalogEpoch) || message.actionCatalogEpoch < 0 ||
     !Number.isSafeInteger(message.issuedAt) || !Number.isSafeInteger(message.validBefore) ||
-    !/^0x[0-9a-f]{130}$/.test(args.authorization.signature) ||
+    !isPayerSignatureShape(args.authorization.signature) ||
     getAddress(message.payer) !== getAddress(args.expectedPayer) ||
     (args.expectedRequestHash !== undefined && message.requestHash !== args.expectedRequestHash) ||
     message.actionHash !== args.expectedActionHash ||
@@ -102,14 +109,24 @@ export async function verifyWalletAuthorization(args: {
     message.issuedAt > now + 30 || message.validBefore <= now ||
     message.validBefore - message.issuedAt > 300 || message.issuedAt >= message.validBefore
   ) throw new Error("wallet authorization denied");
-  const recovered = await recoverTypedDataAddress({
-    domain: { name: "DaskiStandardWallet", version: "1", chainId: args.chainId },
-    primaryType: "WalletActionAuthorizationV1",
-    types: walletActionTypes,
-    message: typedWalletMessage(message),
-    signature: args.authorization.signature,
-  });
-  if (getAddress(recovered) !== getAddress(message.payer)) {
+  // Verified with no database lock or connection held; callers consume the
+  // wallet nonce in their own atomic claim afterwards. An EOA recovers
+  // offline (recoverTypedDataAddress); a configured contract account answers
+  // one bounded isValidSignature read, whose transport failure stays
+  // retryable instead of looking like a wrong signature.
+  try {
+    await verifyPayerTypedData({
+      payer: getAddress(message.payer),
+      typedData: {
+        domain: { name: "DaskiStandardWallet", version: "1", chainId: args.chainId },
+        primaryType: "WalletActionAuthorizationV1",
+        types: walletActionTypes,
+        message: typedWalletMessage(message),
+      },
+      signature: args.authorization.signature,
+    }, args.payerSignature);
+  } catch (error) {
+    if (error instanceof PayerSignatureError && error.retryable) throw error;
     throw new Error("wallet authorization denied");
   }
   return walletAuthorizationHash(message, args.chainId);

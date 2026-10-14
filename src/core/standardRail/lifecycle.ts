@@ -3,9 +3,9 @@ import {
   keccak256,
   recoverMessageAddress,
   stringToHex,
-  verifyTypedData,
   type Hex,
 } from "viem";
+import { PayerSignatureError, verifyPayerTypedData } from "./payerSignature.js";
 import { privateKeyToAccount } from "viem/accounts";
 import { pool } from "../db/pool.js";
 import { getAdapter } from "../serviceRegistry/registry.js";
@@ -366,37 +366,43 @@ export class StandardLifecycleService {
     if (authorization.issuedAt > now + 30 || authorization.validBefore <= now || authorization.validBefore > now + 300) {
       throw new Error("Lifecycle authorization expired");
     }
-    const valid = await verifyTypedData({
-      address: getAddress(task.standard_payer),
-      domain: { name: "DaskiStandardOrder", version: "1", chainId: this.chainId },
-      types: {
-        OrderActionAuthorizationV1: [
-          { name: "orderIdHash", type: "bytes32" },
-          { name: "actionHash", type: "bytes32" },
-          { name: "methodHash", type: "bytes32" },
-          { name: "absoluteResourceUriHash", type: "bytes32" },
-          { name: "requestHash", type: "bytes32" },
-          { name: "audienceHash", type: "bytes32" },
-          { name: "nonce", type: "bytes32" },
-          { name: "issuedAt", type: "uint64" },
-          { name: "validBefore", type: "uint64" },
-        ],
-      },
-      primaryType: "OrderActionAuthorizationV1",
-      message: {
-        orderIdHash: keccak256(stringToHex(task.standard_order_id)),
-        actionHash: keccak256(stringToHex(action)),
-        methodHash: keccak256(stringToHex(authorization.method)),
-        absoluteResourceUriHash: keccak256(stringToHex(authorization.absoluteResourceUri)),
-        requestHash: canonicalHash(request),
-        audienceHash: keccak256(stringToHex(this.config.gatewayAudience)),
-        nonce: authorization.nonce,
-        issuedAt: BigInt(authorization.issuedAt),
-        validBefore: BigInt(authorization.validBefore),
-      },
-      signature: authorization.signature,
-    });
-    if (!valid) throw new Error("Lifecycle authorization is invalid");
+    try {
+      await verifyPayerTypedData({
+        payer: getAddress(task.standard_payer),
+        typedData: {
+          domain: { name: "DaskiStandardOrder", version: "1", chainId: this.chainId },
+          types: {
+            OrderActionAuthorizationV1: [
+              { name: "orderIdHash", type: "bytes32" },
+              { name: "actionHash", type: "bytes32" },
+              { name: "methodHash", type: "bytes32" },
+              { name: "absoluteResourceUriHash", type: "bytes32" },
+              { name: "requestHash", type: "bytes32" },
+              { name: "audienceHash", type: "bytes32" },
+              { name: "nonce", type: "bytes32" },
+              { name: "issuedAt", type: "uint64" },
+              { name: "validBefore", type: "uint64" },
+            ],
+          },
+          primaryType: "OrderActionAuthorizationV1",
+          message: {
+            orderIdHash: keccak256(stringToHex(task.standard_order_id)),
+            actionHash: keccak256(stringToHex(action)),
+            methodHash: keccak256(stringToHex(authorization.method)),
+            absoluteResourceUriHash: keccak256(stringToHex(authorization.absoluteResourceUri)),
+            requestHash: canonicalHash(request),
+            audienceHash: keccak256(stringToHex(this.config.gatewayAudience)),
+            nonce: authorization.nonce,
+            issuedAt: BigInt(authorization.issuedAt),
+            validBefore: BigInt(authorization.validBefore),
+          },
+        },
+        signature: authorization.signature,
+      });
+    } catch (error) {
+      if (error instanceof PayerSignatureError && error.retryable) throw error;
+      throw new Error("Lifecycle authorization is invalid");
+    }
   }
 
   private validateActionRequest(action: string, request: Record<string, unknown>): void {

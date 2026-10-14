@@ -61,6 +61,7 @@ for (const criticalFile of [
   "src/core/chain/signerLease.ts",
   "src/core/auth/requestHash.ts",
   "src/core/standardRail/walletAuthorization.ts",
+  "src/core/standardRail/payerSignature.ts",
   "src/core/compliance/lease.ts",
   "src/core/db/sessionAdvisoryLock.ts",
   "src/core/security/reviewedEndpoint.ts",
@@ -226,11 +227,33 @@ for (const required of [
   "expectedRequestHash",
   "expectedActionHash",
   "expectedAudienceHash",
-  "recoverTypedDataAddress",
+  "verifyPayerTypedData",
   "recoverMessageAddress",
 ]) {
   if (!walletAuthorization.includes(required)) {
     failures.push(`wallet authorization is missing ${required}`);
+  }
+}
+// Every payer EIP-712 signature goes through the one bounded verifier: EOAs
+// recover offline, contract accounts answer the exact ERC-1271 value, and
+// counterfactual wrappers are refused.
+const payerSignature = read("src/core/standardRail/payerSignature.ts");
+for (const required of [
+  "recoverTypedDataAddress",
+  "ERC1271_MAGIC_RETURN",
+  "ERC6492_MAGIC_SUFFIX",
+  "ERC1271_RESPONSE_MAX_BYTES",
+  "ERC1271_CALL_GAS",
+]) {
+  if (!payerSignature.includes(required)) {
+    failures.push(`payer signature verifier is missing ${required}`);
+  }
+}
+for (const file of sourceFiles) {
+  const path = projectPath(file);
+  if (!file.endsWith(".ts") || path === "src/core/standardRail/payerSignature.ts") continue;
+  if (/\b(?:recoverTypedDataAddress|verifyTypedData)\s*\(/.test(readFileSync(file, "utf8"))) {
+    failures.push(`${path} verifies a typed-data signature outside the bounded payer verifier`);
   }
 }
 const actionStore = read("src/core/standardRail/actionStore.ts");

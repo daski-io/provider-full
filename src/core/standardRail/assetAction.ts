@@ -62,6 +62,16 @@ export class ProviderAssetActionService {
         ? `recover-action:${this.wallet.providerAgentId}:${definition.actionId}`
         : `use-asset:${this.wallet.providerAgentId}:${definition.actionId}`);
     const canonicalRequestHash = requestHash(body.request);
+    // The gateway's grant first: an offline recovery that costs nothing, so a
+    // request without one never reaches the payer-signature verification,
+    // whose contract-account path is a bounded chain call.
+    const grantHash = await verifyProviderGrant({
+      envelope: body.grant,
+      environment: this.standard.environment,
+      chainId: this.chainId,
+      providerAudience: this.standard.providerAudience,
+      gatewayLifecycleSigner: this.standard.gatewayLifecycleSigner,
+    });
     const walletHash = await verifyWalletAuthorization({
       authorization: body.authorization,
       chainId: this.chainId,
@@ -69,13 +79,6 @@ export class ProviderAssetActionService {
       expectedRequestHash: canonicalRequestHash,
       expectedActionHash: actionHash,
       expectedAudienceHash: utf8Hash(this.standard.gatewayAudience),
-    });
-    const grantHash = await verifyProviderGrant({
-      envelope: body.grant,
-      environment: this.standard.environment,
-      chainId: this.chainId,
-      providerAudience: this.standard.providerAudience,
-      gatewayLifecycleSigner: this.standard.gatewayLifecycleSigner,
     });
     this.validateBindings(body, definition, walletHash, canonicalRequestHash, actionHash);
     const payer = getAddress(body.grant.payload.payer).toLowerCase() as Hex;

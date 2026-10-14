@@ -232,3 +232,27 @@ Standard dispatch records the payer and order identity on the task. Subsequent
 asset mutations use the provider's capability schemas and the identity bound
 to that standard order. A public task ID or transaction hash is never an
 authorization credential.
+
+## Payer signatures
+
+Every payer EIP-712 signature (order action authorizations, wallet action and
+asset query authorizations) goes through `src/core/standardRail/payerSignature.ts`:
+
+- the signature must be `0x` plus 1 to 4,096 bytes of hex;
+- a 65-byte, low-`s` ECDSA signature that recovers to the payer is an EOA and
+  verifies offline, with no RPC;
+- anything else is a contract-account signature, admitted only when
+  `PAYER_ACCOUNT_TYPES` includes `contract`: an ERC-6492 counterfactual
+  wrapper is refused, and within `PAYER_SIGNATURE_VERIFY_TIMEOUT_MS` the payer
+  must have deployed code and `isValidSignature(bytes32,bytes)` must return
+  exactly `0x1626ba7e` followed by 28 zero bytes from an `eth_call` capped at
+  1,000,000 gas and 16 KiB of response. At most eight contract verifications
+  run at once.
+- A revert, another value, missing code or a malformed answer is an invalid
+  signature. Transport failure on the primary and one fallback, the deadline
+  or the concurrency bound is a retryable outage: it never consumes a provider
+  nonce or counts as a wrong signature.
+
+The asset action and asset query surfaces verify the gateway grant (an offline
+recovery) before the payer signature, so a request without a valid grant
+never reaches the chain.

@@ -27,6 +27,25 @@ function isLoopbackUrl(value: string): boolean {
   return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
 }
 
+export type PayerAccountType = "eoa" | "contract";
+
+/** Parse PAYER_ACCOUNT_TYPES into the admitted set; throws on an unknown or empty entry. */
+export function parsePayerAccountTypes(value: string): ReadonlySet<PayerAccountType> {
+  const entries = value.split(",").map((entry) => entry.trim().toLowerCase()).filter(Boolean);
+  if (entries.length === 0) throw new Error("PAYER_ACCOUNT_TYPES must name at least one account type");
+  const types = new Set<PayerAccountType>();
+  for (const entry of entries) {
+    if (entry !== "eoa" && entry !== "contract") {
+      throw new Error(`PAYER_ACCOUNT_TYPES entry '${entry}' is not eoa or contract`);
+    }
+    types.add(entry);
+  }
+  // The offline EOA path is always admitted, here and at the gateway; the set
+  // only says whether deployed contract accounts are admitted as well.
+  if (!types.has("eoa")) throw new Error("PAYER_ACCOUNT_TYPES must include eoa");
+  return types;
+}
+
 /** Strict environment boolean parser; unlike Boolean("false"), false stays false. */
 export const strictBooleanEnv = z.preprocess((value) => {
   if (typeof value === "boolean" || value === undefined) return value;
@@ -135,6 +154,24 @@ const envSchema = z.object({
         }),
     { message: "must be a comma-separated list of absolute HTTP(S) URLs" },
   ),
+  // Payer account types whose EIP-712 signatures are admitted. EOAs always
+  // verify offline; `contract` adds deployed ERC-1271 accounts through one
+  // bounded isValidSignature read. Counterfactual ERC-6492 wrappers are never
+  // admitted.
+  PAYER_ACCOUNT_TYPES: z.string().default("eoa").refine(
+    (value) => {
+      try {
+        parsePayerAccountTypes(value);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    { message: "must be a comma-separated subset of eoa,contract that includes eoa" },
+  ),
+  // One deadline covering the contract-account code lookup, the
+  // isValidSignature call and at most one RPC failover.
+  PAYER_SIGNATURE_VERIFY_TIMEOUT_MS: z.coerce.number().int().min(500).max(60_000).default(5_000),
   CHAIN_ID: z.coerce.number().int().refine((id) => id === 8453 || id === 84532, {
     message: "CHAIN_ID must be Base (8453) or Base Sepolia (84532)",
   }),

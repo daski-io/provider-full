@@ -2,6 +2,7 @@ import { getAddress, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { describe, expect, it } from "vitest";
 import { unsignedEnvelopeHash } from "../src/core/standardRail/canonical.js";
+import { ERC1271_MAGIC_RETURN } from "../src/core/standardRail/payerSignature.js";
 import type {
   ProviderWalletActionGrantV1,
   SignedEnvelope,
@@ -192,6 +193,39 @@ describe("standard wallet authorization", () => {
       ...base,
       authorization: authorization as never,
     })).rejects.toThrow(/fields/);
+  });
+
+  it("verifies a configured contract account through the bounded verifier", async () => {
+    const value = message();
+    const base = {
+      chainId,
+      expectedPayer: getAddress(value.payer),
+      expectedRequestHash: value.requestHash,
+      expectedActionHash: value.actionHash,
+      expectedAudienceHash: value.audienceHash,
+      now,
+    };
+    // A deployed account's signature is not a 65-byte ECDSA signature.
+    const authorization = { message: value, signature: `0x${"ab".repeat(120)}` as Hex };
+    const policy = (answer: () => Promise<{ kind: "returned"; data: Hex } | { kind: "reverted" }>) => ({
+      accountTypes: new Set(["eoa", "contract"] as const),
+      verifyTimeoutMs: 1_000,
+      endpoints: [{ host: "rpc", getCode: async () => "0x6080" as Hex, isValidSignature: answer }],
+    });
+    await expect(verifyWalletAuthorization({
+      ...base, authorization,
+      payerSignature: policy(async () => ({ kind: "returned", data: ERC1271_MAGIC_RETURN })),
+    })).resolves.toBe(walletAuthorizationHash(value, chainId));
+    await expect(verifyWalletAuthorization({
+      ...base, authorization, payerSignature: policy(async () => ({ kind: "reverted" })),
+    })).rejects.toThrow(/wallet authorization denied/);
+    // Unavailable verification is retryable, never a wrong signature.
+    await expect(verifyWalletAuthorization({
+      ...base, authorization,
+      payerSignature: policy(async () => { throw new Error("ECONNRESET"); }),
+    })).rejects.toMatchObject({ name: "PayerSignatureError", retryable: true });
+    // The default policy admits EOAs only.
+    await expect(verifyWalletAuthorization({ ...base, authorization })).rejects.toThrow(/denied/);
   });
 
   it("verifies the exact signed provider grant envelope", async () => {
