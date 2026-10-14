@@ -141,9 +141,13 @@ cross-checks the gateway's runtime commitments. All skill versions for a
 service promote atomically into an append-only catalog.
 
 Unchanged listings remain on their original commitment; changed contracts
-append a new version and supersede the old head. Safe retirement is a separate
-explicit command and fails while active tasks, assets, jobs, supplier
-operations, or reviews remain.
+append a new version and supersede the old head. A listing the gateway reuses
+is expected at the commitment its admission promoted, rebuilt with that
+admission's provider intent; one that no longer reproduces its head, or a
+free listing whose admission no head or signed envelope records, is refused
+as identity drift. A refused cross-check names each disagreeing listing.
+Safe retirement is a separate explicit command and fails while active tasks,
+assets, jobs, supplier operations, or reviews remain.
 
 ## Assets and wallet actions
 

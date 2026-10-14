@@ -26,6 +26,7 @@ import {
   providerAddress,
   publicClient,
 } from "../chain/client.js";
+import { logError } from "../logger.js";
 import { canonicalHash } from "../standardRail/canonical.js";
 import {
   beginGatewayRegistration,
@@ -45,13 +46,17 @@ import {
   verifyPreparedRegistration,
 } from "./prepared.js";
 import {
-  buildRuntimeListingCommitment,
-  runtimeCommitmentHash,
-} from "./runtimeCommitment.js";
+  ReusedListingDriftError,
+  crossCheckActivationCommitments,
+  describeCrossCheck,
+  type ActivationCrossCheck,
+} from "./activationIdentity.js";
+import type { RuntimeCommitmentInputs } from "./runtimeCommitment.js";
 import {
   loadRuntimeListingHeads,
   promoteRuntimeListingVersions,
   type ProviderRuntimeListingBundleV1,
+  type RuntimeListingHead,
   type SplitterActivationCheckpoint,
 } from "./runtimeCatalog.js";
 import type {
@@ -684,13 +689,60 @@ async function verifyListingActivationCheckpoint(args: {
   };
 }
 
-// Recompute every listing's runtime commitment from our own copies of the
-// admitted artifacts, cross-check the gateway's reported hashes, resolve
+/** This provider's live (unsuperseded) heads for one service, by skill id. */
+async function priorHeadsFor(
+  gatewayOrigin: string,
+  serviceId: Hex,
+): Promise<Map<string, RuntimeListingHead>> {
+  return new Map(
+    (await loadRuntimeListingHeads(gatewayOrigin))
+      .filter((head) => head.serviceId.toLowerCase() === serviceId.toLowerCase())
+      .map((head) => [head.skillId, head]),
+  );
+}
+
+function activationInputs(
+  policy: RegistrationPolicy,
+  prepared: GatewayRegistrationView["prepared"],
+  listing: GatewayRegistrationView["prepared"]["listings"][number],
+): RuntimeCommitmentInputs & { gatewayReused: boolean } {
+  return {
+    environment: policy.environment,
+    chainId: policy.chainId,
+    gatewayAudience: policy.audience,
+    providerAgentId: prepared.providerAgentId,
+    serviceId: prepared.serviceId,
+    currentProviderIntentHash: prepared.providerIntentHash,
+    currentProviderPayee: getAddress(prepared.providerPayee),
+    policy: {
+      canonicalToken: policy.canonicalToken,
+      daskiCommissionReceiver: policy.daskiCommissionReceiver,
+      commissionBps: policy.commissionBps,
+      policyVersionHash: policy.railPolicyHash,
+      splitterFactory: policy.splitterFactory,
+    },
+    listing: {
+      listingId: listing.listingId,
+      listingKey: listing.listingKey,
+      skillId: listing.skillId,
+      skillContractHash: listing.skillContractHash,
+      paymentRequired: listing.paymentRequired,
+      splitterAddress: listing.splitterAddress,
+      preparation: listing.preparation,
+      controlProfile: listing.controlProfile,
+    },
+    gatewayReused: listing.reused,
+  };
+}
+
+// Resolve every listing's runtime commitment from our own copies of the
+// admitted artifacts (a reused listing keeps the commitment its admission
+// promoted; a new admission is rebuilt from the current registration),
+// cross-check the gateway's reported hashes as an exact set, resolve
 // deployment evidence, and promote the versions into the append-only runtime
 // catalog before the registration is marked active. The cross-check is
-// unconditional — an activation response without a matching hash for every
-// listing is a protocol violation, so crash-recovery replays can never
-// promote unverified values.
+// unconditional, so crash-recovery replays can never promote unverified
+// values, and a refusal names every disagreement.
 async function promoteActiveRuntimeListings(args: {
   localId: string;
   gatewayOrigin: string;
@@ -704,69 +756,52 @@ async function promoteActiveRuntimeListings(args: {
   const skills = new Map(
     args.published.skills.map((skill) => [skill.skillId, skill]),
   );
-  const versions = prepared.listings.map((listing) => {
-    const commitment = buildRuntimeListingCommitment({
-      environment: args.policy.environment,
-      chainId: args.policy.chainId,
-      gatewayAudience: args.policy.audience,
-      providerAgentId: prepared.providerAgentId,
-      serviceId: prepared.serviceId,
-      currentProviderIntentHash: prepared.providerIntentHash,
-      currentProviderPayee: getAddress(prepared.providerPayee),
-      policy: {
-        canonicalToken: args.policy.canonicalToken,
-        daskiCommissionReceiver: args.policy.daskiCommissionReceiver,
-        commissionBps: args.policy.commissionBps,
-        policyVersionHash: args.policy.railPolicyHash,
-        splitterFactory: args.policy.splitterFactory,
-      },
-      listing: {
-        listingId: listing.listingId,
-        listingKey: listing.listingKey,
-        skillId: listing.skillId,
-        skillContractHash: listing.skillContractHash,
-        paymentRequired: listing.paymentRequired,
-        splitterAddress: listing.splitterAddress,
-        preparation: listing.preparation,
-        controlProfile: listing.controlProfile,
-      },
+  const priorHeads = await priorHeadsFor(args.gatewayOrigin, prepared.serviceId);
+  let check: ActivationCrossCheck;
+  try {
+    check = crossCheckActivationCommitments({
+      inputs: prepared.listings.map((listing) =>
+        activationInputs(args.policy, prepared, listing)),
+      reported: args.view.runtimeCommitments ?? [],
+      priorHeads,
     });
-    return { listing, commitment, hash: runtimeCommitmentHash(commitment) };
-  });
-  // Exact-set cross-check: the gateway must report one commitment per
-  // listing — no missing, extra, or duplicate entries — and every hash must
-  // equal the locally recomputed value.
-  const reportedEntries = args.view.runtimeCommitments ?? [];
-  const reported = new Map(
-    reportedEntries.map((item) => [
-      item.listingId,
-      item.runtimeCommitmentHash.toLowerCase(),
-    ]),
-  );
-  const exactSet =
-    reported.size === reportedEntries.length &&
-    reported.size === versions.length &&
-    versions.every(({ commitment, hash }) =>
-      reported.get(commitment.listingId) === hash.toLowerCase());
-  if (!exactSet) {
+  } catch (error) {
+    if (error instanceof ReusedListingDriftError) {
+      logError("activation refused: a reused listing does not reproduce its promoted commitment", {
+        serviceSlug: prepared.serviceSlug,
+        registrationId: args.view.registrationId,
+        skillId: error.skillId,
+        listingId: error.listingId,
+        fields: error.fields,
+      });
+      await markGatewayRegistrationAttention(args.localId, "reused_listing_drift");
+    }
+    throw error;
+  }
+  if (!check.ok) {
+    const detail = describeCrossCheck(check);
+    logError("activation refused: the gateway's runtime commitment set differs from the local resolution", {
+      serviceSlug: prepared.serviceSlug,
+      registrationId: args.view.registrationId,
+      detail,
+    });
     await markGatewayRegistrationAttention(
       args.localId,
       "runtime_commitment_mismatch",
     );
     throw new Error(
-      `${prepared.serviceSlug} activation did not report the exact runtime commitment set`,
+      `${prepared.serviceSlug} activation did not report the exact runtime commitment set: ${detail}`,
     );
   }
+  const versions = check.verdicts.map((verdict, index) => ({
+    listing: prepared.listings[index]!,
+    commitment: verdict.commitment,
+    hash: verdict.expected,
+  }));
   const writes = new Map(
     (await listGatewaySplitterWrites(args.localId))
       .filter((row) => row.transaction_hash !== null)
       .map((row) => [row.listing_id, row.transaction_hash as Hex]),
-  );
-  const priorHeads = new Map(
-    (await loadRuntimeListingHeads(args.gatewayOrigin))
-      .filter((head) =>
-        head.serviceId.toLowerCase() === prepared.serviceId.toLowerCase())
-      .map((head) => [head.skillId, head]),
   );
   const evidence = new Map<string, {
     splitterTransactionHash: Hex | null;

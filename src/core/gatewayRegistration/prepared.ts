@@ -22,6 +22,17 @@ export const factoryAbi = parseAbi([
   "function splitterCreationCodeHash() pure returns (bytes32)",
 ]);
 
+/**
+ * Throw naming every failed cross-check by field. Diagnostics carry field,
+ * skill and listing identifiers only, never a signed body or secret.
+ */
+function requireMatches(message: string, checks: Record<string, boolean>): void {
+  const failed = Object.entries(checks)
+    .filter(([, matches]) => !matches)
+    .map(([field]) => field);
+  if (failed.length > 0) throw new Error(`${message} (mismatched: ${failed.join(", ")})`);
+}
+
 function record(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${label} must be an object`);
@@ -110,35 +121,37 @@ async function verifyControlProfile(args: {
     gatewaySigner: args.gatewaySigner,
   });
   const payload = profile.payload;
-  if (
-    (!args.listing.reused && (
-      payload.registrationId !== args.registrationId ||
-      payload.providerIntentHash !== args.intentHash
-    )) ||
-    payload.providerAgentId !== args.providerAgentId ||
-    payload.serviceId !== args.service.serviceId ||
-    payload.serviceSlug !== args.service.serviceSlug ||
-    payload.skillId !== args.skill.skillId ||
-    payload.skillContractHash !== args.skill.skillContractHash ||
-    payload.policyVersionHash !== args.policy.railPolicyHash ||
-    payload.providerEndpoint !== args.service.standardRail.assetActionUrl ||
-    payload.ownershipPolicy !== action.ownershipPolicy ||
-    payload.effect !== action.effect ||
-    payload.replayPolicy !== action.replayPolicy ||
-    payload.retentionSeconds !== action.retentionSeconds ||
-    payload.walletAuthorizationRequired !== true ||
-    payload.delayedConfirmationRequired !== (action.effect === "destructive") ||
-    payload.confirmationSummarySchemaHash !== (
-      action.confirmationSummarySchema
-        ? canonicalHash(action.confirmationSummarySchema)
-        : null
-    ) ||
-    payload.confirmationSummaryTemplateHash !== (
-      action.confirmationSummaryTemplate
-        ? canonicalHash(action.confirmationSummaryTemplate)
-        : null
-    )
-  ) throw new Error("gateway control profile weakens or changes the provider contract");
+  requireMatches(
+    `gateway control profile for ${args.skill.skillId} weakens or changes the provider contract`,
+    {
+      registrationId: args.listing.reused || payload.registrationId === args.registrationId,
+      providerIntentHash: args.listing.reused || payload.providerIntentHash === args.intentHash,
+      providerAgentId: payload.providerAgentId === args.providerAgentId,
+      serviceId: payload.serviceId === args.service.serviceId,
+      serviceSlug: payload.serviceSlug === args.service.serviceSlug,
+      skillId: payload.skillId === args.skill.skillId,
+      skillContractHash: payload.skillContractHash === args.skill.skillContractHash,
+      policyVersionHash: payload.policyVersionHash === args.policy.railPolicyHash,
+      providerEndpoint: payload.providerEndpoint === args.service.standardRail.assetActionUrl,
+      ownershipPolicy: payload.ownershipPolicy === action.ownershipPolicy,
+      effect: payload.effect === action.effect,
+      replayPolicy: payload.replayPolicy === action.replayPolicy,
+      retentionSeconds: payload.retentionSeconds === action.retentionSeconds,
+      walletAuthorizationRequired: payload.walletAuthorizationRequired === true,
+      delayedConfirmationRequired:
+        payload.delayedConfirmationRequired === (action.effect === "destructive"),
+      confirmationSummarySchemaHash: payload.confirmationSummarySchemaHash === (
+        action.confirmationSummarySchema
+          ? canonicalHash(action.confirmationSummarySchema)
+          : null
+      ),
+      confirmationSummaryTemplateHash: payload.confirmationSummaryTemplateHash === (
+        action.confirmationSummaryTemplate
+          ? canonicalHash(action.confirmationSummaryTemplate)
+          : null
+      ),
+    },
+  );
 }
 
 async function verifyPaidPreparation(args: {
@@ -166,29 +179,32 @@ async function verifyPaidPreparation(args: {
   });
   const payload = preparation.payload;
   const commitmentHash = canonicalHash(preparation);
-  if (
-    (!args.listing.reused && (
-      payload.registrationId !== args.registrationId ||
-      payload.providerIntentHash !== canonicalHash(args.intent) ||
-      payload.skillContractSetHash !== args.service.skillContractSetHash
-    )) ||
-    payload.listingId !== args.listing.listingId ||
-    payload.listingKey !== args.listing.listingKey ||
-    payload.providerAgentId !== args.providerAgentId ||
-    payload.serviceId !== args.service.serviceId ||
-    payload.serviceSlug !== args.service.serviceSlug ||
-    payload.serviceVersion !== args.service.serviceVersion ||
-    payload.skillId !== args.skill.skillId ||
-    payload.skillContractHash !== args.skill.skillContractHash ||
-    getAddress(payload.canonicalToken) !== args.policy.canonicalToken ||
-    getAddress(payload.providerPayee) !== getAddress(args.providerPayee) ||
-    getAddress(payload.daskiCommissionReceiver) !==
-      args.policy.daskiCommissionReceiver ||
-    payload.commissionBps !== args.policy.commissionBps ||
-    getAddress(payload.splitterFactory) !== args.policy.splitterFactory ||
-    payload.policyVersionHash !== args.policy.railPolicyHash ||
-    !/^[1-9]\d{0,19}$/.test(payload.listingEpoch)
-  ) throw new Error("gateway listing preparation does not match provider consent");
+  requireMatches(
+    `gateway listing preparation for ${args.skill.skillId} does not match provider consent`,
+    {
+      registrationId: args.listing.reused || payload.registrationId === args.registrationId,
+      providerIntentHash:
+        args.listing.reused || payload.providerIntentHash === canonicalHash(args.intent),
+      skillContractSetHash: args.listing.reused ||
+        payload.skillContractSetHash === args.service.skillContractSetHash,
+      listingId: payload.listingId === args.listing.listingId,
+      listingKey: payload.listingKey === args.listing.listingKey,
+      providerAgentId: payload.providerAgentId === args.providerAgentId,
+      serviceId: payload.serviceId === args.service.serviceId,
+      serviceSlug: payload.serviceSlug === args.service.serviceSlug,
+      serviceVersion: payload.serviceVersion === args.service.serviceVersion,
+      skillId: payload.skillId === args.skill.skillId,
+      skillContractHash: payload.skillContractHash === args.skill.skillContractHash,
+      canonicalToken: getAddress(payload.canonicalToken) === args.policy.canonicalToken,
+      providerPayee: getAddress(payload.providerPayee) === getAddress(args.providerPayee),
+      daskiCommissionReceiver:
+        getAddress(payload.daskiCommissionReceiver) === args.policy.daskiCommissionReceiver,
+      commissionBps: payload.commissionBps === args.policy.commissionBps,
+      splitterFactory: getAddress(payload.splitterFactory) === args.policy.splitterFactory,
+      policyVersionHash: payload.policyVersionHash === args.policy.railPolicyHash,
+      listingEpoch: /^[1-9]\d{0,19}$/.test(payload.listingEpoch),
+    },
+  );
 
   const callArgs = [
     payload.splitterDeploymentSalt,
@@ -244,21 +260,21 @@ export async function verifyPreparedRegistration(args: {
   finalizedBlock: bigint;
 }): Promise<void> {
   const prepared = args.view.prepared;
-  if (
-    prepared.registrationId !== args.view.registrationId ||
-    prepared.providerAgentId !== args.providerAgentId ||
-    prepared.serviceId !== args.service.serviceId ||
-    prepared.serviceSlug !== args.service.serviceSlug ||
-    prepared.serviceVersion !== args.service.serviceVersion ||
-    prepared.agentCardUrl !== args.service.cardUrl ||
-    getAddress(prepared.serviceWallet) !== getAddress(args.serviceWallet) ||
-    getAddress(prepared.providerPayee) !== getAddress(args.providerPayee) ||
-    prepared.providerIntentHash !== canonicalHash(args.intent) ||
-    prepared.railPolicyHash !== args.policy.railPolicyHash ||
-    args.view.serviceId !== prepared.serviceId ||
-    getAddress(args.view.providerPayee) !== getAddress(args.providerPayee) ||
-    prepared.listings.length !== args.service.skills.length
-  ) throw new Error("gateway prepared the wrong service registration");
+  requireMatches(`gateway prepared the wrong service registration ${args.view.registrationId}`, {
+    registrationId: prepared.registrationId === args.view.registrationId,
+    providerAgentId: prepared.providerAgentId === args.providerAgentId,
+    serviceId: prepared.serviceId === args.service.serviceId &&
+      args.view.serviceId === prepared.serviceId,
+    serviceSlug: prepared.serviceSlug === args.service.serviceSlug,
+    serviceVersion: prepared.serviceVersion === args.service.serviceVersion,
+    agentCardUrl: prepared.agentCardUrl === args.service.cardUrl,
+    serviceWallet: getAddress(prepared.serviceWallet) === getAddress(args.serviceWallet),
+    providerPayee: getAddress(prepared.providerPayee) === getAddress(args.providerPayee) &&
+      getAddress(args.view.providerPayee) === getAddress(args.providerPayee),
+    providerIntentHash: prepared.providerIntentHash === canonicalHash(args.intent),
+    railPolicyHash: prepared.railPolicyHash === args.policy.railPolicyHash,
+    listingCount: prepared.listings.length === args.service.skills.length,
+  });
 
   const factoryCode = await args.publicClient.getCode({
     address: args.policy.splitterFactory,
@@ -285,18 +301,18 @@ export async function verifyPreparedRegistration(args: {
   }
   for (const skill of args.service.skills) {
     const listing = listings.get(skill.skillId);
-    if (
-      !listing ||
-      bytes32(listing.listingKey, "listing key") !== listingKey({
+    if (!listing) throw new Error(`gateway prepared no listing for ${skill.skillId}`);
+    requireMatches(`gateway listing ${listing.listingId} does not match the published skill ${skill.skillId}`, {
+      listingKey: bytes32(listing.listingKey, "listing key") === listingKey({
         chainId: args.policy.chainId,
         providerAgentId: args.providerAgentId,
         serviceId: args.service.serviceId,
         skillId: skill.skillId,
-      }) ||
-      listing.skillContractHash !== skill.skillContractHash ||
-      listing.paymentRequired !== skill.contract.paymentRequired ||
-      listing.acceptingNewOrders !== skill.acceptingNewOrders
-    ) throw new Error("gateway listing does not match the published skill");
+      }),
+      skillContractHash: listing.skillContractHash === skill.skillContractHash,
+      paymentRequired: listing.paymentRequired === skill.contract.paymentRequired,
+      acceptingNewOrders: listing.acceptingNewOrders === skill.acceptingNewOrders,
+    });
     await verifyControlProfile({
       listing,
       skill,

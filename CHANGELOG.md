@@ -53,6 +53,8 @@ All notable changes to this project will be documented here.
 - The identity helper finds an existing agent on the canonical registry
   (`--agent-id`, or the wallet's balance and `Transfer` events), never mints
   while the wallet owns one, and no longer calls `walletRotationNonce`.
+- Re-registration keeps reused listings on the commitment their admission
+  promoted, refuses identity drift, and names every cross-check mismatch.
 
 ### Removed
 

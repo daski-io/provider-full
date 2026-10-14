@@ -60,6 +60,9 @@ export interface RuntimeCommitmentInputs {
   gatewayAudience: string;
   providerAgentId: string;
   serviceId: Hex;
+  /** Intent hash of the registration that admitted this listing: the
+   *  current one for a new admission, the promoted head's for a reused
+   *  listing. Used only by free skills without an admission envelope. */
   currentProviderIntentHash: Hex;
   currentProviderPayee: Address;
   policy: {
