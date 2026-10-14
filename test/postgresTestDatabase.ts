@@ -29,6 +29,11 @@ export async function createMigratedTestDatabase(
   if (!server) {
     throw new Error("set DATABASE_URL_TEST to a disposable PostgreSQL server for this test");
   }
+  // The name is an unquoted identifier: lowercase, and short enough to keep
+  // the random suffix within PostgreSQL's 63-byte limit.
+  if (!/^[a-z][a-z0-9_]{0,40}$/.test(prefix)) {
+    throw new Error(`test database prefix ${JSON.stringify(prefix)} must match ^[a-z][a-z0-9_]{0,40}$`);
+  }
   const name = `${prefix}_${randomUUID().replaceAll("-", "").slice(0, 16)}`;
   const admin = new pg.Client({ connectionString: server });
   await admin.connect();
@@ -40,15 +45,30 @@ export async function createMigratedTestDatabase(
   const target = new URL(server);
   target.pathname = `/${name}`;
   const connectionString = target.toString();
-  if (migrate) {
-    const migrator = new pg.Client({ connectionString });
-    await migrator.connect();
+  const dropDatabase = async () => {
+    const cleanup = new pg.Client({ connectionString: server });
+    await cleanup.connect();
     try {
-      for (const file of readdirSync(migrationsDir).filter((entry) => entry.endsWith(".sql")).sort()) {
-        await migrator.query(readFileSync(join(migrationsDir, file), "utf8"));
-      }
+      await cleanup.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
     } finally {
-      await migrator.end();
+      await cleanup.end();
+    }
+  };
+  if (migrate) {
+    try {
+      const migrator = new pg.Client({ connectionString });
+      await migrator.connect();
+      try {
+        for (const file of readdirSync(migrationsDir).filter((entry) => entry.endsWith(".sql")).sort()) {
+          await migrator.query(readFileSync(join(migrationsDir, file), "utf8"));
+        }
+      } finally {
+        await migrator.end();
+      }
+    } catch (error) {
+      // The suite never receives drop(): remove the half-built database now.
+      await dropDatabase().catch(() => undefined);
+      throw error;
     }
   }
   const pool = new pg.Pool({ connectionString, max: 4 });
@@ -57,13 +77,7 @@ export async function createMigratedTestDatabase(
     connectionString,
     async drop() {
       await pool.end().catch(() => undefined);
-      const cleanup = new pg.Client({ connectionString: server });
-      await cleanup.connect();
-      try {
-        await cleanup.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
-      } finally {
-        await cleanup.end();
-      }
+      await dropDatabase();
     },
   };
 }

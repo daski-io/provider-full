@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import pg from "pg";
 
 // Another replica's reconciler lease, held as a real PostgreSQL session
@@ -34,7 +34,10 @@ vi.mock("../src/core/logger.js", () => ({
 }));
 
 import { isWorkerReady, setWorkerStatus } from "../src/core/health.js";
-import { runProviderWriteReconciliation } from "../src/core/chain/providerWriteReconciler.js";
+import {
+  runProviderWriteReconciliation,
+  stopProviderWriteReconciler,
+} from "../src/core/chain/providerWriteReconciler.js";
 import { createMigratedTestDatabase, type MigratedTestDatabase } from "./postgresTestDatabase.js";
 
 const WORKER = "provider-write-reconciler";
@@ -42,7 +45,7 @@ const LEASE = "daski:provider-write-reconcile:v1";
 let database: MigratedTestDatabase;
 
 beforeAll(async () => {
-  database = await createMigratedTestDatabase("daski_reconciler_lease");
+  database = await createMigratedTestDatabase("daski_reconciler_lease", { migrate: false });
   h.db = database.pool;
 }, 120_000);
 
@@ -54,6 +57,12 @@ beforeEach(() => {
   h.nonceGap.mockReset();
   h.nonceGap.mockResolvedValue("clear");
   setWorkerStatus(WORKER, false);
+});
+
+// The reconciler keeps this replica's own last verdict between cycles; start
+// every case from a reconciler that has not run one.
+afterEach(async () => {
+  await stopProviderWriteReconciler();
 });
 
 async function peerHoldingLease(): Promise<pg.Client> {
