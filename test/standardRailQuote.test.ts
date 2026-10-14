@@ -15,12 +15,14 @@ import {
   readGatewayJson,
   signGatewayEnvelope,
 } from "./gatewayConsumer.js";
-import { createMigratedDatabase, type DisposableDatabase } from "./postgresHarness.js";
+import { createMigratedDatabase, DATABASE_HOOK_TIMEOUT_MS, type DisposableDatabase } from "./postgresHarness.js";
 import {
   CHAIN_ID, dynamicOutcome, ENVIRONMENT, fixedOutcome, fixtureConfig, gatewayKey, hash, otherKey,
   payerA, provider, PROVIDER_AUDIENCE, seedFixtureService,
 } from "./standardRailFixture.js";
 
+// Database-backed protocol tests: allow for a loaded shared host.
+vi.setConfig({ testTimeout: 30_000 });
 const h = vi.hoisted(() => ({
   pool: null as pg.Pool | null,
   adapter: null as unknown as FulfillmentAdapter,
@@ -76,12 +78,12 @@ beforeAll(async () => {
   server = app.listen(0, "127.0.0.1");
   await once(server, "listening");
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/standard-rail`;
-});
+}, DATABASE_HOOK_TIMEOUT_MS);
 
 afterAll(async () => {
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  await database.drop();
-});
+  if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
+  await database?.drop();
+}, DATABASE_HOOK_TIMEOUT_MS);
 
 beforeEach(async () => {
   h.adapter = syntheticAdapter();

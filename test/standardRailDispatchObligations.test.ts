@@ -8,12 +8,14 @@ import { postJson, startRailServer } from "./dispatchHttpHarness.js";
 import type { DispatchArgs } from "./dispatchWire.js";
 import { acceptDispatchResponse, readGatewayJson } from "./gatewayConsumer.js";
 import { paidOrderHarness } from "./paidOrderHarness.js";
-import { createMigratedDatabase, type DisposableDatabase } from "./postgresHarness.js";
+import { createMigratedDatabase, DATABASE_HOOK_TIMEOUT_MS, type DisposableDatabase } from "./postgresHarness.js";
 import { CHAIN_ID, fixedOutcome, fixtureConfig, provider, seedFixtureService } from "./standardRailFixture.js";
 
 // C-T05: every timely-paid order becomes exactly one durable obligation. A
 // funded dispatch is never refused for local capacity, paused sales or an
 // expired envelope on an exact replay, and no copy starts a second task.
+// Database-backed protocol tests: allow for a loaded shared host.
+vi.setConfig({ testTimeout: 30_000 });
 const h = vi.hoisted(() => ({
   pool: null as pg.Pool | null,
   result: { status: "working" } as AdapterResult,
@@ -62,12 +64,12 @@ beforeAll(async () => {
   h.pool = database.pool;
   await seedFixtureService(database.pool, { skillIds: [outcome.skillId] });
   rail = await startRailServer(config);
-});
+}, DATABASE_HOOK_TIMEOUT_MS);
 
 afterAll(async () => {
-  await rail.close();
-  await database.drop();
-});
+  await rail?.close();
+  await database?.drop();
+}, DATABASE_HOOK_TIMEOUT_MS);
 
 beforeEach(async () => {
   h.result = { status: "working" };

@@ -7,11 +7,13 @@ import { canonicalHash } from "../src/core/standardRail/canonical.js";
 import type { FulfillmentAdapter, TaskContext } from "../src/core/serviceRegistry/types.js";
 import { gatewayDispatch, gatewayQuoteV1 } from "./dispatchWire.js";
 import { paidOrderHarness } from "./paidOrderHarness.js";
-import { createMigratedDatabase, type DisposableDatabase } from "./postgresHarness.js";
+import { createMigratedDatabase, DATABASE_HOOK_TIMEOUT_MS, type DisposableDatabase } from "./postgresHarness.js";
 import {
   CHAIN_ID, dynamicOutcome, fixedOutcome, fixtureConfig, hash, payerA, payerB, seedFixtureService,
 } from "./standardRailFixture.js";
 
+// Database-backed protocol tests: allow for a loaded shared host.
+vi.setConfig({ testTimeout: 30_000 });
 const h = vi.hoisted(() => ({
   pool: null as pg.Pool | null,
   adapter: null as unknown as FulfillmentAdapter,
@@ -62,11 +64,11 @@ beforeAll(async () => {
   database = await createMigratedDatabase("dispatch_binding");
   h.pool = database.pool;
   await seedFixtureService(database.pool, { skillIds: [fixedOutcome.skillId, dynamicOutcome.skillId] });
-});
+}, DATABASE_HOOK_TIMEOUT_MS);
 
 afterAll(async () => {
-  await database.drop();
-});
+  await database?.drop();
+}, DATABASE_HOOK_TIMEOUT_MS);
 
 beforeEach(() => {
   h.adapter = adapter();

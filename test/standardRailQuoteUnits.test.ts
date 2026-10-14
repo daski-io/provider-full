@@ -87,6 +87,15 @@ describe("quote field errors", () => {
     expect(error!.message).toHaveLength(256);
   });
 
+  it("ignores non-object entries and never splits a surrogate pair", () => {
+    const errors = serviceFieldErrors([null, "text", 7, {
+      field: "item", code: "invalid", message: `${"a".repeat(255)}\u{1f600}tail`,
+    }] as unknown[]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]!.message.endsWith("\u{1f600}")).toBe(true);
+    expect(Array.from(errors[0]!.message)).toHaveLength(256);
+  });
+
   it("keeps the refusal body under the gateway's read bound", () => {
     const errors = Array.from({ length: 40 }, (_unused, index) => ({
       path: `field${index}${"p".repeat(120)}`,

@@ -57,7 +57,7 @@ function allowedStrings(error: ErrorObject): string[] | undefined {
   if (!Array.isArray(values) || values.length === 0 || !values.every((value) => typeof value === "string")) {
     return undefined;
   }
-  return (values as string[]).slice(0, MAX_ALLOWED_VALUES).map((value) => value.slice(0, MAX_ALLOWED_VALUE));
+  return (values as string[]).slice(0, MAX_ALLOWED_VALUES).map((value) => truncate(value, MAX_ALLOWED_VALUE));
 }
 
 function schemaMessage(error: ErrorObject, path: string): string {
@@ -105,26 +105,31 @@ export function providerSchemaFieldErrors(errors: ErrorObject[] | null | undefin
   });
 }
 
+/** Truncate by code point so a surrogate pair is never split. */
+const truncate = (text: string, maximum: number): string => Array.from(text).slice(0, maximum).join("");
+
 function boundedText(value: unknown, maximum: number, fallback: string): string {
   if (typeof value !== "string") return fallback;
   // Control characters never belong in a buyer-facing diagnostic.
   const text = value.replace(/[\u0000-\u001f\u007f]/gu, " ").trim();
-  return text ? text.slice(0, maximum) : fallback;
+  return text ? truncate(text, maximum) : fallback;
 }
+
+const isObject = (value: unknown): value is QuoteError | QuoteFieldError =>
+  !!value && typeof value === "object" && !Array.isArray(value);
 
 /**
  * Service-authored errors (quote validation and request readiness) are
- * reviewed buyer-facing text; core still bounds and normalizes their shape.
+ * reviewed buyer-facing text; core still bounds and normalizes their shape
+ * and ignores entries that are not objects.
  */
-export function serviceFieldErrors(
-  errors: ReadonlyArray<QuoteError | QuoteFieldError>,
-): QuoteFieldError[] {
-  return errors.slice(0, MAX_QUOTE_FIELD_ERRORS).map((error) => {
+export function serviceFieldErrors(errors: ReadonlyArray<unknown>): QuoteFieldError[] {
+  return errors.filter(isObject).slice(0, MAX_QUOTE_FIELD_ERRORS).map((error) => {
     const path = boundedText("field" in error ? error.field : error.path, MAX_PATH, "$");
     const rawRule = "code" in error ? error.code : error.rule;
     const allowed = "allowedValues" in error && Array.isArray(error.allowedValues)
       ? error.allowedValues.filter((value) => typeof value === "string")
-        .slice(0, MAX_ALLOWED_VALUES).map((value) => value.slice(0, MAX_ALLOWED_VALUE))
+        .slice(0, MAX_ALLOWED_VALUES).map((value) => truncate(value, MAX_ALLOWED_VALUE))
       : [];
     return {
       path,

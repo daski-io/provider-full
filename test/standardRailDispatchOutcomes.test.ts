@@ -15,7 +15,7 @@ import {
   readGatewayJson,
 } from "./gatewayConsumer.js";
 import { paidOrderHarness } from "./paidOrderHarness.js";
-import { createMigratedDatabase, type DisposableDatabase } from "./postgresHarness.js";
+import { createMigratedDatabase, DATABASE_HOOK_TIMEOUT_MS, type DisposableDatabase } from "./postgresHarness.js";
 import {
   CHAIN_ID, fixedOutcome, fixtureConfig, otherKey, payerB, provider, seedFixtureService,
 } from "./standardRailFixture.js";
@@ -23,6 +23,8 @@ import {
 // C03 / C-T11: definite refusal before admission, the signed snapshot (or an
 // empty 503) once admission exists or is uncertain, and the no-claim 404 only
 // for proven absence.
+// Database-backed protocol tests: allow for a loaded shared host.
+vi.setConfig({ testTimeout: 30_000 });
 const h = vi.hoisted(() => ({
   pool: null as pg.Pool | null,
   fault: { mode: null as "after" | "before" | null },
@@ -106,12 +108,12 @@ beforeAll(async () => {
   h.pool = database.pool;
   await seedFixtureService(database.pool, { skillIds: [fixedOutcome.skillId] });
   rail = await startRailServer(config);
-});
+}, DATABASE_HOOK_TIMEOUT_MS);
 
 afterAll(async () => {
-  await rail.close();
-  await database.drop();
-});
+  await rail?.close();
+  await database?.drop();
+}, DATABASE_HOOK_TIMEOUT_MS);
 
 beforeEach(() => {
   h.fault.mode = null;
@@ -234,13 +236,15 @@ describe("dispatch recovery outcomes (C-T11)", () => {
     const order = await paidOrder();
     const nearlyExpired = await gatewayDispatch({
       outcome: fixedOutcome, quote: order.quote, request, payer: order.dispatch.payload.payer,
-      issuedAt: Math.floor(Date.now() / 1_000) - fixedOutcome.dispatchDeadlineSeconds + 1,
+      issuedAt: Math.floor(Date.now() / 1_000) - fixedOutcome.dispatchDeadlineSeconds + 2,
       reputationContract: config.reputationContract, outcomeSchemaUid: config.reputationOutcomeSchemaUid,
     });
-    h.evidenceDelayMs = 2_100;
+    h.evidenceDelayMs = 3_100;
     const response = await dispatchOrder(nearlyExpired);
     expect(response.status).toBe(409);
     await expect(response.json()).resolves.toEqual({ error: "dispatch_rejected", reason: "envelope_lifetime" });
+    // The early freshness check passed; only the commit fence refused it.
+    expect(ProviderEvidenceVerifier.prototype.verify).toHaveBeenCalledOnce();
     expect(h.executions).toBe(0);
     expect(await tasksFor(nearlyExpired.dispatch.payload.orderId)).toBe(0);
     expect(await (await queryStatus(nearlyExpired)).text()).toBe(NO_CLAIM);

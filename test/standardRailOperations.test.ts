@@ -14,12 +14,14 @@ import {
   signGatewayEnvelope,
 } from "./gatewayConsumer.js";
 import { paidOrderHarness } from "./paidOrderHarness.js";
-import { createMigratedDatabase, type DisposableDatabase } from "./postgresHarness.js";
+import { createMigratedDatabase, DATABASE_HOOK_TIMEOUT_MS, type DisposableDatabase } from "./postgresHarness.js";
 import {
   CHAIN_ID, ENVIRONMENT, fixedOutcome, fixtureConfig, gatewayKey, provider, PROVIDER_AUDIENCE,
   seedFixtureService,
 } from "./standardRailFixture.js";
 
+// Database-backed protocol tests: allow for a loaded shared host.
+vi.setConfig({ testTimeout: 30_000 });
 const h = vi.hoisted(() => ({
   pool: null as pg.Pool | null,
   result: { status: "working" } as AdapterResult,
@@ -65,11 +67,11 @@ beforeAll(async () => {
   database = await createMigratedDatabase("operations");
   h.pool = database.pool;
   await seedFixtureService(database.pool, { skillIds: [fixedOutcome.skillId] });
-});
+}, DATABASE_HOOK_TIMEOUT_MS);
 
 afterAll(async () => {
-  await database.drop();
-});
+  await database?.drop();
+}, DATABASE_HOOK_TIMEOUT_MS);
 
 beforeEach(() => {
   h.result = { status: "working" };

@@ -309,7 +309,8 @@ await runSupplierOperation({
 The check runs after any earlier attempt was reconciled and immediately
 before `execute`. A missing ceiling, another supplier or currency, or an
 amount above `maximumAmount` throws `SupplierCostCeilingError` without calling
-the supplier. Retries, buyer input and reviewed re-execution reuse the
+the supplier and closes that operation key as not applied; a different
+planned spend needs a new key. Retries, buyer input and reviewed re-execution reuse the
 admitted ceiling; read it with `admittedSupplierCostCeiling(task.metadata)`
 in a worker. A changed supplier price never authorizes another buyer charge.
 No-spend services return no ceiling.

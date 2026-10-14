@@ -397,7 +397,16 @@ async function runSupplierOperationLocked<T extends Record<string, unknown>>(
 
   let result: T;
   await args.authorizeMutation?.();
-  if (args.spend) assertSupplierSpendWithinCeiling(args.spend.ceiling, args.spend.planned);
+  if (args.spend) {
+    try {
+      assertSupplierSpendWithinCeiling(args.spend.ceiling, args.spend.planned);
+    } catch (refusal) {
+      // Refused before execute: the mutation definitively did not happen, so
+      // the operation key closes instead of dangling as an open intent.
+      await failSupplierOperation(op.id, "execute.not_applied", db).catch(() => undefined);
+      throw refusal;
+    }
+  }
   try {
     result = await args.execute();
   } catch (err) {

@@ -49,10 +49,7 @@ export async function assertRequestReadiness(args: {
   const value = verdict as { ready?: unknown; fieldErrors?: unknown } | null;
   if (value?.ready === true) return;
   if (value?.ready === false && Array.isArray(value.fieldErrors)) {
-    const fieldErrors = serviceFieldErrors(value.fieldErrors.filter(
-      (entry): entry is { path: string; rule: string; message: string } =>
-        !!entry && typeof entry === "object" && !Array.isArray(entry),
-    ));
+    const fieldErrors = serviceFieldErrors(value.fieldErrors);
     throw requestInvalid(fieldErrors.length > 0 ? fieldErrors : [NOT_READY]);
   }
   throw new QuoteRefusedError(503, "readiness_unavailable");

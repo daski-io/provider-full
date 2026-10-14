@@ -3,7 +3,7 @@ import type { Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { getServiceBySlug } from "../db/queries/services.js";
 import { getAdapter } from "../serviceRegistry/registry.js";
-import type { IntakeDetail, QuoteFieldError } from "../serviceRegistry/types.js";
+import type { IntakeDetail } from "../serviceRegistry/types.js";
 import { canonicalHash } from "./canonical.js";
 import type { ProviderStandardRailConfig } from "./config.js";
 import { verifyGatewayEnvelope } from "./gatewayEnvelope.js";
@@ -47,7 +47,7 @@ function parseIntakeDetail(value: unknown): IntakeDetail {
   return {
     requiredFields: value.requiredFields,
     selectorsRequired: value.selectorsRequired as string[],
-    fieldErrors: serviceFieldErrors((value.fieldErrors as unknown[]).filter(isRecord) as unknown as QuoteFieldError[]),
+    fieldErrors: serviceFieldErrors(value.fieldErrors as unknown[]),
     supported: value.supported as boolean | null,
     normalizedSelectors: value.normalizedSelectors,
   };

@@ -61,8 +61,8 @@ Those refusals are `400 {"error":"invalid_json"}`,
 `413 {"error":"request_too_large"}`, or
 `415 {"error":"uncompressed_application_json_required"}`.
 
-Answers are plain `application/json` with `Cache-Control: no-store`; the
-starter installs no compression middleware. Signed bodies are built and
+Answers are plain `application/json`; the starter installs no compression
+middleware. Signed answers carry `Cache-Control: no-store`: they are built and
 signed for each request and never cached.
 
 ## Quotes and intake

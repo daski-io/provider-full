@@ -195,8 +195,9 @@ stays ambiguous. A later attempt reconciles authoritative supplier state and
 records a definitive result before continuing. Blind retries are forbidden.
 
 A paid task that may spend externally carries the supplier-cost ceiling its
-quote admitted. Core binds it immutably at admission; the journal compares the
-planned spend with it immediately before every mutation and refuses an
+quote admitted, bound immutably at admission. When the service declares the
+planned spend (`runSupplierOperation({ spend })`), the journal compares it
+with that ceiling immediately before the mutation and refuses an
 over-ceiling operation without calling the supplier.
 
 Workers declare heartbeat ids and service invariants through

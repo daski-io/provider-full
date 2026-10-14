@@ -227,14 +227,29 @@ describe("runSupplierOperation", () => {
     expect(refusal).toBeInstanceOf(SupplierMutationAuthorizationError);
     expect(refusal).toMatchObject({ refusal: "ceiling_exceeded", supplier: "sample-supplier" });
     expect(over.execute).not.toHaveBeenCalled();
-    expect([...h.rows.values()][0]).toMatchObject({ state: "intent", error_code: null });
+    // Refused before execute, so the operation closes as definitively not
+    // applied instead of dangling as an open intent.
+    expect([...h.rows.values()][0]).toMatchObject({ state: "failed", error_code: "execute.not_applied" });
+    await expect(runSupplierOperation(opArgs({
+      spend: { ceiling, planned: { supplier: "sample-supplier", currency: "USD", amount: "1" } },
+    }))).rejects.toThrow("already failed definitively");
 
-    // A later attempt reconciles the dangling intent first and spends only
-    // within the same admitted ceiling.
-    const within = opArgs({ spend: { ceiling, planned: { supplier: "sample-supplier", currency: "USD", amount: "4.250" } } });
+    const within = opArgs({
+      opKey: "renew:asset-1:2027:within",
+      spend: { ceiling, planned: { supplier: "sample-supplier", currency: "USD", amount: "4.250" } },
+    });
     await expect(runSupplierOperation(within)).resolves.toEqual({ orderId: "o-1" });
-    expect(within.reconcile).toHaveBeenCalledOnce();
     expect(within.execute).toHaveBeenCalledOnce();
+  });
+
+  it("still refuses an over-ceiling spend when the refusal cannot be journaled", async () => {
+    h.failFailedWrite = true;
+    const args = opArgs({ spend: {
+      ceiling: { kind: "supplier-cost-ceiling-v1", supplier: "sample-supplier", currency: "USD", maximumAmount: "1" },
+      planned: { supplier: "sample-supplier", currency: "USD", amount: "2" },
+    } });
+    await expect(runSupplierOperation(args)).rejects.toBeInstanceOf(SupplierCostCeilingError);
+    expect(args.execute).not.toHaveBeenCalled();
   });
 
   it("refuses spend when the task has no admitted ceiling", async () => {

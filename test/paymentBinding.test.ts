@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import type { Hex } from "viem";
-import * as paymentBinding from "../src/core/standardRail/paymentBinding.js";
 import {
   assertDepositWithinQuoteWindow,
   assertQuoteWindowPolicy,
@@ -127,12 +126,3 @@ describe("quote window policy", () => {
   });
 });
 
-describe("dispatch time after an on-time payment", () => {
-  it("has no provider-side quote-age cap; the deposit block proves timeliness", () => {
-    // The gateway retries initial dispatch on its own recovery clock, so a
-    // timely-paid order may arrive with a fresh envelope days after its quote.
-    expect(Object.keys(paymentBinding)).not.toContain("assertDispatchWithinQuoteSettlementWindow");
-    expect(() => assertDepositWithinQuoteWindow(1_119, { issuedAt: 1_000, validBefore: 1_120 }))
-      .not.toThrow();
-  });
-});

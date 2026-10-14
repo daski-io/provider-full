@@ -11,6 +11,7 @@ import type { ProviderStandardRailConfig } from "./config.js";
 import type { ProviderWalletConfig } from "./walletConfig.js";
 import { ProviderAssetQueryService } from "./assetQuery.js";
 import { ProviderAssetActionService } from "./assetAction.js";
+import { sendSignedJson } from "./transport.js";
 
 export function createStandardRailRouter(
   core: Config,
@@ -86,7 +87,7 @@ export function createStandardRailRouter(
         "orderId", "providerTaskId", "action", "request", "authorization", "grant", "payer",
         "gatewayAudience",
       ], "lifecycle request");
-      res.json(await lifecycle.perform(req.body as never));
+      sendSignedJson(res, await lifecycle.perform(req.body as never));
     } catch (error) {
       logError("Standard lifecycle action rejected", {
         errorClass: error instanceof Error ? error.name : "UnknownError",

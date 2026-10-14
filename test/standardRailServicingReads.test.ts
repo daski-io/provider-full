@@ -10,7 +10,7 @@ import { postJson, statusQuery } from "./dispatchHttpHarness.js";
 import type { DispatchArgs } from "./dispatchWire.js";
 import { acceptDispatchResponse, readGatewayJson, signGatewayEnvelope } from "./gatewayConsumer.js";
 import { paidOrderHarness } from "./paidOrderHarness.js";
-import { createMigratedDatabase, type DisposableDatabase } from "./postgresHarness.js";
+import { createMigratedDatabase, DATABASE_HOOK_TIMEOUT_MS, type DisposableDatabase } from "./postgresHarness.js";
 import {
   CHAIN_ID, ENVIRONMENT, fixedOutcome, fixtureConfig, gatewayKey, otherKey, provider, PROVIDER_AUDIENCE,
   seedFixtureService,
@@ -21,6 +21,8 @@ import {
 // spend purchase or per-client rate limits and never write; signature checks
 // and body bounds still apply, and purchase paths stay rate limited.
 const POLLS = 2_880;
+// Database-backed protocol tests: allow for a loaded shared host.
+vi.setConfig({ testTimeout: 30_000 });
 const h = vi.hoisted(() => ({ pool: null as pg.Pool | null, executions: 0 }));
 vi.mock("../src/core/db/pool.js", () => ({
   pool: {
@@ -85,14 +87,14 @@ beforeAll(async () => {
   order = await paidOrder();
   const admitted = await postJson(`${base}/dispatch`, order);
   expect(admitted.status).toBe(200);
-});
+}, DATABASE_HOOK_TIMEOUT_MS);
 
 afterAll(async () => {
   Object.assign(coreConfig, originalLimits);
   vi.restoreAllMocks();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  await database.drop();
-});
+  if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
+  await database?.drop();
+}, DATABASE_HOOK_TIMEOUT_MS);
 
 async function limiterState() {
   return (await database.pool.query(

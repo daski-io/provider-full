@@ -59,7 +59,8 @@ All notable changes to this project will be documented here.
 - Core binds a quoted supplier-cost ceiling immutably to the admitted task
   (core migration 003) and `runSupplierOperation({ spend })` refuses a
   planned supplier operation above it, for another supplier or currency, or
-  without an admitted ceiling before the supplier is called.
+  without an admitted ceiling before the supplier is called, closing that
+  operation key as `execute.not_applied`.
 - Dispatch and status answers carry a signed `operations` observation from
   a persisted semantic projection and revision (core migration 004, all-null
   at revision 0), freshly stamped with the database clock and signed per

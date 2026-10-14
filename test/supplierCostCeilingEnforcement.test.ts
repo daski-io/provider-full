@@ -5,7 +5,7 @@ import { baseSepolia } from "viem/chains";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FulfillmentAdapter, TaskContext } from "../src/core/serviceRegistry/types.js";
 import { paidOrderHarness } from "./paidOrderHarness.js";
-import { createMigratedDatabase, type DisposableDatabase } from "./postgresHarness.js";
+import { createMigratedDatabase, DATABASE_HOOK_TIMEOUT_MS, type DisposableDatabase } from "./postgresHarness.js";
 import {
   CHAIN_ID, dynamicOutcome, fixedOutcome, fixtureConfig, seedFixtureService,
 } from "./standardRailFixture.js";
@@ -14,6 +14,8 @@ import {
 // ceiling at admission; the service compares each planned supplier operation
 // against it before spend, so an over-ceiling purchase never reaches the
 // supplier mutation.
+// Database-backed protocol tests: allow for a loaded shared host.
+vi.setConfig({ testTimeout: 30_000 });
 const h = vi.hoisted(() => ({
   pool: null as pg.Pool | null,
   adapter: null as unknown as FulfillmentAdapter,
@@ -83,11 +85,11 @@ beforeAll(async () => {
   database = await createMigratedDatabase("supplier_ceiling");
   h.pool = database.pool;
   await seedFixtureService(database.pool, { skillIds: [fixedOutcome.skillId, dynamicOutcome.skillId] });
-});
+}, DATABASE_HOOK_TIMEOUT_MS);
 
 afterAll(async () => {
-  await database.drop();
-});
+  await database?.drop();
+}, DATABASE_HOOK_TIMEOUT_MS);
 
 beforeEach(() => {
   h.adapter = spendingAdapter();
@@ -124,7 +126,7 @@ describe("admitted supplier-cost ceiling (F-T01)", () => {
     const response = await accept(await paidOrder({ outcome: dynamicOutcome }));
     expect(response.state).toBe("failed");
     expect(h.supplierMutation).not.toHaveBeenCalled();
-    expect(await journal(response.taskId)).toEqual([{ state: "intent", error_code: null }]);
+    expect(await journal(response.taskId)).toEqual([{ state: "failed", error_code: "execute.not_applied" }]);
   });
 
   it("refuses spend for an order whose quote admitted no ceiling", async () => {

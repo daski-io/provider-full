@@ -6,6 +6,9 @@ import pg from "pg";
 
 const MIGRATIONS = fileURLToPath(new URL("../src/core/db/migrations/", import.meta.url));
 
+/** Creating and migrating a database can take a while on a loaded host. */
+export const DATABASE_HOOK_TIMEOUT_MS = 120_000;
+
 /** CI supplies DATABASE_URL_TEST; developers fall back to the local container. */
 export function testDatabaseUrl(): string {
   return process.env.DATABASE_URL_TEST ??
