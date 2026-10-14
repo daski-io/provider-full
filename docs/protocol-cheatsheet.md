@@ -306,7 +306,9 @@ Every failure is a refusal with exactly one key:
 Lifecycle calls, like status reads, are servicing traffic the gateway sends for
 every buyer from its own addresses: they skip the per-client and purchase rate
 limits and service readiness, keep the concurrency budget and body bound, and
-spend a separate 30-per-minute authentication-failure budget.
+spend a separate 30-per-minute authentication-failure budget. A lifecycle call
+the concurrency budget refuses is answered `503 {"error":"lifecycle_unavailable"}`
+before anything is authenticated or consumed.
 
 ## Frozen terminal results
 

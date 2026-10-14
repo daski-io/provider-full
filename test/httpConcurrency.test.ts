@@ -6,6 +6,8 @@ import {
   concurrencyBudget,
   configureHttpTimeouts,
 } from "../src/core/security/httpCapacity.js";
+import { capacityRefusalBody } from "../src/core/standardRail/transport.js";
+import { judgeLifecycleAnswer } from "./gatewayLifecycleConsumer.js";
 
 class TestResponse extends EventEmitter {
   statusCode = 200;
@@ -71,6 +73,27 @@ describe("HTTP concurrency boundary", () => {
     budget(request("10.0.0.1"), new TestResponse() as unknown as Response, next);
     budget(request("10.0.0.1"), new TestResponse() as unknown as Response, next);
     expect(next).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses a lifecycle call for capacity with the refusal the gateway names", async () => {
+    const budget = concurrencyBudget({
+      maxConcurrent: 1,
+      maxConcurrentPerIp: 1,
+      bypassIps: [],
+      busyBody: capacityRefusalBody,
+    });
+    budget(request("198.51.100.9"), new TestResponse() as unknown as Response, vi.fn());
+    const at = (originalUrl: string) => ({ ...request("198.51.100.9"), method: "POST", originalUrl }) as Request;
+    const lifecycle = new TestResponse();
+    budget(at("/standard-rail/lifecycle"), lifecycle as unknown as Response, vi.fn());
+    expect([lifecycle.statusCode, lifecycle.body]).toEqual([503, { error: "lifecycle_unavailable" }]);
+    const verdict = await judgeLifecycleAnswer({
+      status: 503, contentType: "application/json", contentEncoding: null, text: JSON.stringify(lifecycle.body),
+    }, { action: "cancel", readCapability: false } as Parameters<typeof judgeLifecycleAnswer>[1]);
+    expect(verdict).toMatchObject({ verdict: "refused", code: "PROVIDER_LIFECYCLE_UNAVAILABLE" });
+    const dispatch = new TestResponse();
+    budget(at("/standard-rail/dispatch"), dispatch as unknown as Response, vi.fn());
+    expect([dispatch.statusCode, dispatch.body]).toEqual([503, { error: "server_busy" }]);
   });
 
   it("applies explicit request-receipt timeouts", () => {

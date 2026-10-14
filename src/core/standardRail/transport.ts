@@ -31,6 +31,17 @@ export function isStandardRailStatusRead(req: Request): boolean {
   return req.method === "POST" && (STATUS_URL.test(req.originalUrl) || LIFECYCLE_URL.test(req.originalUrl));
 }
 
+/**
+ * The body of a capacity refusal: a lifecycle call is refused with the
+ * protocol's named temporary refusal, so the gateway tells the buyer to retry
+ * instead of reporting an internal error; nothing was authorized or consumed.
+ */
+export function capacityRefusalBody(req: Request): Record<string, string> {
+  return req.method === "POST" && LIFECYCLE_URL.test(req.originalUrl)
+    ? { error: "lifecycle_unavailable" }
+    : { error: "server_busy" };
+}
+
 export function isStandardRailDispatch(req: Request): boolean {
   return req.method === "POST" && DISPATCH_URL.test(req.originalUrl);
 }

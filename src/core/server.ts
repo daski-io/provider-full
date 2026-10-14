@@ -22,6 +22,7 @@ import {
 } from "./security/httpCapacity.js";
 import { createStandardRailRouter } from "./standardRail/routes.js";
 import {
+  capacityRefusalBody,
   exceptStatusReads,
   isStandardRailDispatch,
   isStrictlyParsedStandardRailJson,
@@ -84,6 +85,7 @@ export function createProviderApp(
     maxConcurrent: config.HTTP_MAX_CONCURRENCY,
     maxConcurrentPerIp: config.HTTP_MAX_CONCURRENCY_PER_IP,
     bypassIps,
+    busyBody: capacityRefusalBody,
   }));
   const globalLimiter = makeRateLimiter({
     namespace: "global",

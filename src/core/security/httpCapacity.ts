@@ -6,6 +6,8 @@ export function concurrencyBudget(args: {
   maxConcurrent: number;
   maxConcurrentPerIp: number;
   bypassIps: string[];
+  /** The 503 body for a request refused for capacity, where a protocol names its own. */
+  busyBody?: (req: Request) => Record<string, string>;
 }) {
   let active = 0;
   const activeByIp = new Map<string, number>();
@@ -18,7 +20,7 @@ export function concurrencyBudget(args: {
       || (!bypassed && sourceActive >= args.maxConcurrentPerIp)
     ) {
       res.setHeader("Retry-After", "1");
-      res.status(503).json({ error: "server_busy" });
+      res.status(503).json(args.busyBody?.(req) ?? { error: "server_busy" });
       return;
     }
     active++;
