@@ -133,10 +133,13 @@ export class GatewayRegistrationHttpError extends Error {
 }
 
 // The gateway rate-limits registration traffic per provider. A 429 refuses
-// the request before any processing, so the same request is retried after
-// a bounded exponential backoff that honors Retry-After up to the cap.
+// the request before any processing, so the same request is retried: after
+// the Retry-After the gateway names (its fixed window's remaining seconds,
+// or a short capacity pause), else after a bounded exponential backoff, and
+// never later than the cap.
 const RATE_LIMIT_RETRIES = 4;
 const RATE_LIMIT_BASE_DELAY_MS = 20_000;
+const RATE_LIMIT_MIN_DELAY_MS = 1_000;
 const RATE_LIMIT_MAX_DELAY_MS = 120_000;
 
 function rateLimitDelayMs(response: Response, attempt: number): number {
@@ -144,11 +147,11 @@ function rateLimitDelayMs(response: Response, attempt: number): number {
   const seconds = retryAfter === null ? Number.NaN : Number(retryAfter);
   const requested = Number.isFinite(seconds)
     ? seconds * 1_000
-    : retryAfter ? Date.parse(retryAfter) - Date.now() : 0;
-  return Math.min(
-    RATE_LIMIT_MAX_DELAY_MS,
-    Math.max(RATE_LIMIT_BASE_DELAY_MS * 2 ** attempt, Number.isFinite(requested) ? requested : 0),
-  );
+    : retryAfter ? Date.parse(retryAfter) - Date.now() : Number.NaN;
+  const delay = Number.isFinite(requested)
+    ? Math.max(RATE_LIMIT_MIN_DELAY_MS, requested)
+    : RATE_LIMIT_BASE_DELAY_MS * 2 ** attempt;
+  return Math.min(RATE_LIMIT_MAX_DELAY_MS, delay);
 }
 
 let gatewayWritesForbidden = false;

@@ -359,8 +359,9 @@ that another transaction displaced (it has no receipt while the wallet's
 finalized nonce is past its own) is recorded as replaced (`nonce_consumed`)
 and deployed afresh.
 
-Activation polling defaults to every 20 seconds, and gateway `429` answers are
-retried with bounded backoff that honors `Retry-After`. See
+Activation polling defaults to every 20 seconds, and a gateway `429` answer is
+retried up to four times, after the `Retry-After` the gateway names or else a
+bounded exponential backoff, never more than two minutes apart. See
 [Configuration](configuration.md#provider-wallet-and-registration).
 
 ### Registration in `ATTENTION`

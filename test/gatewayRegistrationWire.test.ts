@@ -292,6 +292,39 @@ describe("gateway registration wire contract", () => {
     }
   });
 
+  it("retries as soon as a shorter Retry-After allows instead of waiting out the backoff", async () => {
+    vi.useFakeTimers();
+    const limited = (retryAfter: string) => new Response(null, {
+      status: 429,
+      headers: { "retry-after": retryAfter },
+    });
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(limited("10"))
+      .mockResolvedValueOnce(limited("10"))
+      .mockResolvedValueOnce(limited("0"))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }));
+    vi.stubGlobal("fetch", fetch);
+    try {
+      const result = requestBoundedJson("https://gateway.example/v1/service-registrations");
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(fetch).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(fetch).toHaveBeenCalledTimes(3);
+      // A zero hint still pauses for the one-second floor.
+      await vi.advanceTimersByTimeAsync(999);
+      expect(fetch).toHaveBeenCalledTimes(3);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(result).resolves.toEqual({ ok: true });
+      expect(fetch).toHaveBeenCalledTimes(4);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
   it("surfaces a rate limit that outlasts the bounded retries", async () => {
     vi.useFakeTimers();
     const fetch = vi.fn(async () => new Response(
