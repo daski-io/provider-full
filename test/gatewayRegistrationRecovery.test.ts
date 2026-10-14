@@ -379,6 +379,33 @@ describe("activated registrations left in ATTENTION", { timeout: 30_000 }, () =>
   });
 });
 
+describe("registrations the gateway no longer knows", { timeout: 30_000 }, () => {
+  it("restart with a fresh intent instead of failing every run", async () => {
+    gateway.activation = "manual";
+    gateway.unavailablePendingReads = 1;
+    await expect(register()).rejects.toThrow(/did not return JSON/);
+    const pending = await localRow();
+    expect(pending.state).toBe("EVIDENCE_SUBMITTED");
+    // The gateway's records were reset: it answers 404 REGISTRATION_NOT_FOUND.
+    gateway.registrations.delete(pending.gateway_registration_id);
+    gateway.activation = "on-evidence";
+
+    const restarted = await register();
+    expect(restarted).toMatchObject({ state: "ACTIVE" });
+    expect(restarted.registrationId).not.toBe(pending.gateway_registration_id);
+    const after = await localRow();
+    expect(after).toMatchObject({ id: pending.id, state: "ACTIVE", gateway_registration_id: restarted.registrationId });
+    expect(h.logs).toContainEqual(expect.objectContaining({
+      message: "Gateway registration restarts with a new intent",
+      extra: expect.objectContaining({
+        reason: "gateway-unknown",
+        priorRegistrationId: pending.gateway_registration_id,
+        priorErrorCode: "gateway_registration_not_found",
+      }),
+    }));
+  });
+});
+
 describe("activation evidence recovery", { timeout: 30_000 }, () => {
   it("replays the exact accepted envelope after its expiry, even from ATTENTION", async () => {
     gateway.activation = "manual";

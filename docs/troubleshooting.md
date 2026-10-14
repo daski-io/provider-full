@@ -271,10 +271,11 @@ Re-running `npm run daski:register` is convergent. Each run reads the local
 registration record and the gateway's live view of the same registration, then
 resumes where the previous run stopped. A record is replaced by a new signed
 intent only for a first admission, a changed card of an already promoted
-registration, a registration the gateway ended (`REJECTED` or `SUPERSEDED`),
-or an intent the gateway never prepared. While the gateway holds a
-registration as pending or active, its persisted intent, preparation,
-splitter writes and accepted evidence are kept.
+registration, a registration the gateway ended (`REJECTED` or `SUPERSEDED`)
+or no longer knows (`404 REGISTRATION_NOT_FOUND`, for example after its
+records were reset), or an intent the gateway never prepared. While the
+gateway holds a registration as pending or active, its persisted intent,
+preparation, splitter writes and accepted evidence are kept.
 
 Concurrent runs for one service are safe. Every write to the local record, and
 every splitter deployment claim, is fenced on the intent the run planned
@@ -332,6 +333,7 @@ body or secret.
 | `runtime_commitment_mismatch` | The gateway activated, but its reported runtime commitments differ from the local resolution; the error names each listing with the expected and reported hash. While the gateway still reports `ACTIVE`, a run resumes promotion with the persisted intent and signs or broadcasts nothing. A repeated mismatch needs Daski review. |
 | `reused_listing_drift` | A listing the gateway reused no longer reproduces its admitted commitment (the error names the differing fields), or it is a free listing without a control profile and no promoted head exists for it. This is identity drift and is refused; do not edit catalog rows. |
 | `prepared_registration_drift`, `gateway_registration_rejected`, `gateway_registration_superseded` | The gateway ended the registration; a run starts a new intent and logs the restart. |
+| `gateway_registration_not_found` | The gateway holds no registration under the persisted id; nothing is pending there, so a run starts a new intent and logs the restart. |
 | `intent_expired_before_prepare` | The gateway never accepted the intent; a run signs a new one, within a bounded attempt budget. |
 | `rail_policy_changed_during_prepare`, `prepared_registration_changed` | The pending registration no longer matches the gateway's policy or its own persisted preparation. It cannot continue; ask Daski to end it. |
 

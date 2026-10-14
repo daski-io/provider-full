@@ -39,7 +39,7 @@ const live = (state: GatewayRegistrationView["state"], patch: Partial<GatewayReg
 
 const plan = (
   local: GatewayRegistrationRow | null,
-  view: GatewayRegistrationView | null,
+  view: GatewayRegistrationView | "unknown" | null,
   cardMatches = true,
 ) => planRegistration({ local, cardMatches, live: view, railPolicyHash: RAIL, nowSeconds: NOW });
 
@@ -111,6 +111,16 @@ describe("registration recovery plan", () => {
       kind: "sign-intent",
       attention: "gateway_registration_superseded",
     });
+  });
+
+  it("restarts a registration the gateway no longer knows, from any pending or parked state", () => {
+    for (const state of ["PREPARED", "EVIDENCE_SUBMITTED", "ATTENTION"] as const) {
+      expect(plan(row({ state }), "unknown")).toEqual({
+        kind: "sign-intent",
+        reason: "gateway-unknown",
+        attention: "gateway_registration_not_found",
+      });
+    }
   });
 
   it("blocks a changed card or a changed policy while the gateway holds the registration", () => {

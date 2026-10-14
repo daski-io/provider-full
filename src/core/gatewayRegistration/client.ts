@@ -2,7 +2,7 @@ import type { ServiceRow } from "../db/queries/services.js";
 import { logInfo } from "../logger.js";
 import { canonicalHash } from "../standardRail/canonical.js";
 import { loadRegistrationContext, type RegistrationContext } from "./chainContext.js";
-import { getGatewayRegistrationView } from "./gatewayApi.js";
+import { findGatewayRegistrationView } from "./gatewayApi.js";
 import {
   activate,
   cardMatchesRegistration,
@@ -45,7 +45,7 @@ export async function planServiceRegistration(context: RegistrationContext): Pro
 }> {
   const local = await getGatewayRegistration(context.gatewayOrigin, context.record.serviceId);
   const live = needsLiveRegistrationView(local)
-    ? await getGatewayRegistrationView(context.gatewayOrigin, local.gateway_registration_id)
+    ? await findGatewayRegistrationView(context.gatewayOrigin, local.gateway_registration_id)
     : null;
   return {
     local,

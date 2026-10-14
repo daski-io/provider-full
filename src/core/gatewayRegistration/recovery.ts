@@ -18,6 +18,7 @@ export type FreshIntentReason =
   | "first-admission"
   | "card-changed"
   | "gateway-terminal"
+  | "gateway-unknown"
   | "never-prepared";
 
 /**
@@ -59,13 +60,14 @@ function storedPreparationMatches(
  * still holds its registration as pending or active: its intent, preparation,
  * splitter writes and accepted evidence are what the gateway admitted. Only a
  * first admission, a changed card of a promoted registration, a registration
- * the gateway ended, or an intent the gateway never prepared gets a new
- * intent.
+ * the gateway ended or no longer knows, or an intent the gateway never
+ * prepared gets a new intent.
  */
 export function planRegistration(args: {
   local: GatewayRegistrationRow | null;
   cardMatches: boolean;
-  live: GatewayRegistrationView | null;
+  /** The gateway's view of the local registration; "unknown" when it holds none. */
+  live: GatewayRegistrationView | "unknown" | null;
   railPolicyHash: Hex;
   nowSeconds: number;
 }): RegistrationPlan {
@@ -90,6 +92,15 @@ export function planRegistration(args: {
       : { kind: "post-intent" };
   }
   if (!live) throw new Error("registration recovery requires the gateway's live view");
+  if (live === "unknown") {
+    // Nothing is pending or active at the gateway under this record, so a
+    // new intent cannot conflict with it.
+    return {
+      kind: "sign-intent",
+      reason: "gateway-unknown",
+      attention: "gateway_registration_not_found",
+    };
+  }
   if (live.registrationId !== local.gateway_registration_id) {
     return {
       kind: "blocked",
