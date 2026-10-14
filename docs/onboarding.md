@@ -171,9 +171,11 @@ This second command signs provider intent, verifies gateway preparations,
 persists splitter writes before broadcast, submits activation evidence,
 cross-checks runtime commitments, and atomically promotes catalog heads. Use
 `--service <slug>` only for an intentional narrowed run. If a run stops,
-forecast and run it again: it resumes from the persisted registration and the
-gateway's live state without a new intent or transaction while the gateway
-still holds that registration
+forecast and run it again: while the gateway still holds the registration, it
+resumes from the persisted registration and the gateway's live state, keeping
+the persisted intent, preparation, journaled transactions and accepted
+evidence. It sends only what the stopped run had not journaled yet, such as a
+splitter deployment it never reached, or evidence it had not signed
 ([recovery](troubleshooting.md#gateway-registration-recovery)). Both
 commands, without `--check-only`, are external mutations; doctor and boot
 invoke neither.
