@@ -6,6 +6,7 @@ import type {
   ProtectedAssetIdentifierScheme,
 } from "../db/queries/assets.js";
 import type { ProtectedDataSink } from "../security/protectedDataSinkTypes.js";
+import type { Queryable } from "../db/queryable.js";
 import type { FulfillmentAdapter } from "./adapterTypes.js";
 import type { ServiceScreeningFacet } from "../screening/types.js";
 import type {
@@ -38,11 +39,27 @@ export interface ServiceProtocolFacet {
   inboundEmail?: InboundEmailInterceptor;
 }
 
+/**
+ * A service poller that durably owns long waits of its paid tasks on an
+ * outside party. The core task watchdog treats a waiting task as supervised,
+ * not stalled, only while the poller claims it and its worker is healthy.
+ */
+export interface ServiceWaitSupervision {
+  /** The poller's heartbeat id; it must be one of `readiness.requiredWorkers`. */
+  worker: string;
+  /**
+   * Of `taskIds`, those the poller durably owns right now (a live durable
+   * job or service row drives each). Never a static "slow" declaration.
+   */
+  supervisedTasks(args: { db: Queryable; taskIds: readonly string[] }): Promise<ReadonlySet<string>>;
+}
+
 export interface ServiceOperationsFacet {
   migrations?: ServiceMigration[];
   seed?: () => Promise<void>;
   startWorkers?(): (() => void | Promise<void>) | void;
   readiness?: ServiceReadiness;
+  waitSupervision?: ServiceWaitSupervision;
 }
 
 export interface ServiceAgentFacet {

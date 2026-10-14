@@ -429,6 +429,8 @@ Only add a facet when your product needs it:
 
 - `operations.readiness`: required worker ids and live invariants;
 - `operations.startWorkers`: durable worker startup with a stop function;
+- `operations.waitSupervision`: the poller that durably owns long supplier
+  waits of paid tasks (see below);
 - `security.redactSensitiveFields`: service-specific prompt/review redaction;
 - `security.protectedDataSinks`: rotation for encrypted service columns/JSON;
 - `security.protectedAssetIdentifiers`: encrypt sensitive identifiers while
@@ -488,6 +490,34 @@ effects through the normal service workflow.
 Pre-execution model review is advisory policy, not input validation or
 authorization. Choose `onError: "escalate"` for a fail-closed skill. Project
 only the minimum safe data through `buildPreExecuteReviewData`.
+
+### Long supplier waits
+
+The core task watchdog raises a `stuck_standard_task` incident for a
+`working` paid task without progress for 15 minutes. A service whose tasks
+legitimately wait hours or days on an outside party declares the poller
+that owns those waits:
+
+```typescript
+operations: {
+  readiness: { requiredWorkers: ["report-poller"] },
+  waitSupervision: {
+    worker: "report-poller",
+    // Of taskIds, those a live durable job or service row of yours drives now.
+    supervisedTasks: async ({ db, taskIds }) => new Set((await db.query<{ id: string }>(
+      "SELECT transaction_id AS id FROM report_builder_reports WHERE transaction_id = ANY($1) AND state = 'polling'",
+      [taskIds],
+    )).rows.map((row) => row.id)),
+  },
+},
+```
+
+The worker must be one of the service's required workers. A task counts as
+supervised only while the hook returns it and that worker's heartbeat is
+healthy, so a dead poller is flagged like any stall; there is no way to
+declare a service merely slow. Supervision never pauses the order's
+admitted fulfillment duration: past it the order is marked overdue
+(`overdue_standard_task`) and stays open for a late result.
 
 ## 10. Assemble the module
 

@@ -179,6 +179,39 @@ describe("serviceRegistry: in-process surface", () => {
     await expect(registerService(skill({ dispatchSeconds: 300, fulfillmentSeconds: 600 }))).resolves.toBeUndefined();
     await expect(registerService(skill({}))).resolves.toBeUndefined();
   });
+
+  it("accepts wait supervision only from a required, health-checked worker (F-T06)", async () => {
+    upsertServiceMock.mockClear();
+    const supervised = (requiredWorkers: string[]) => makeModule({
+      operations: {
+        readiness: { requiredWorkers },
+        waitSupervision: { worker: "report-poller", supervisedTasks: async () => new Set<string>() },
+      },
+    });
+    await expect(registerService(supervised([]))).rejects.toThrow(/waitSupervision must name one of its readiness.requiredWorkers/);
+    expect(upsertServiceMock).not.toHaveBeenCalled();
+    await expect(registerService(supervised(["report-poller"]))).resolves.toBeUndefined();
+  });
+
+  it("refuses a retained contract it cannot execute before persisting anything (F-T05)", async () => {
+    upsertServiceMock.mockClear();
+    const module = makeModule({
+      skills: [{
+        id: "versioned",
+        name: "Versioned",
+        description: "Retained contract validation.",
+        examples: ["Run it"],
+        pricing: { USDC: { type: "one-time", fixed_amount: "1000" } },
+        requiresAssetOwnership: false,
+        inputSchema: emptySchema,
+        resultSchema: emptySchema,
+        previousContracts: [{ contract: { inputSchema: emptySchema }, adapter: makeModule().fulfillment.adapter }],
+      }],
+      protocol: { docs: { service: "# Test", skills: { versioned: "# Versioned" } } },
+    });
+    await expect(registerService(module)).rejects.toThrow(/retained contract is malformed/);
+    expect(upsertServiceMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("serviceRegistry: agent_domain defaulting", () => {

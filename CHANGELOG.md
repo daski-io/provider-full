@@ -25,6 +25,16 @@ All notable changes to this project will be documented here.
 
 ### Changed
 
+- The task watchdog no longer uses the boot catalog's 300-second dispatch
+  deadline as a stall threshold, nor sets `standard_reconciliation_required`
+  on stalls. It reads persisted per-order state for orders of any listing
+  version: a never-started order is a stall after 10 minutes and a `working`
+  task after 15 minutes without progress, unless a healthy service poller
+  durably claims it through the new `operations.waitSupervision` hook. Stall
+  incidents resolve on progress, completion or supervision (dropping a stall
+  flag no ambiguous supplier outcome raised) and reopen on a new stall. Work
+  past its admitted fulfillment duration is marked overdue once and never
+  made terminal.
 - Admitted paid work is resumable (core migration 010): each claim records
   the order's dispatch deadline and its listing version's fulfillment
   duration, and admission creates the order's durable

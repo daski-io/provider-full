@@ -102,7 +102,7 @@ async function main(): Promise<void> {
     standardRailConfig,
     config.CHAIN_ID === 8453 ? base : baseSepolia,
   );
-  stopStandardTaskWatchdog = startStandardTaskWatchdog(standardRailConfig);
+  stopStandardTaskWatchdog = startStandardTaskWatchdog();
   stopReputationOutcomeWorker = startReputationOutcomeWorker(standardRailConfig);
   stopStandardReviewResolutionWorker = startStandardReviewResolutionWorker(
     standardRailConfig,

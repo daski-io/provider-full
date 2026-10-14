@@ -522,6 +522,20 @@ Reconcile authoritative supplier state through the service's journal
 (`supplier_operations`) before completing or failing the task; never repeat
 the purchase blindly.
 
+### `stuck_standard_task` or `overdue_standard_task` incidents
+
+`stuck_standard_task` means an admitted order nobody started for 10
+minutes, or a `working` task without progress for 15 minutes that no
+healthy service poller claims through `operations.waitSupervision`. It
+resolves itself when the task progresses, finishes or is claimed by a
+healthy poller, and reopens if the task stalls again. Check the service's
+poller heartbeat first: a supervised wait whose poller died is reported
+exactly like a stall. `overdue_standard_task` means the order outlived the
+fulfillment duration it was sold with; the claim keeps
+`fulfillment_overdue_at` and the order stays open, so a late result is still
+delivered. The gateway may report its own deadline failure meanwhile;
+neither side refunds automatically.
+
 ### An admitted order stays `submitted`
 
 Its admitting request ended before the order started. The order's

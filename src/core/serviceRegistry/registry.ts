@@ -185,6 +185,16 @@ export async function registerService(module: ServiceModule): Promise<void> {
       );
     }
   }
+  const supervision = module.operations?.waitSupervision;
+  if (
+    supervision &&
+    (typeof supervision.supervisedTasks !== "function" ||
+      !module.operations?.readiness?.requiredWorkers?.includes(supervision.worker))
+  ) {
+    throw new Error(
+      `Service ${manifest.slug}: waitSupervision must name one of its readiness.requiredWorkers`,
+    );
+  }
   // Earlier contracts with admitted work outstanding keep their handlers;
   // each must be valid and distinct before anything is registered.
   registerRetainedContracts(module);
