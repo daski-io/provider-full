@@ -234,3 +234,24 @@ describe("named refusals and negotiated views (F-T10)", () => {
     await harness.database.pool.query("UPDATE services SET is_active=true");
   });
 });
+
+// Keep this suite last: it exhausts the authentication-failure budget for its
+// one-minute window.
+describe("the lifecycle authentication-failure budget", () => {
+  it("is spent only by calls no verified gateway grant binds, never by one buyer's refused authorizations", async () => {
+    await admittedOrder({ status: "working" });
+    const at = T + 3_600;
+    const nonce = `0x${"42".repeat(32)}` as Hex;
+    expect((await call({ action: "status", form: "payer-signed", now: at, nonce })).status).toBe(200);
+    // Replays of one payer authorization through the gateway's shared address.
+    for (let replay = 0; replay < 35; replay += 1) {
+      expect((await call({ action: "status", form: "payer-signed", now: at, nonce })).status).toBe(401);
+    }
+    expect((await call({ action: "status", now: at })).status).toBe(200);
+    for (let forged = 0; forged < 30; forged += 1) {
+      expect((await call({ action: "status", now: at, grantKey: keys.unrecognized!.privateKey })).status).toBe(401);
+    }
+    const exhausted = await call({ action: "status", now: at });
+    expect([exhausted.status, exhausted.body]).toEqual([429, { error: "rate_limit_exceeded" }]);
+  });
+});

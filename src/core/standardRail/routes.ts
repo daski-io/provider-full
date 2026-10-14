@@ -81,7 +81,8 @@ export function createStandardRailRouter(
 
   // Lifecycle calls are servicing traffic the gateway proxies for every buyer:
   // exempt from per-client and purchase limits, they spend a separate
-  // authentication-failure budget before any signature is recovered.
+  // authentication-failure budget, and only calls no verified gateway grant
+  // binds count against it.
   const lifecycleFailures = createStatusFailureBudget({
     bypassIps: rateLimitBypassIps, clientIp: requestClientIp, matches: isIpInRanges,
   });
@@ -95,7 +96,7 @@ export function createStandardRailRouter(
       sendSignedJson(res, await lifecycle.perform(req.body));
     } catch (error) {
       const refusal = lifecycleRefusalOf(error);
-      if (refusal.kind === "rejected") lifecycleFailures.recordFailure(req);
+      if (refusal.unauthenticated) lifecycleFailures.recordFailure(req);
       const detail = { kind: refusal.kind, errorClass: error instanceof Error ? error.name : "UnknownError" };
       if (refusal.kind === "lifecycle_unavailable") {
         logError("Standard lifecycle action unavailable", detail);

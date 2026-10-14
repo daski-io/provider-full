@@ -25,7 +25,12 @@ export type LifecycleRefusalKind =
   | "lifecycle_unavailable";
 
 export class LifecycleRefusal extends Error {
-  constructor(readonly kind: LifecycleRefusalKind, message: string = kind) {
+  constructor(
+    readonly kind: LifecycleRefusalKind,
+    message: string = kind,
+    /** No verified gateway grant authenticates the call: it spends the caller's failure budget. */
+    readonly unauthenticated = false,
+  ) {
     super(message);
     this.name = "LifecycleRefusal";
   }
@@ -41,6 +46,13 @@ export class LifecycleRefusal extends Error {
 }
 
 export const lifecycleRejected = (message: string) => new LifecycleRefusal("rejected", message);
+/**
+ * A rejection before any verified gateway grant binds the call. Only these
+ * spend the source's authentication-failure budget: every later refusal
+ * comes from the authenticated gateway, whose shared egress must not let one
+ * buyer exhaust lifecycle service for every other buyer.
+ */
+export const lifecycleUnauthenticated = (message: string) => new LifecycleRefusal("rejected", message, true);
 export const unsupportedAction = (message: string) => new LifecycleRefusal("unsupported_action", message);
 export const actionConflict = (message: string) => new LifecycleRefusal("action_conflict", message);
 export const artifactUnavailable = (message: string) => new LifecycleRefusal("artifact_unavailable", message);

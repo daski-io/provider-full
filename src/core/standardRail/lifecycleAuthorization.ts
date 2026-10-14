@@ -2,7 +2,7 @@ import { getAddress, isAddress, keccak256, stringToHex, type Address, type Hex }
 import { canonicalHash } from "./canonical.js";
 import type { ProviderStandardRailConfig } from "./config.js";
 import { GatewayEnvelopeError, verifyGatewayEnvelope } from "./gatewayEnvelope.js";
-import { lifecycleRejected, unsupportedAction } from "./lifecycleErrors.js";
+import { lifecycleRejected, lifecycleUnauthenticated, unsupportedAction } from "./lifecycleErrors.js";
 import { assertLifecycleRequest, isLifecycleAction, READ_ACTIONS, type LifecycleAction } from "./lifecycleRequests.js";
 import { isPayerSignatureShape, PayerSignatureError, verifyPayerTypedData } from "./payerSignature.js";
 
@@ -55,7 +55,7 @@ export async function authenticateLifecycleCall(
   body: unknown,
   now = Math.floor(Date.now() / 1_000),
 ): Promise<LifecycleCall> {
-  if (!isRecord(body) || Object.keys(body).sort().join() !== BODY_KEYS) throw lifecycleRejected("Lifecycle body shape is invalid");
+  if (!isRecord(body) || Object.keys(body).sort().join() !== BODY_KEYS) throw lifecycleUnauthenticated("Lifecycle body shape is invalid");
   const grant = await verifyGatewayEnvelope<LifecycleGrantPayload>(body.grant, {
     artifactType: "ProviderLifecycleGrantV1",
     schemaVersion: 1,
@@ -67,7 +67,7 @@ export async function authenticateLifecycleCall(
     signerKeyId: "gateway-lifecycle",
     lifetime: { maxRemainingSeconds: 120, maxAgeSeconds: 120 },
   }, now).catch((error: unknown) => {
-    throw lifecycleRejected(error instanceof GatewayEnvelopeError ? error.message : "Lifecycle grant is invalid");
+    throw lifecycleUnauthenticated(error instanceof GatewayEnvelopeError ? error.message : "Lifecycle grant is invalid");
   });
   const payload = grant.payload;
   const request = body.request;
@@ -80,7 +80,7 @@ export async function authenticateLifecycleCall(
     typeof body.payer !== "string" || !isAddress(body.payer) ||
     getAddress(payload.payer) !== getAddress(body.payer) ||
     body.gatewayAudience !== config.gatewayAudience
-  ) throw lifecycleRejected("Lifecycle grant does not bind this request");
+  ) throw lifecycleUnauthenticated("Lifecycle grant does not bind this request");
   if (!isLifecycleAction(body.action)) throw unsupportedAction("Lifecycle action is not offered");
   const action = body.action;
   const payer = getAddress(payload.payer);
