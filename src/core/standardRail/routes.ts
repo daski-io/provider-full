@@ -1,17 +1,18 @@
 import { Router } from "express";
 import { base, baseSepolia } from "viem/chains";
 import type { Config } from "../config.js";
-import { logError } from "../logger.js";
+import { logError, logWarn } from "../logger.js";
+import { isIpInRanges, requestClientIp } from "../security/rateLimit.js";
 import { StandardDispatchService } from "./dispatch.js";
 import { StandardLifecycleService } from "./lifecycle.js";
+import { lifecycleRefusalOf } from "./lifecycleErrors.js";
 import { mountProtocolRoutes } from "./protocolRoutes.js";
 import { StandardQuoteService } from "./quote.js";
-import { assertExactKeys } from "./canonical.js";
 import type { ProviderStandardRailConfig } from "./config.js";
 import type { ProviderWalletConfig } from "./walletConfig.js";
 import { ProviderAssetQueryService } from "./assetQuery.js";
 import { ProviderAssetActionService } from "./assetAction.js";
-import { sendSignedJson } from "./transport.js";
+import { createStatusFailureBudget, sendSignedJson } from "./transport.js";
 
 export function createStandardRailRouter(
   core: Config,
@@ -75,24 +76,35 @@ export function createStandardRailRouter(
     } catch (error) { next(error); }
   });
 
-  mountProtocolRoutes(router, {
-    quote,
-    dispatch,
-    rateLimitBypassIps: (core.RATE_LIMIT_BYPASS_IPS ?? "").split(",").map((ip) => ip.trim()).filter(Boolean),
-  });
+  const rateLimitBypassIps = (core.RATE_LIMIT_BYPASS_IPS ?? "").split(",").map((ip) => ip.trim()).filter(Boolean);
+  mountProtocolRoutes(router, { quote, dispatch, rateLimitBypassIps });
 
+  // Lifecycle calls are servicing traffic the gateway proxies for every buyer:
+  // exempt from per-client and purchase limits, they spend a separate
+  // authentication-failure budget before any signature is recovered.
+  const lifecycleFailures = createStatusFailureBudget({
+    bypassIps: rateLimitBypassIps, clientIp: requestClientIp, matches: isIpInRanges,
+  });
   router.post("/lifecycle", async (req, res) => {
+    if (lifecycleFailures.exhausted(req)) {
+      res.setHeader("Retry-After", "60");
+      res.status(429).json({ error: "rate_limit_exceeded" });
+      return;
+    }
     try {
-      assertExactKeys(req.body, [
-        "orderId", "providerTaskId", "action", "request", "authorization", "grant", "payer",
-        "gatewayAudience",
-      ], "lifecycle request");
-      sendSignedJson(res, await lifecycle.perform(req.body as never));
+      sendSignedJson(res, await lifecycle.perform(req.body));
     } catch (error) {
-      logError("Standard lifecycle action rejected", {
-        errorClass: error instanceof Error ? error.name : "UnknownError",
-      });
-      res.status(401).json({ error: "lifecycle_rejected" });
+      const refusal = lifecycleRefusalOf(error);
+      if (refusal.kind === "rejected") lifecycleFailures.recordFailure(req);
+      const detail = { kind: refusal.kind, errorClass: error instanceof Error ? error.name : "UnknownError" };
+      if (refusal.kind === "lifecycle_unavailable") {
+        logError("Standard lifecycle action unavailable", detail);
+        res.setHeader("Retry-After", "10");
+      } else {
+        logWarn("Standard lifecycle action refused", detail);
+      }
+      res.setHeader("Cache-Control", "no-store");
+      res.status(refusal.status).json(refusal.body());
     }
   });
 

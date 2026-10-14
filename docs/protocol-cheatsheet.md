@@ -227,6 +227,50 @@ recovery until the minute passes; verified reads and `RATE_LIMIT_BYPASS_IPS`
 never consume that budget. The terminal
 `resultHash` comes from the frozen terminal-result store described below.
 
+## Lifecycle actions
+
+The gateway proxies every buyer order action to `POST /standard-rail/lifecycle`
+with exactly `orderId`, `providerTaskId`, `action`, `request`,
+`authorization`, `grant`, `payer` and `gatewayAudience`. Every call is
+authenticated before anything is read:
+
+1. the `ProviderLifecycleGrantV1` grant: artifact type and schema version,
+   environment, chain, provider audience, the `gateway-lifecycle` key id and
+   key, at most 120 s of validity, and its bindings to this exact order, task,
+   action, request hash, authorization hash, payer and gateway audience;
+2. then the authorization. `{"type":"DaskiReadCap","scope":<action>}` is the
+   gateway's own attestation of a read capability: it authorizes a `status` or
+   `artifact` read of exactly that scope and nothing else, and consumes no
+   nonce. Otherwise it is the payer's nine-field `OrderActionAuthorizationV1`,
+   verified (EOA offline, or a configured ERC-1271 account) against the payer
+   the grant attests; its nonce is consumed only after it verified.
+
+Answers have exactly `orderId`, `taskId`, `state`, `operations` and
+`signature`, plus `terminalAttestation` (`{orderId, taskId, state,
+resultHash, completedAt}`, the frozen terminal identity) once terminal and
+`result` where allowed. `status` never carries a result. `artifact` carries
+the frozen projection of a completed order: unrevealed under a read
+capability, with its frozen protected references revealed under the payer's
+fresh signature. An `input` that completes the order carries the frozen
+unrevealed projection, whose hash the attestation signs. `operations` is
+observed afresh and signed per answer, as for dispatch. No `inputRequest` or
+`documents` view is added, whether or not `daski-order-status-view` asks.
+
+Every failure is a refusal with exactly one key:
+
+| Answer | Meaning |
+| --- | --- |
+| `401 {"error":"lifecycle_rejected"}` | Authentication or binding failure: forged or stale grant, another order or payer, a read capability for anything but its own read, a replayed authorization or a malformed request |
+| `409 {"error":"artifact_unavailable"}` | An artifact read before completed fulfilment, or one whose deliverable bytes are not retained |
+| `409 {"error":"unsupported_action"}` | Not available for this order now; nothing changed (for example cancelling a terminal order, input while not awaiting it, input that changes the committed request, an action this starter does not offer) |
+| `409 {"error":"action_conflict"}` | The action's durable identity is already bound to different content |
+| `503 {"error":"lifecycle_unavailable"}` | Temporarily unavailable, `Retry-After: 10`; asserts nothing about an earlier attempt's effect (a verification outage, a database fault, an uncertain cancellation or input, an unreconciled legacy terminal row) |
+
+Lifecycle calls, like status reads, are servicing traffic the gateway sends for
+every buyer from its own addresses: they skip the per-client and purchase rate
+limits and service readiness, keep the concurrency budget and body bound, and
+spend a separate 30-per-minute authentication-failure budget.
+
 ## Frozen terminal results
 
 `standard_terminal_results` (core migration 006) holds one immutable row per

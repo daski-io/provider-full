@@ -1,484 +1,69 @@
-import {
-  getAddress,
-  keccak256,
-  recoverMessageAddress,
-  stringToHex,
-  type Hex,
-} from "viem";
-import { PayerSignatureError, verifyPayerTypedData } from "./payerSignature.js";
-import { privateKeyToAccount } from "viem/accounts";
-import { pool } from "../db/pool.js";
-import { getAdapter } from "../serviceRegistry/registry.js";
-import { admittedSupplierCostCeiling } from "../serviceRegistry/supplierCostCeiling.js";
-import { getServiceById } from "../db/queries/services.js";
-import { processAdapterResult } from "../engine/taskFinalization.js";
-import { validateTransition } from "../engine/stateMachine.js";
-import { emitEvent } from "../events/emitter.js";
 import { revealFrozenTaskProjection } from "../a2a/responseBuilder.js";
-import { ORDER_SUPPORT_CHANNEL } from "../a2a/taskHistory.js";
-import { recordMandatoryAudit } from "../events/emitter.js";
-import {
-  FROZEN_TERMINAL_COLUMNS,
-  freezeTerminalResult,
-  loadFrozenTerminalProjection,
-  publicTerminalIdentity,
-  type FrozenTerminalColumns,
-} from "./terminalResult.js";
-import type { TransactionStatus } from "../db/queries/transactions.js";
-import { decryptString } from "../chain/encryption.js";
-import { getTransactionById } from "../db/queries/transactions.js";
-import { enqueueReputationOutcome } from "./reputationOutcomeStore.js";
-import {
-  assertExactKeys,
-  canonicalHash,
-  SIGNED_ENVELOPE_KEYS,
-  unsignedEnvelopeHash,
-} from "./canonical.js";
+import { pool } from "../db/pool.js";
 import type { ProviderStandardRailConfig } from "./config.js";
-import type { SignedEnvelope } from "./types.js";
+import { authenticateLifecycleCall, type LifecycleCall } from "./lifecycleAuthorization.js";
+import { artifactUnavailable, unsupportedAction } from "./lifecycleErrors.js";
+import { applyLifecycleCancel, applyLifecycleInput } from "./lifecycleMutations.js";
+import { readLifecycleState, signedLifecycleAnswer, type LifecycleAnswerV1 } from "./lifecycleResponse.js";
+import { consumeLifecycleNonce, loadLifecycleTask, type StandardTaskRow } from "./lifecycleStore.js";
+import { loadFrozenTerminalProjection } from "./terminalResult.js";
 
-interface StandardTaskRow {
-  id: string;
-  service_id: string;
-  skill_id: string;
-  status: TransactionStatus;
-  standard_order_id: string;
-  standard_payer: Hex;
-  metadata: Record<string, unknown>;
-  completed_at: Date | null;
-  version: string;
-}
-
-interface ActionAuthorization {
-  orderId: string;
-  action: string;
-  method: "POST";
-  absoluteResourceUri: string;
-  requestHash: Hex;
-  nonce: Hex;
-  issuedAt: number;
-  validBefore: number;
-  signature: Hex;
-}
-
-interface LifecycleGrantPayload {
-  orderId: string;
-  providerTaskId: string;
-  action: string;
-  requestHash: Hex;
-  authorizationHash: Hex;
-  payer: Hex;
-}
-
+/**
+ * Buyer order actions the gateway proxies to the provider's lifecycle URL.
+ * Every call is authenticated before any state is read (the gateway grant
+ * first, then a read capability or the payer's own signature), and every
+ * answer is a fresh signed observation: the public state, operations, and
+ * the lifecycle attestation of the frozen terminal identity once terminal.
+ *
+ * Status never carries a result. Artifact carries the frozen projection of a
+ * completed order: unrevealed under a read capability, with its protected
+ * references revealed under the payer's fresh signature. Every failure is a
+ * named refusal (lifecycleErrors.ts).
+ */
 export class StandardLifecycleService {
   constructor(private readonly config: ProviderStandardRailConfig, private readonly chainId: number) {}
 
-  async perform(args: {
-    orderId: string;
-    providerTaskId: string;
-    action: string;
-    request: Record<string, unknown>;
-    authorization: ActionAuthorization;
-    grant: SignedEnvelope<LifecycleGrantPayload>;
-    payer: Hex;
-    gatewayAudience: string;
-  }): Promise<unknown> {
-    await this.verifyGatewayGrant(args);
-    assertExactKeys(args.authorization, [
-      "orderId", "action", "method", "absoluteResourceUri", "requestHash",
-      "nonce", "issuedAt", "validBefore", "signature",
-    ], "lifecycle authorization");
-    if (!["status", "artifact", "support", "cancel", "input"].includes(args.action)) {
-      throw new Error("Unsupported lifecycle action");
-    }
-    const task = await this.loadTask(args.orderId, args.providerTaskId);
-    if (
-      getAddress(task.standard_payer) !== getAddress(args.payer) ||
-      args.gatewayAudience !== this.config.gatewayAudience ||
-      args.authorization.orderId !== task.standard_order_id ||
-      args.authorization.action !== args.action || args.authorization.method !== "POST" ||
-      args.authorization.requestHash !== canonicalHash(args.request)
-    ) throw new Error("Lifecycle authority does not match the task");
-    const actionUri = new URL(args.authorization.absoluteResourceUri);
-    if (
-      actionUri.origin !== this.config.gatewayOrigin || actionUri.search || actionUri.hash ||
-      !actionUri.pathname.endsWith(`/actions/${encodeURIComponent(args.action)}`)
-    ) throw new Error("Lifecycle action URI is invalid");
-    await this.verifyAuthorization(task, args.action, args.request, args.authorization);
-    this.validateActionRequest(args.action, args.request);
-    if (args.action === "input") {
-      this.assertInputMatchesCommittedRequest(
-        task,
-        args.request.data as Record<string, unknown>,
-      );
-    }
-    const nonceClient = await pool.connect();
-    try {
-      await nonceClient.query("BEGIN");
-      await nonceClient.query(
-        `DELETE FROM standard_action_nonces
-          WHERE consumed_at < now() - interval '10 minutes'`,
-      );
-      const result = await nonceClient.query(
-        `INSERT INTO standard_action_nonces (payer,nonce,order_id,action)
-         VALUES ($1,$2,$3,$4) ON CONFLICT (payer,nonce) DO NOTHING`,
-        [task.standard_payer, Buffer.from(args.authorization.nonce.slice(2), "hex"), task.standard_order_id, args.action],
-      );
-      if (result.rowCount !== 1) throw new Error("Lifecycle authorization replayed");
-      await nonceClient.query("COMMIT");
-    } catch (error) {
-      await nonceClient.query("ROLLBACK");
-      throw error;
-    } finally {
-      nonceClient.release();
-    }
-
-    if (args.action === "support") {
-      await emitEvent({
-        transactionId: task.id,
-        serviceId: task.service_id,
-        source: "system",
-        type: "transaction.message.user",
-        message: String(args.request.message),
-        payload: { content: String(args.request.message), channel: ORDER_SUPPORT_CHANNEL },
-        actor: task.standard_payer,
-        mandatory: true,
-      });
-    }
-    if (args.action === "status" || args.action === "artifact" || args.action === "support") {
-      if (args.action === "artifact") {
-        const frozen = await loadFrozenTerminalProjection(pool, task.id).catch(() => null);
-        if (task.status !== "completed" || !frozen) throw new Error("Artifacts are available only after completion");
-        const result = await revealFrozenTaskProjection(task.id, frozen.projection, frozen.references);
-        return this.signedResult({ orderId: task.standard_order_id, taskId: task.id, result });
+  async perform(body: unknown): Promise<LifecycleAnswerV1> {
+    const call = await authenticateLifecycleCall(this.config, this.chainId, body);
+    const task = await loadLifecycleTask(call);
+    await consumeLifecycleNonce(task, call);
+    const order = { orderId: task.standard_order_id, taskId: task.id };
+    switch (call.action) {
+      case "status":
+        return signedLifecycleAnswer(this.config, order);
+      case "artifact":
+        return signedLifecycleAnswer(this.config, order, { result: await this.artifactResult(task, call) });
+      case "support":
+        throw unsupportedAction("Support receipts are not offered");
+      case "input": {
+        const { state } = await readLifecycleState(this.config, order);
+        await applyLifecycleInput(task, call, state);
+        return signedLifecycleAnswer(this.config, order, { result: await this.completionResult(task) });
       }
-      return this.signedResult({ orderId: task.standard_order_id, taskId: task.id });
-    }
-    const service = await getServiceById(task.service_id);
-    if (!service) throw new Error("Task service is unavailable");
-    const adapter = getAdapter(service.adapter_name);
-    if (args.action === "cancel") {
-      if (!["submitted", "dispatching", "working", "input-required"].includes(task.status)) {
-        throw new Error("Task cannot be canceled from its current state");
+      case "cancel": {
+        const { state } = await readLifecycleState(this.config, order);
+        await applyLifecycleCancel(task, state);
+        return signedLifecycleAnswer(this.config, order);
       }
-      const claimed = await this.claimLifecycleMutation(task);
-      await adapter.cancel({
-        ...claimed,
-        supplierMutationStarted: claimed.metadata.supplier_mutation_started === true,
-        supplierCostCeiling: admittedSupplierCostCeiling(claimed.metadata),
-      });
-      await this.persistTaskState(claimed, "canceled", null, new Date());
-      return this.signedResult({ orderId: claimed.standard_order_id, taskId: claimed.id });
-    }
-    if (args.action === "input") {
-      if (task.status !== "input-required") throw new Error("Task is not awaiting buyer input");
-      const inputText = args.request.inputText;
-      const data = args.request.data;
-      if (typeof inputText !== "string" || !data || typeof data !== "object" || Array.isArray(data)) {
-        throw new Error("Lifecycle input request is invalid");
-      }
-      const claimed = await this.claimLifecycleMutation(task);
-      const adapterResult = await adapter.handleInput(
-        {
-          ...claimed,
-          supplierMutationStarted: claimed.metadata.supplier_mutation_started === true,
-          supplierCostCeiling: admittedSupplierCostCeiling(claimed.metadata),
-        },
-        inputText,
-        data as Record<string, unknown>,
-        {
-          requestHash: canonicalHash(args.request),
-          payer: claimed.standard_payer,
-          standardOrderId: claimed.standard_order_id,
-        },
-      );
-      const processed = await processAdapterResult(claimed.id, adapterResult, service.id);
-      await this.persistTaskState(
-        { ...claimed, status: processed.status, version: processed.version },
-        processed.status,
-        null,
-        processed.completed_at,
-      );
-      // A completion answered here carries the frozen unrevealed projection,
-      // whose hash the attestation signs.
-      const frozen = processed.status === "completed"
-        ? await loadFrozenTerminalProjection(pool, claimed.id)
-        : null;
-      return this.signedResult({
-        orderId: claimed.standard_order_id,
-        taskId: claimed.id,
-        ...(frozen ? { result: frozen.projection } : {}),
-      });
-    }
-    throw new Error("Unsupported lifecycle action");
-  }
-
-  private async verifyGatewayGrant(args: {
-    orderId: string;
-    providerTaskId: string;
-    action: string;
-    request: Record<string, unknown>;
-    authorization: ActionAuthorization;
-    grant: SignedEnvelope<LifecycleGrantPayload>;
-    payer: Hex;
-  }): Promise<void> {
-    assertExactKeys(args.grant, SIGNED_ENVELOPE_KEYS, "provider lifecycle grant");
-    assertExactKeys(args.grant.payload, [
-      "orderId", "providerTaskId", "action", "requestHash", "authorizationHash", "payer",
-    ], "provider lifecycle grant payload");
-    const now = Math.floor(Date.now() / 1_000);
-    const payload = args.grant.payload;
-    if (
-      args.grant.artifactType !== "ProviderLifecycleGrantV1" || args.grant.schemaVersion !== 1 ||
-      args.grant.environment !== this.config.environment || args.grant.chainId !== this.chainId ||
-      args.grant.audience !== this.config.providerAudience || args.grant.issuedAt > now + 30 ||
-      args.grant.validBefore <= now || args.grant.validBefore > now + 120 ||
-      payload.orderId !== args.orderId || payload.providerTaskId !== args.providerTaskId ||
-      payload.action !== args.action || payload.requestHash !== canonicalHash(args.request) ||
-      payload.authorizationHash !== canonicalHash(args.authorization) ||
-      getAddress(payload.payer) !== getAddress(args.payer)
-    ) throw new Error("Provider lifecycle grant binding is invalid");
-    const signer = await recoverMessageAddress({
-      message: { raw: unsignedEnvelopeHash(args.grant as unknown as Record<string, unknown>) },
-      signature: args.grant.signature,
-    });
-    if (getAddress(signer) !== this.config.gatewayLifecycleSigner) {
-      throw new Error("Provider lifecycle grant signature is invalid");
     }
   }
 
-  /// The public state comes from one read of the task and its frozen
-  /// terminal identity; a terminal attestation always signs that identity.
-  private async signedResult(payload: {
-    orderId: string;
-    taskId: string;
-    result?: unknown;
-  }): Promise<Record<string, unknown>> {
-    const row = (await pool.query<FrozenTerminalColumns & { status: string }>(
-      `SELECT t.status,${FROZEN_TERMINAL_COLUMNS}
-         FROM transactions t LEFT JOIN standard_terminal_results r ON r.transaction_id=t.id
-        WHERE t.id=$1 AND t.standard_order_id=$2`,
-      [payload.taskId, payload.orderId],
-    )).rows[0];
-    if (!row) throw new Error("Standard task disappeared");
-    const identity = publicTerminalIdentity(row, row);
-    const state = identity?.state ?? row.status;
-    let response: Record<string, unknown> = { orderId: payload.orderId, taskId: payload.taskId, state,
-      ...(payload.result === undefined ? {} : { result: payload.result }) };
-    if (identity) {
-      const terminalPayload = {
-        orderId: payload.orderId,
-        taskId: payload.taskId,
-        state: identity.state,
-        resultHash: identity.resultHash,
-        completedAt: identity.completedAt,
-      };
-      response = {
-        ...response,
-        terminalAttestation: {
-          payload: terminalPayload,
-          signature: await privateKeyToAccount(this.config.terminalAttestationPrivateKey).signMessage({
-            message: { raw: canonicalHash(terminalPayload) },
-          }),
-        },
-      };
-    }
-    return {
-      ...response,
-      signature: await privateKeyToAccount(this.config.providerAuthorityPrivateKey).signMessage({
-        message: { raw: canonicalHash(response) },
-      }),
-    };
+  /** The frozen projection of a completed order, revealed only for the payer's own signature. */
+  private async artifactResult(task: StandardTaskRow, call: LifecycleCall): Promise<unknown> {
+    const { state } = await readLifecycleState(this.config, { orderId: task.standard_order_id, taskId: task.id });
+    if (state !== "completed") throw artifactUnavailable("Artifacts are available only after completed fulfilment");
+    const frozen = await loadFrozenTerminalProjection(pool, task.id);
+    if (!frozen) throw artifactUnavailable("The order's deliverable bytes are not retained");
+    return call.authorization.form === "payer-signed"
+      ? revealFrozenTaskProjection(task.id, frozen.projection, frozen.references)
+      : frozen.projection;
   }
 
-  private async loadTask(orderId: string, taskId: string): Promise<StandardTaskRow> {
-    const result = await pool.query<StandardTaskRow>(
-      `SELECT id,service_id,skill_id,status,standard_order_id,standard_payer,metadata,completed_at,version
-       FROM transactions WHERE id=$1 AND standard_order_id=$2 AND standard_payer IS NOT NULL`,
-      [taskId, orderId],
-    );
-    if (!result.rows[0]) throw new Error("Standard task not found");
-    return result.rows[0];
-  }
-
-  /// Fence a supplier-facing lifecycle mutation before the adapter runs:
-  /// the version bump invalidates every claim other actors hold from the
-  /// pre-claim snapshot, and RETURNING yields the row the adapter must
-  /// act on (fresh supplier_mutation_started, not the load-time copy).
-  private async claimLifecycleMutation(task: StandardTaskRow): Promise<StandardTaskRow> {
-    const result = await pool.query<StandardTaskRow>(
-      `UPDATE transactions
-          SET version=version+1,updated_at=now()
-        WHERE id=$1 AND standard_order_id=$2 AND status=$3 AND version=$4
-        RETURNING id,service_id,skill_id,status,standard_order_id,standard_payer,metadata,completed_at,version`,
-      [task.id, task.standard_order_id, task.status, task.version],
-    );
-    if (!result.rows[0]) {
-      throw new Error("Task state changed while authorizing the lifecycle action");
-    }
-    return result.rows[0];
-  }
-
-  /// task must be the claimed snapshot the mutation ran against: the
-  /// update is conditional on that exact status and version, so a worker
-  /// or competing lifecycle call that finalized in between loses nothing —
-  /// this write fails instead of overwriting a terminal state.
-  private async persistTaskState(
-    task: StandardTaskRow,
-    state: TransactionStatus,
-    metadata: Record<string, unknown> | null,
-    completedAt: Date | null,
-  ): Promise<void> {
-    if (state !== task.status) validateTransition(task.status, state);
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-      const updated = await client.query(
-        `UPDATE transactions
-            SET status=$2,updated_at=now(),version=version+1,
-                metadata=metadata || COALESCE($3::jsonb,'{}'::jsonb),
-                completed_at=COALESCE(completed_at,$4)
-          WHERE id=$1 AND standard_order_id=$5 AND status=$6 AND version=$7`,
-        [
-          task.id, state, metadata ? JSON.stringify(metadata) : null, completedAt,
-          task.standard_order_id, task.status, task.version,
-        ],
-      );
-      if (updated.rowCount !== 1) throw new Error("Standard task state update lost its fence");
-      const persisted = await getTransactionById(task.id, client);
-      if (!persisted) throw new Error("Standard task disappeared after state update");
-      if (state === "canceled" && task.status !== "canceled") {
-        await recordMandatoryAudit(client, {
-          transactionId: task.id, serviceId: task.service_id, source: "system",
-          type: "transaction.message.agent", message: "Canceled at the buyer's request.",
-          payload: { role: "agent", content: "Canceled at the buyer's request." },
-        });
-      }
-      // The first terminal transition freezes the order's terminal identity.
-      if (state !== task.status) await freezeTerminalResult(client, persisted);
-      await enqueueReputationOutcome(persisted, client);
-      await client.query(
-        `UPDATE standard_dispatch_claims SET state=$2,
-            resolved_at=CASE WHEN $2 IN ('completed','failed','canceled') THEN now() ELSE resolved_at END
-          WHERE order_id=$1 AND transaction_id=$3`,
-        [task.standard_order_id, state, task.id],
-      );
-      await client.query("COMMIT");
-    } catch (error) {
-      await client.query("ROLLBACK");
-      throw error;
-    } finally {
-      client.release();
-    }
-  }
-
-  private async verifyAuthorization(
-    task: StandardTaskRow,
-    action: string,
-    request: Record<string, unknown>,
-    authorization: ActionAuthorization,
-  ): Promise<void> {
-    const now = Math.floor(Date.now() / 1_000);
-    if (authorization.issuedAt > now + 30 || authorization.validBefore <= now || authorization.validBefore > now + 300) {
-      throw new Error("Lifecycle authorization expired");
-    }
-    try {
-      await verifyPayerTypedData({
-        payer: getAddress(task.standard_payer),
-        typedData: {
-          domain: { name: "DaskiStandardOrder", version: "1", chainId: this.chainId },
-          types: {
-            OrderActionAuthorizationV1: [
-              { name: "orderIdHash", type: "bytes32" },
-              { name: "actionHash", type: "bytes32" },
-              { name: "methodHash", type: "bytes32" },
-              { name: "absoluteResourceUriHash", type: "bytes32" },
-              { name: "requestHash", type: "bytes32" },
-              { name: "audienceHash", type: "bytes32" },
-              { name: "nonce", type: "bytes32" },
-              { name: "issuedAt", type: "uint64" },
-              { name: "validBefore", type: "uint64" },
-            ],
-          },
-          primaryType: "OrderActionAuthorizationV1",
-          message: {
-            orderIdHash: keccak256(stringToHex(task.standard_order_id)),
-            actionHash: keccak256(stringToHex(action)),
-            methodHash: keccak256(stringToHex(authorization.method)),
-            absoluteResourceUriHash: keccak256(stringToHex(authorization.absoluteResourceUri)),
-            requestHash: canonicalHash(request),
-            audienceHash: keccak256(stringToHex(this.config.gatewayAudience)),
-            nonce: authorization.nonce,
-            issuedAt: BigInt(authorization.issuedAt),
-            validBefore: BigInt(authorization.validBefore),
-          },
-        },
-        signature: authorization.signature,
-      });
-    } catch (error) {
-      if (error instanceof PayerSignatureError && error.retryable) throw error;
-      throw new Error("Lifecycle authorization is invalid");
-    }
-  }
-
-  private validateActionRequest(action: string, request: Record<string, unknown>): void {
-    const keys = Object.keys(request).sort();
-    if (action === "status" || action === "artifact") {
-      if (keys.length !== 0) throw new Error(`${action} request must be empty`);
-      return;
-    }
-    if (action === "support") {
-      if (
-        keys.join(",") !== "message" || typeof request.message !== "string" ||
-        request.message.trim().length === 0 || request.message.length > 4_000
-      ) throw new Error("Support request must contain only a non-empty message");
-      return;
-    }
-    if (action === "input") {
-      if (
-        keys.join(",") !== "data,inputText" || typeof request.inputText !== "string" ||
-        request.inputText.length > 4_000 ||
-        /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(request.inputText) ||
-        !request.data || typeof request.data !== "object" || Array.isArray(request.data) ||
-        Object.keys(request.data).length === 0
-      ) throw new Error("Input request has an open or invalid shape");
-      return;
-    }
-    if (keys.some((key) => key !== "reason") ||
-        (request.reason !== undefined &&
-          (typeof request.reason !== "string" || request.reason.length > 1_000))) {
-      throw new Error(`${action} request has an open or invalid shape`);
-    }
-  }
-
-  private assertInputMatchesCommittedRequest(
-    task: StandardTaskRow,
-    revealed: Record<string, unknown>,
-  ): void {
-    const encrypted = task.metadata.standard_request_encrypted;
-    if (typeof encrypted !== "string") throw new Error("Committed standard request is unavailable");
-    let committed: unknown;
-    try {
-      committed = JSON.parse(decryptString(encrypted, {
-        purpose: "standard-order-request",
-        table: "transactions",
-        recordId: task.id,
-        field: "metadata.standard_request_encrypted",
-        recordVersion: 1,
-      }));
-    } catch {
-      throw new Error("Committed standard request cannot be authenticated");
-    }
-    if (!committed || typeof committed !== "object" || Array.isArray(committed)) {
-      throw new Error("Committed standard request is invalid");
-    }
-    const original = committed as Record<string, unknown>;
-    for (const [field, value] of Object.entries(revealed)) {
-      if (
-        field === "__proto__" || field === "constructor" || field === "prototype" ||
-        !Object.prototype.hasOwnProperty.call(original, field) ||
-        canonicalHash(original[field]) !== canonicalHash(value)
-      ) throw new Error("Lifecycle input changes the payer-committed request");
-    }
+  /// A completion answered inline carries the frozen unrevealed projection,
+  /// whose hash the attestation signs.
+  private async completionResult(task: StandardTaskRow): Promise<unknown> {
+    const { state } = await readLifecycleState(this.config, { orderId: task.standard_order_id, taskId: task.id });
+    if (state !== "completed") return undefined;
+    return (await loadFrozenTerminalProjection(pool, task.id))?.projection;
   }
 }

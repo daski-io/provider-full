@@ -16,11 +16,10 @@ const { appliesToFull, fixture } = await import("./providerWireFixture.js");
 /**
  * Every vendored request a full provider must refuse (envelope-negatives.json)
  * is refused with a 4xx before any lookup, admission or mutation, and no
- * status handler answers one with the no-claim 404. Lifecycle negatives are
- * driven with the lifecycle vectors.
+ * status handler answers one with the no-claim 404.
  */
 const negatives = fixture("envelope-negatives.json");
-const STATE_TABLES = /\b(?:standard_dispatch_claims|standard_provider_quotes|transactions|standard_evidence_admissions)\b/;
+const STATE_TABLES = /\b(?:standard_dispatch_claims|standard_provider_quotes|transactions|standard_evidence_admissions|standard_action_nonces)\b/;
 /**
  * Deliberate deviation: an authenticated dispatch envelope that has expired
  * is first checked, read-only, for an exact replay of an admitted claim, so a
@@ -58,10 +57,11 @@ beforeEach(async () => {
 
 describe("provider-wire envelope negatives", () => {
   const vectors = (negatives.vectors as Array<{ id: string; handler: string; appliesTo: string[] }>)
-    .filter((entry) => appliesToFull(entry) && entry.handler !== "lifecycle");
+    .filter((entry) => appliesToFull(entry));
 
-  it("covers every non-lifecycle handler", () => {
-    expect(new Set(vectors.map((entry) => entry.handler))).toEqual(new Set(["quote", "intake", "dispatch", "status"]));
+  it("covers every handler", () => {
+    expect(new Set(vectors.map((entry) => entry.handler)))
+      .toEqual(new Set(["quote", "intake", "dispatch", "status", "lifecycle"]));
   });
 
   it.each(vectors.map((entry) => [entry.id, entry] as const))("refuses %s before any lookup or mutation", async (_id, entry) => {

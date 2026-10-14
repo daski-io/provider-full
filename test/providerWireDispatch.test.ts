@@ -17,7 +17,7 @@ vi.mock("../src/core/engine/preExecuteRunner.js", () => ({
 
 const { ProviderEvidenceVerifier } = await import("../src/core/standardRail/evidence.js");
 const { acceptDispatchResponse, acceptIntakeResponse, readGatewayJson } = await import("./gatewayConsumer.js");
-const { WIRE_AUTHORIZATION_KEY, startWireHarness, wire } = await import("./providerWireHarness.js");
+const { WIRE_AUTHORIZATION_KEY, plantFrozenResult, startWireHarness, wire } = await import("./providerWireHarness.js");
 const fx = await import("./providerWireFixture.js");
 const { context, expectWireAnswer, fixture, keys, order, vector } = fx;
 
@@ -60,20 +60,6 @@ async function persistOrderQuote(): Promise<void> {
     vector(quote, "fixed.payer-lowercase.accepted"));
   const stored = await harness.database.pool.query("SELECT encode(quote_hash,'hex') AS hash FROM standard_provider_quotes");
   expect(stored.rows.map((row) => `0x${row.hash}`)).toContain(order.providerQuoteHash);
-}
-
-/** The vector's terminal task state: completed at its time with its frozen projection. */
-async function plantFrozenResult(provider: { result: unknown; resultHash: Hex; completedAt: number }): Promise<void> {
-  const { insertFrozenTerminalResult } = await import("../src/core/standardRail/terminalResult.js");
-  await harness.database.pool.query(
-    "UPDATE transactions SET status='completed',completed_at=to_timestamp($2) WHERE id=$1",
-    [order.providerTaskId, provider.completedAt],
-  );
-  await insertFrozenTerminalResult(harness.database.pool, {
-    transactionId: order.providerTaskId, state: "completed", completedAt: new Date(provider.completedAt * 1_000),
-    resultHash: provider.resultHash, projection: provider.result as never, references: [],
-    provenance: "terminal-transition", evidenceId: null,
-  });
 }
 
 beforeAll(async () => {
@@ -257,7 +243,7 @@ describe("provider-wire dispatch-status vectors", () => {
     await harness.at(context.times.dispatchAnswered);
     expect((await harness.send(dispatch.requests.initial.http)).status).toBe(200);
     const expected = vector(status, "completed-task.accepted");
-    await plantFrozenResult(expected.provider);
+    await plantFrozenResult(harness.database, expected.provider);
     await harness.at(expected.provider.now);
     expectWireAnswer(await harness.send(status.requests.completed.http), expected);
   });

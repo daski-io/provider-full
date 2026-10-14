@@ -27,6 +27,8 @@ export const wire = {
   readinessFailures: [] as string[],
   /** Every statement the provider issued since the last reset. */
   statements: [] as string[],
+  /** Runs before each provider statement, e.g. to emulate a concurrent writer. */
+  beforeQuery: null as ((text: string) => Promise<void>) | null,
   adapter: null as unknown as FulfillmentAdapter,
 };
 
@@ -43,6 +45,7 @@ function injectFault(text: unknown): void {
 export function poolModule() {
   const query = async (...args: unknown[]) => {
     injectFault(args[0]);
+    if (wire.beforeQuery && typeof args[0] === "string") await wire.beforeQuery(args[0]);
     return (wire.pool!.query as (...a: unknown[]) => unknown)(...args);
   };
   return {
@@ -53,6 +56,7 @@ export function poolModule() {
         const original = client.query.bind(client) as (...a: unknown[]) => Promise<unknown>;
         (client as unknown as { query: (...a: unknown[]) => Promise<unknown> }).query = async (...args) => {
           injectFault(args[0]);
+          if (wire.beforeQuery && typeof args[0] === "string") await wire.beforeQuery(args[0]);
           return original(...args);
         };
         return client;
@@ -104,7 +108,11 @@ export interface WireHarness {
   close(): Promise<void>;
 }
 
-export async function startWireHarness(label: string): Promise<WireHarness> {
+export async function startWireHarness(
+  label: string,
+  /** Core configuration the app is built with; per-client limits are bypassed for loopback by default. */
+  coreOverrides: Record<string, unknown> = { RATE_LIMIT_BYPASS_IPS: "127.0.0.1" },
+): Promise<WireHarness> {
   const database = await createMigratedDatabase(label);
   await database.pool.query(WIRE_CLOCK_SQL);
   wire.pool = new pg.Pool({
@@ -115,7 +123,7 @@ export async function startWireHarness(label: string): Promise<WireHarness> {
   });
   await database.pool.query("UPDATE services SET slug='notes',adapter_name='notes' WHERE id=$1", [serviceId]);
   const { config: coreConfig } = await import("../src/core/config.js");
-  Object.assign(coreConfig, { RATE_LIMIT_BYPASS_IPS: "127.0.0.1" });
+  Object.assign(coreConfig, coreOverrides);
   const { createProviderApp } = await import("../src/core/server.js");
   const server: Server = createProviderApp(wireConfig()).listen(0, "127.0.0.1");
   await once(server, "listening");
@@ -146,6 +154,7 @@ export async function startWireHarness(label: string): Promise<WireHarness> {
       wire.readinessFailures.length = 0;
       wire.taskIds.length = 0;
       wire.statements.length = 0;
+      wire.beforeQuery = null;
       const tables = (await database.pool.query<{ tablename: string }>(
         "SELECT tablename FROM pg_tables WHERE schemaname='public'",
       )).rows.map((row) => row.tablename).filter((table) => !KEPT_TABLES.has(table));
@@ -180,3 +189,22 @@ export async function startWireHarness(label: string): Promise<WireHarness> {
 
 /** The deposit authorization key the stubbed evidence verifier reports. */
 export const WIRE_AUTHORIZATION_KEY = `0x${"ab".repeat(32)}` as Hex;
+
+/** A vector's terminal task state: terminal at its time with its frozen projection. */
+export async function plantFrozenResult(
+  database: DisposableDatabase,
+  provider: { state?: string; frozenResult?: unknown; result?: unknown; resultHash: Hex; completedAt: number },
+  references: Array<{ artifactName: string; fieldPath: string }> = [],
+): Promise<void> {
+  const { insertFrozenTerminalResult } = await import("../src/core/standardRail/terminalResult.js");
+  const state = (provider.state ?? "completed") as "completed" | "failed" | "canceled";
+  await database.pool.query(
+    "UPDATE transactions SET status=$2,completed_at=to_timestamp($3) WHERE id=$1",
+    [order.providerTaskId, state, provider.completedAt],
+  );
+  await insertFrozenTerminalResult(database.pool, {
+    transactionId: order.providerTaskId, state, completedAt: new Date(provider.completedAt * 1_000),
+    resultHash: provider.resultHash, projection: (provider.frozenResult ?? provider.result) as never, references,
+    provenance: "terminal-transition", evidenceId: null,
+  });
+}

@@ -103,6 +103,16 @@ All notable changes to this project will be documented here.
   refused, and a verification outage stays retryable instead of looking like
   a wrong signature. Asset actions and queries verify the gateway grant
   before the payer signature, so an ungranted request never spends RPC.
+- Lifecycle calls verify the gateway grant before any authorization, accept
+  the gateway's grant-attested `DaskiReadCap` stub for status and artifact
+  reads (never for mutations), verify payer-signed authorizations against the
+  grant's payer before any lookup, and answer with exactly the gateway's keys,
+  a fresh signed `operations` observation and the frozen terminal identity.
+  Every lifecycle error is now one of the named refusals
+  (`artifact_unavailable`, `unsupported_action`, `action_conflict`,
+  `lifecycle_unavailable`) or a detail-free `401 lifecycle_rejected` instead
+  of a blanket 401, and lifecycle calls skip per-client and purchase limits
+  behind their own authentication-failure budget.
 - A standard order's terminal identity is frozen with its first terminal
   transition (core migration 006): state, completion time, the canonical
   unrevealed task projection encrypted at rest, its hash, protected artifact

@@ -448,6 +448,19 @@ exists for a different dispatch hash: reconcile the gateway order with the
 claim the provider holds rather than re-dispatching. `503 ...
 "admission_in_progress"` and `"unavailable"` clear on retry.
 
+### A lifecycle action is refused
+
+`401 lifecycle_rejected` is an authentication or binding failure and carries
+no detail by design: check the gateway lifecycle signer, environment, chain and
+provider audience, and that the payer and order match the provider's task.
+`409 unsupported_action` changed nothing (for example cancelling a terminal
+order, or input while the order is not waiting for it). `409 action_conflict`
+means the action's identity, such as a support `requestId`, already bound
+different content. `409 artifact_unavailable` means the order is not
+completed or its deliverable bytes are not retained. `503 lifecycle_unavailable`
+is retryable and claims nothing about an earlier attempt; a payer-signed retry
+needs a fresh authorization.
+
 ### A terminal order answers `dispatch_status_unavailable` or `lifecycle_unavailable`
 
 The order became terminal before frozen terminal results existed, or recorded

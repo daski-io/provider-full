@@ -16,23 +16,26 @@ type StandardRailRequest = Request & { rawBody?: Buffer; standardRailJson?: true
 
 const STATUS_PATH = /^\/dispatch\/status\/?$/;
 const STATUS_URL = /^\/standard-rail\/dispatch\/status\/?(?:\?.*)?$/;
+const LIFECYCLE_URL = /^\/standard-rail\/lifecycle\/?(?:\?.*)?$/;
 const DISPATCH_URL = /^\/standard-rail\/dispatch\/?(?:\?.*)?$/;
 
 /**
- * A gateway reconciliation read. It is polled roughly every ten seconds for
- * the whole life of an order, so it is exempt from purchase and per-client
- * rate limits; the process concurrency budget, the small body bound and
+ * Servicing traffic for admitted orders: the gateway's reconciliation status
+ * reads, polled roughly every ten seconds for the whole life of an order, and
+ * the lifecycle calls it proxies for every buyer from its own addresses. Both
+ * are exempt from purchase and per-client rate limits; the process
+ * concurrency budget, body bounds, an authentication-failure budget and
  * signature verification before any database read still apply.
  */
 export function isStandardRailStatusRead(req: Request): boolean {
-  return req.method === "POST" && STATUS_URL.test(req.originalUrl);
+  return req.method === "POST" && (STATUS_URL.test(req.originalUrl) || LIFECYCLE_URL.test(req.originalUrl));
 }
 
 export function isStandardRailDispatch(req: Request): boolean {
   return req.method === "POST" && DISPATCH_URL.test(req.originalUrl);
 }
 
-/** Run a rate limiter for every request except verified-servicing status reads. */
+/** Run a rate limiter for every request except servicing status and lifecycle traffic. */
 export function exceptStatusReads(
   limiter: (req: Request, res: Response, next: NextFunction) => void | Promise<void>,
 ): (req: Request, res: Response, next: NextFunction) => void | Promise<void> {
