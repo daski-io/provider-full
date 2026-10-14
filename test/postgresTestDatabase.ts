@@ -17,10 +17,14 @@ export interface MigratedTestDatabase {
 
 /**
  * A fresh database on the DATABASE_URL_TEST server with every core
- * migration applied, dropped again by `drop()`. The server must be a
- * disposable test instance; the suite never falls back to another one.
+ * migration applied (unless `migrate` is false), dropped again by `drop()`.
+ * The server must be a disposable test instance; the suite never falls back
+ * to another one.
  */
-export async function createMigratedTestDatabase(prefix: string): Promise<MigratedTestDatabase> {
+export async function createMigratedTestDatabase(
+  prefix: string,
+  { migrate = true }: { migrate?: boolean } = {},
+): Promise<MigratedTestDatabase> {
   const server = process.env.DATABASE_URL_TEST;
   if (!server) {
     throw new Error("set DATABASE_URL_TEST to a disposable PostgreSQL server for this test");
@@ -36,14 +40,16 @@ export async function createMigratedTestDatabase(prefix: string): Promise<Migrat
   const target = new URL(server);
   target.pathname = `/${name}`;
   const connectionString = target.toString();
-  const migrator = new pg.Client({ connectionString });
-  await migrator.connect();
-  try {
-    for (const file of readdirSync(migrationsDir).filter((entry) => entry.endsWith(".sql")).sort()) {
-      await migrator.query(readFileSync(join(migrationsDir, file), "utf8"));
+  if (migrate) {
+    const migrator = new pg.Client({ connectionString });
+    await migrator.connect();
+    try {
+      for (const file of readdirSync(migrationsDir).filter((entry) => entry.endsWith(".sql")).sort()) {
+        await migrator.query(readFileSync(join(migrationsDir, file), "utf8"));
+      }
+    } finally {
+      await migrator.end();
     }
-  } finally {
-    await migrator.end();
   }
   const pool = new pg.Pool({ connectionString, max: 4 });
   return {

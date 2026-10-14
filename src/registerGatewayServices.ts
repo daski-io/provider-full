@@ -94,7 +94,11 @@ function selectServices(active: ServiceRow[]): ServiceRow[] {
 // read-only and gateway access is GET only.
 async function forecast(gateway: string): Promise<void> {
   enforceReadOnlySessions(pool);
-  if (!await checkDatabase()) throw new Error("provider database is unreachable");
+  if (!await checkDatabase()) {
+    throw new Error(
+      "provider database is unreachable on read-only sessions; --check-only needs a connection that accepts the startup option -c default_transaction_read_only=on (a direct connection, or a pooler that passes startup options through)",
+    );
+  }
   await assertReadOnlySessions(pool);
   let failing = 0;
   for (const service of selectServices(await listActiveServices())) {
