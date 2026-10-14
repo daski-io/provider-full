@@ -210,10 +210,56 @@ export async function signedAction(options: SignedActionOptions) {
   return { request, authorization: { message, signature }, grant };
 }
 
-type ActionBody = Awaited<ReturnType<typeof signedAction>>;
+/** A signed wallet asset query, as the gateway forwards it for one provider. */
+export async function signedQuery(options: {
+  payer?: PrivateKeyAccount;
+  signature?: Hex;
+  limit?: number;
+}) {
+  const { walletAuthorizationHash, requestHash, utf8Hash, ZERO_HASH } = await import("../src/core/standardRail/walletAuthorization.js");
+  const { unsignedEnvelopeHash } = await import("../src/core/standardRail/canonical.js");
+  const payer = options.payer ?? payerA;
+  const now = Math.floor(Date.now() / 1_000);
+  const request = { limit: options.limit ?? 10, cursor: null };
+  const message: WalletActionAuthorizationV1 = {
+    payer: lower(payer), providerAgentId: "0", serviceId: ZERO_HASH,
+    providerControlProfileHash: ZERO_HASH, servicingAdmissionHash: ZERO_HASH,
+    actionCatalogHash: ZERO_HASH, actionCatalogSchemaHash: ZERO_HASH, actionDefinitionHash: ZERO_HASH,
+    actionCatalogEpoch: 0, actionHash: utf8Hash("list-assets"), methodHash: utf8Hash("POST"),
+    absoluteResourceUriHash: utf8Hash(wallet.gatewayAssetQueryUrl),
+    requestHash: requestHash({ providerAgentId: "77", ...request }),
+    audienceHash: utf8Hash(standard.gatewayAudience), nonce: random32(), issuedAt: now - 1, validBefore: now + 120,
+  };
+  const digest = walletAuthorizationHash(message, CHAIN_ID);
+  const signature = options.signature ?? await payer.sign({ hash: digest });
+  const grant: SignedEnvelope<ProviderWalletActionGrantV1> = {
+    artifactType: "ProviderWalletActionGrantV1", schemaVersion: 1, environment: standard.environment,
+    chainId: CHAIN_ID, audience: standard.providerAudience, signerKeyId: "gateway-lifecycle",
+    issuedAt: now - 1, validBefore: now + 120,
+    payload: {
+      payer: message.payer, providerAgentId: "77", serviceId: ZERO_HASH, actionHash: message.actionHash,
+      methodHash: message.methodHash, absoluteResourceUriHash: message.absoluteResourceUriHash,
+      requestHash: requestHash(request), walletAuthorizationHash: digest,
+      providerControlProfileHash: wallet.providerControlProfileHash, servicingAdmissionHash: wallet.servicingAdmissionHash,
+      servicingProfileEpoch: 3, actionCatalogHash: ZERO_HASH, actionCatalogSchemaHash: ZERO_HASH,
+      actionCatalogEpoch: 0, actionDefinitionHash: ZERO_HASH, gatewayAudienceHash: message.audienceHash,
+      providerAudienceHash: utf8Hash(standard.providerAudience), grantNonce: random32(),
+    },
+    signature: "0x" as Hex,
+  };
+  grant.signature = await gateway.signMessage({
+    message: { raw: unsignedEnvelopeHash(grant as unknown as Record<string, unknown>) },
+  });
+  return { request, authorization: { message, signature }, grant };
+}
+
+interface GrantedBody {
+  authorization: { message: WalletActionAuthorizationV1 };
+  grant: SignedEnvelope<ProviderWalletActionGrantV1>;
+}
 
 /** The same authorized request under a fresh gateway grant, as the gateway sends a retry. */
-export async function regrant(body: ActionBody): Promise<ActionBody> {
+export async function regrant<T extends GrantedBody>(body: T): Promise<T> {
   const { unsignedEnvelopeHash } = await import("../src/core/standardRail/canonical.js");
   const now = Math.floor(Date.now() / 1_000);
   const grant: SignedEnvelope<ProviderWalletActionGrantV1> = {

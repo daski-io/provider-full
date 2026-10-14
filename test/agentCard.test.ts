@@ -418,7 +418,28 @@ describe("agent card generator", () => {
     expect(ext.auth).toEqual({
       openFreeA2aOnly: true,
       managedOrdersAndAssets: "Daski gateway wallet authorization",
+      payerAccounts: { types: ["eoa"], counterfactual: false },
     });
+  });
+
+  it("publishes exactly the payer account types its verifier admits", async () => {
+    const { config } = await import("../src/core/config.js");
+    const { payerAccountPolicy, resetPayerSignatureDefaults } = await import(
+      "../src/core/standardRail/payerSignature.js"
+    );
+    const configured = config.PAYER_ACCOUNT_TYPES;
+    try {
+      Object.assign(config, { PAYER_ACCOUNT_TYPES: "contract,eoa" });
+      resetPayerSignatureDefaults();
+      const ext = generateAgentCard(makeService(), [makeSkill()]).extensions[
+        DASKI_EXT_URI
+      ] as { auth: { payerAccounts: unknown } };
+      expect(ext.auth.payerAccounts).toEqual({ types: ["eoa", "contract"], counterfactual: false });
+      expect(ext.auth.payerAccounts).toEqual(payerAccountPolicy());
+    } finally {
+      Object.assign(config, { PAYER_ACCOUNT_TYPES: configured });
+      resetPayerSignatureDefaults();
+    }
   });
 
   it("surfaces open versus gateway-managed access per skill", () => {

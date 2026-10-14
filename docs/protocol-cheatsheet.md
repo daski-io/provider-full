@@ -460,7 +460,8 @@ asset query authorizations) goes through `src/core/standardRail/payerSignature.t
   must have deployed code and `isValidSignature(bytes32,bytes)` must return
   exactly `0x1626ba7e` followed by 28 zero bytes from an `eth_call` capped at
   1,000,000 gas and 16 KiB of response. At most eight contract verifications
-  run at once.
+  run at once, and at most two for one payer (the payer the gateway's grant
+  attests), so one payer cannot occupy the whole budget.
 - A revert, another value, missing code or a malformed answer is an invalid
   signature. Transport failure on the primary and one fallback, the deadline
   or the concurrency bound is a retryable outage: it never consumes a provider
@@ -469,3 +470,9 @@ asset query authorizations) goes through `src/core/standardRail/payerSignature.t
 The asset action and asset query surfaces verify the gateway grant (an offline
 recovery) before the payer signature, so a request without a valid grant
 never reaches the chain.
+
+Each AgentCard's Daski extension publishes the enforced policy as
+`auth.payerAccounts`, `{ "types": ["eoa"], "counterfactual": false }` or
+`{ "types": ["eoa", "contract"], "counterfactual": false }`, derived from the
+same parsed setting the verifier uses. `contract` is refused at boot in mock
+chain mode, which has no RPC to verify a contract account.

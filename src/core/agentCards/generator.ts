@@ -8,6 +8,7 @@ import {
   buildSkillMetadata,
 } from "./skillMetadata.js";
 import { getService } from "../serviceRegistry/registry.js";
+import { payerAccountPolicy } from "../standardRail/payerSignature.js";
 import {
   buildContractExtension,
   DASKI_CONTRACT_EXTENSION_URI,
@@ -92,6 +93,9 @@ export function generateAgentCard(
         auth: {
           openFreeA2aOnly: true,
           managedOrdersAndAssets: "Daski gateway wallet authorization",
+          // The payer accounts whose signatures this provider verifies,
+          // exactly as its verifier enforces them.
+          payerAccounts: payerAccountPolicy(),
         },
         skills: buildSkillMetadata(service, activeSkills),
       },

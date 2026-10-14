@@ -189,6 +189,11 @@ All notable changes to this project will be documented here.
   from both owners and ends `failed` with `asset_owner_changed`. Fenced
   wallet-action transactions now run read committed so a read after the
   fence sees what committed before it.
+- Each AgentCard publishes the payer account policy exactly as the verifier
+  enforces it (`auth.payerAccounts`, never counterfactual accounts),
+  `PAYER_ACCOUNT_TYPES` with `contract` is refused at boot in mock chain
+  mode, and one payer may hold at most two of the eight concurrent
+  contract-account verifications.
 - Services that deliver asset information to its owner have a generic
   owner-fenced delivery admission (core migration 013,
   `deliverAssetInformation`): the delivery is admitted under the asset owner

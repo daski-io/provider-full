@@ -22,6 +22,19 @@ describe("mock-mode security boundary", () => {
     ).toThrow(/loopback/);
   });
 
+  it("refuses contract payer accounts, which only a live chain RPC can verify", () => {
+    expect(() => parseConfig(mockEnvironment({ PAYER_ACCOUNT_TYPES: "eoa,contract" })))
+      .toThrow(/PAYER_ACCOUNT_TYPES/);
+    expect(() => parseConfig(mockEnvironment({ PAYER_ACCOUNT_TYPES: "eoa" }))).not.toThrow();
+    expect(() => parseConfig(mockEnvironment({ PAYER_ACCOUNT_TYPES: "contract" })))
+      .toThrow(/PAYER_ACCOUNT_TYPES/);
+    expect(() => parseConfig({
+      ...mockEnvironment({ PAYER_ACCOUNT_TYPES: "eoa,contract" }),
+      CHAIN_MODE: "live",
+      BASE_URL: "https://provider.example",
+    })).not.toThrow();
+  });
+
   it("requires an explicit mock buyer wallet", () => {
     const env = mockEnvironment();
     delete env.MOCK_BUYER_WALLET_ADDRESS;

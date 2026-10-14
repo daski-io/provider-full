@@ -28,7 +28,14 @@ import { logWarn } from "../logger.js";
 //      other value or a malformed result is final; transport failure on the
 //      primary and one fallback is distinct and retryable.
 //
-// Signatures and typed data are never logged.
+// At most eight contract verifications run at once in the process, and at
+// most two for one payer, so a single payer cannot occupy the whole budget.
+// Every caller reaches this verifier only after the gateway's grant
+// verified, so that payer is the one the grant attests.
+//
+// The policy is published exactly as enforced (payerAccountPolicy, in each
+// AgentCard), never with counterfactual accounts. Signatures and typed data
+// are never logged.
 
 export const PAYER_SIGNATURE_MAX_BYTES = 4_096;
 export const ERC1271_MAGIC_VALUE: Hex = "0x1626ba7e";
@@ -37,6 +44,7 @@ export const ERC1271_MAGIC_RETURN: Hex = `0x1626ba7e${"0".repeat(56)}`;
 export const ERC1271_CALL_GAS = 1_000_000n;
 export const ERC1271_RESPONSE_MAX_BYTES = 16 * 1024;
 export const PAYER_CONTRACT_VERIFY_CONCURRENCY = 8;
+export const PAYER_CONTRACT_VERIFY_PER_PAYER = 2;
 const SIGNATURE_PATTERN = /^0x(?:[0-9a-fA-F]{2}){1,4096}$/;
 const ERC6492_MAGIC_SUFFIX = "6492".repeat(16);
 const SECP256K1_HALF_ORDER = 0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0n;
@@ -102,6 +110,7 @@ export interface PayerSignatureVerifierOptions {
 }
 
 let contractVerificationsInFlight = 0;
+const contractVerificationsByPayer = new Map<string, number>();
 let defaultOptions: PayerSignatureVerifierOptions | null = null;
 
 const fail = (code: PayerSignatureErrorCode): never => {
@@ -318,18 +327,39 @@ export async function verifyPayerTypedData(
   if (!options.accountTypes.has("contract")) fail("SIGNATURE_INVALID");
   if (isErc6492Wrapper(args.signature)) fail("SIGNATURE_COUNTERFACTUAL_REJECTED");
   const hash = hashTypedData(typedData);
-  if (contractVerificationsInFlight >= PAYER_CONTRACT_VERIFY_CONCURRENCY) fail("SIGNATURE_VERIFICATION_BUSY");
+  const payerKey = payer.toLowerCase();
+  const payerInFlight = contractVerificationsByPayer.get(payerKey) ?? 0;
+  if (
+    contractVerificationsInFlight >= PAYER_CONTRACT_VERIFY_CONCURRENCY ||
+    payerInFlight >= PAYER_CONTRACT_VERIFY_PER_PAYER
+  ) fail("SIGNATURE_VERIFICATION_BUSY");
   contractVerificationsInFlight += 1;
+  contractVerificationsByPayer.set(payerKey, payerInFlight + 1);
   let observation: ContractObservation;
   try {
     observation = await observeContract(payer, hash, args.signature, options);
   } finally {
     contractVerificationsInFlight -= 1;
+    const remaining = (contractVerificationsByPayer.get(payerKey) ?? 1) - 1;
+    if (remaining > 0) contractVerificationsByPayer.set(payerKey, remaining);
+    else contractVerificationsByPayer.delete(payerKey);
   }
   if (observation.outcome === "returned" && observation.data.toLowerCase() === ERC1271_MAGIC_RETURN) {
     return { accountType: "contract", verifiedVia: "erc1271" };
   }
   return fail("SIGNATURE_INVALID");
+}
+
+/**
+ * The payer account policy exactly as the verifier enforces it, for
+ * publication: the admitted account types, and never counterfactual ones.
+ */
+export function payerAccountPolicy(): { types: PayerAccountType[]; counterfactual: false } {
+  const admitted = resolveOptions().accountTypes;
+  return {
+    types: (["eoa", "contract"] as const).filter((type) => admitted.has(type)),
+    counterfactual: false,
+  };
 }
 
 /** Test seam: forget the process-wide options derived from the environment. */

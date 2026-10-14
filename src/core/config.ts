@@ -46,6 +46,14 @@ export function parsePayerAccountTypes(value: string): ReadonlySet<PayerAccountT
   return types;
 }
 
+function payerAccountTypesOrNull(value: string): ReadonlySet<PayerAccountType> | null {
+  try {
+    return parsePayerAccountTypes(value);
+  } catch {
+    return null;
+  }
+}
+
 /** Strict environment boolean parser; unlike Boolean("false"), false stays false. */
 export const strictBooleanEnv = z.preprocess((value) => {
   if (typeof value === "boolean" || value === undefined) return value;
@@ -363,6 +371,12 @@ const envSchema = z.object({
   }
   if (!env.GATEWAY_BASE_URL) {
     reject("GATEWAY_BASE_URL", "the standard rail requires the public gateway base URL");
+  }
+  // A contract account is verified through BASE_RPC_URL, which mock chain
+  // mode never consults: admitting contract payers there would turn every
+  // one of them into a verification outage instead of failing at boot.
+  if (env.CHAIN_MODE === "mock" && payerAccountTypesOrNull(env.PAYER_ACCOUNT_TYPES)?.has("contract")) {
+    reject("PAYER_ACCOUNT_TYPES", "contract payer accounts require CHAIN_MODE=live, whose RPC verifies them");
   }
   if (env.CHAIN_MODE === "mock" && !isLoopbackUrl(env.BASE_URL)) {
     reject("BASE_URL", "mock chain mode requires a loopback BASE_URL");

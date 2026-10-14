@@ -39,6 +39,7 @@ free reads may be called anonymously.
 | Concern | Required mechanism |
 | --- | --- |
 | Wallet authority | Recover the exact wallet authorization and match the expected payer, request, action, audience, and lifetime. |
+| Payer accounts | EOAs always; deployed ERC-1271 accounts only when `PAYER_ACCOUNT_TYPES` includes `contract` (live chain mode), through one bounded verification with a per-payer share; counterfactual wrappers never. The AgentCard publishes the policy exactly as enforced. |
 | Gateway authority | Verify the configured gateway signer and independently signed provider grant. |
 | Payment | Verify finalized standard dispatch and release evidence bound to provider, service, skill, payer, amount, recipe, and order. |
 | Replay | Atomically consume wallet, provider-grant, dispatch, and envelope nonces in PostgreSQL. |

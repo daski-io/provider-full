@@ -10,6 +10,8 @@ import {
   httpPayerRpcEndpoint,
   isPayerSignatureShape,
   PAYER_CONTRACT_VERIFY_CONCURRENCY,
+  PAYER_CONTRACT_VERIFY_PER_PAYER,
+  payerAccountPolicy,
   PayerSignatureError,
   resetPayerSignatureDefaults,
   verifyPayerTypedData,
@@ -121,6 +123,10 @@ describe("payer signature shape and EOA path", () => {
       .code).toBe("SIGNATURE_INVALID");
   });
 
+  it("publishes the enforced account policy, never counterfactual accounts", () => {
+    expect(payerAccountPolicy()).toEqual({ types: ["eoa"], counterfactual: false });
+  });
+
   it("parses the account policy, which always includes eoa", () => {
     expect([...parsePayerAccountTypes("eoa")]).toEqual(["eoa"]);
     expect([...parsePayerAccountTypes(" EOA , contract ")]).toEqual(["eoa", "contract"]);
@@ -196,13 +202,37 @@ describe("payer signature contract path", () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
     const held = endpoint("held", { code: async () => { await gate; return "0x6080"; } });
-    const pending = Array.from({ length: PAYER_CONTRACT_VERIFY_CONCURRENCY }, () => verify(contractPolicy([held])));
+    const payers = Array.from({ length: PAYER_CONTRACT_VERIFY_CONCURRENCY + 1 }, (_value, index) =>
+      getAddress(`0x${(index + 1).toString(16).padStart(40, "7")}`));
+    const verifyFor = (account: Address) =>
+      verifyPayerTypedData({ payer: account, typedData, signature: contractSignature }, contractPolicy([held]));
+    const pending = payers.slice(0, -1).map(verifyFor);
     await vi.waitFor(() => expect(held.calls.length).toBe(PAYER_CONTRACT_VERIFY_CONCURRENCY));
-    expect(await rejection(verify(contractPolicy([held])))).toMatchObject({
+    expect(await rejection(verifyFor(payers.at(-1)!))).toMatchObject({
       code: "SIGNATURE_VERIFICATION_BUSY", retryable: true,
     });
     release();
     await expect(Promise.all(pending)).resolves.toHaveLength(PAYER_CONTRACT_VERIFY_CONCURRENCY);
+  });
+
+  it("lets one payer hold only its share of the verification budget", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const held = endpoint("held", { code: async () => { await gate; return "0x6080"; } });
+    const pending = Array.from({ length: PAYER_CONTRACT_VERIFY_PER_PAYER }, () => verify(contractPolicy([held])));
+    await vi.waitFor(() => expect(held.calls.length).toBe(PAYER_CONTRACT_VERIFY_PER_PAYER));
+    // The same payer, in any letter case, is busy; another payer is not.
+    expect(await rejection(verifyPayerTypedData({
+      payer: contractPayer.toLowerCase() as Address, typedData, signature: contractSignature,
+    }, contractPolicy([held])))).toMatchObject({ code: "SIGNATURE_VERIFICATION_BUSY", retryable: true });
+    const other = verifyPayerTypedData({
+      payer: getAddress("0x6666666666666666666666666666666666666666"), typedData, signature: contractSignature,
+    }, contractPolicy([held]));
+    await vi.waitFor(() => expect(held.calls.length).toBe(PAYER_CONTRACT_VERIFY_PER_PAYER + 1));
+    release();
+    await expect(Promise.all([...pending, other])).resolves.toHaveLength(PAYER_CONTRACT_VERIFY_PER_PAYER + 1);
+    // Both shares are free again once the verifications ended.
+    await expect(verify(contractPolicy([endpoint("free", {})]))).resolves.toMatchObject({ accountType: "contract" });
   });
 });
 
