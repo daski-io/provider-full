@@ -6,7 +6,7 @@ import type { Hex } from "viem";
 import { vi } from "vitest";
 import type { FulfillmentAdapter, ServiceModule } from "../src/core/serviceRegistry/types.js";
 import { createMigratedDatabase, type DisposableDatabase } from "./postgresHarness.js";
-import { fixedListing, dynamicListing, order, wireConfig, type WireAnswer } from "./providerWireFixture.js";
+import { context, fixedListing, dynamicListing, order, wireConfig, type WireAnswer } from "./providerWireFixture.js";
 import { seedFixtureService } from "./standardRailFixture.js";
 
 /*
@@ -22,6 +22,9 @@ export const wire = {
   pool: null as pg.Pool | null,
   /** Task ids handed to new admissions; the fixture order's task by default. */
   taskIds: [] as string[],
+  /** Support message and Review ids handed out next; the fixture's by default. */
+  supportMessageIds: [] as string[],
+  supportReviewIds: [] as string[],
   /** SQL fragments whose next execution fails like a lost connection. */
   faults: [] as string[],
   readinessFailures: [] as string[],
@@ -83,7 +86,11 @@ export function registryModule() {
 }
 
 export function identifiersModule() {
-  return { newStandardTaskId: () => wire.taskIds.shift() ?? order.providerTaskId };
+  return {
+    newStandardTaskId: () => wire.taskIds.shift() ?? order.providerTaskId,
+    newSupportMessageId: () => wire.supportMessageIds.shift() ?? context.support.messageId,
+    newSupportReviewId: () => wire.supportReviewIds.shift() ?? context.support.reviewId,
+  };
 }
 
 const WIRE_CLOCK_SQL = `
@@ -153,6 +160,8 @@ export async function startWireHarness(
       wire.faults.length = 0;
       wire.readinessFailures.length = 0;
       wire.taskIds.length = 0;
+      wire.supportMessageIds.length = 0;
+      wire.supportReviewIds.length = 0;
       wire.statements.length = 0;
       wire.beforeQuery = null;
       const tables = (await database.pool.query<{ tablename: string }>(

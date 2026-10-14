@@ -2,10 +2,11 @@ import { revealFrozenTaskProjection } from "../a2a/responseBuilder.js";
 import { pool } from "../db/pool.js";
 import type { ProviderStandardRailConfig } from "./config.js";
 import { authenticateLifecycleCall, type LifecycleCall } from "./lifecycleAuthorization.js";
-import { artifactUnavailable, unsupportedAction } from "./lifecycleErrors.js";
+import { artifactUnavailable } from "./lifecycleErrors.js";
 import { applyLifecycleCancel, applyLifecycleInput } from "./lifecycleMutations.js";
 import { readLifecycleState, signedLifecycleAnswer, type LifecycleAnswerV1 } from "./lifecycleResponse.js";
 import { consumeLifecycleNonce, loadLifecycleTask, type StandardTaskRow } from "./lifecycleStore.js";
+import { acceptSupportRequest } from "./orderSupport.js";
 import { loadFrozenTerminalProjection } from "./terminalResult.js";
 
 /**
@@ -17,8 +18,8 @@ import { loadFrozenTerminalProjection } from "./terminalResult.js";
  *
  * Status never carries a result. Artifact carries the frozen projection of a
  * completed order: unrevealed under a read capability, with its protected
- * references revealed under the payer's fresh signature. Every failure is a
- * named refusal (lifecycleErrors.ts).
+ * references revealed under the payer's fresh signature. Support answers its
+ * durable receipt. Every failure is a named refusal (lifecycleErrors.ts).
  */
 export class StandardLifecycleService {
   constructor(private readonly config: ProviderStandardRailConfig, private readonly chainId: number) {}
@@ -33,8 +34,10 @@ export class StandardLifecycleService {
         return signedLifecycleAnswer(this.config, order);
       case "artifact":
         return signedLifecycleAnswer(this.config, order, { result: await this.artifactResult(task, call) });
-      case "support":
-        throw unsupportedAction("Support receipts are not offered");
+      case "support": {
+        const supportReceipt = await acceptSupportRequest(this.config, task, call);
+        return signedLifecycleAnswer(this.config, order, { result: { supportReceipt } });
+      }
       case "input": {
         const { state } = await readLifecycleState(this.config, order);
         await applyLifecycleInput(task, call, state);

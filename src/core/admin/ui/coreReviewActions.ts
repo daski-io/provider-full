@@ -6,6 +6,7 @@ import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/queryable.js";
 import { recordMandatoryAudit } from "../../events/emitter.js";
 import { replaceProviderWriteWithBoundedFee } from "../../chain/providerWriteCoordinator.js";
+import { SUPPORT_REVIEW_KIND } from "../../standardRail/orderSupport.js";
 import type { ReviewActionTool } from "./reviewActionTools.js";
 import type { OperatorTool } from "../../agents/operatorAgent/tools/shared.js";
 import {
@@ -129,6 +130,37 @@ const resolveOperationalReview: ReviewActionTool = {
   },
 };
 
+const resolveOrderSupport: ReviewActionTool = {
+  name: "resolve_order_support",
+  description: "Record a disposition for a buyer's standard-order support request and close its review.",
+  async execute(args, ctx) {
+    if (ctx.directAdminApproval !== true || ctx.mode !== "human") {
+      throw new Error("direct review approval is required");
+    }
+    const row = await reviewForContext(ctx.escalationId);
+    if (row.review_kind !== SUPPORT_REVIEW_KIND || row.target_type !== "transaction") {
+      throw new Error("review is not a standard-order support case");
+    }
+    const note = text(args.note, "operator note").slice(0, 2_000);
+    // Closing the review closes operations.support under a higher revision
+    // in this same transaction (core migration 007).
+    await inTransaction(pool, async (db) => {
+      const closed = await closeEscalation({ id: row.id, status: "resolved", resolved_by: ctx.actor, response: note }, db);
+      if (!closed) throw new Error("support review changed before closure");
+      await recordMandatoryAudit(db, {
+        transactionId: row.transaction_id ?? undefined,
+        source: "admin",
+        actor: ctx.actor,
+        type: "review.order_support.resolved",
+        message: "An operator resolved a buyer's standard-order support request.",
+        payload: { escalationId: row.id },
+      });
+    });
+    ctx.escalationClosed = true;
+    return JSON.stringify({ ok: true });
+  },
+};
+
 const retryProviderNonceGap: ReviewActionTool = {
   name: "retry_provider_nonce_gap",
   description: "Broadcast one bounded same-nonce replacement for the exact reviewed provider write.",
@@ -161,6 +193,7 @@ export function coreReviewActionTools(): ReviewActionTool[] {
   return [
     closeEmailTriage,
     resolveOperationalReview,
+    resolveOrderSupport,
     retryProviderNonceGap,
     asReviewAction(reconcileReputationOutcomeTool),
     asReviewAction(retryReputationOutcomeOnceTool),

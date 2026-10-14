@@ -60,6 +60,8 @@ export async function markEscalated(
 }
 
 export interface CreateHumanEscalationArgs {
+  /** A pre-minted id for a new escalation; a deduplicated one keeps its own. */
+  id?: string;
   source: EscalationSource;
   question: string;
   transactionId?: string | null;
@@ -96,6 +98,7 @@ export async function createHumanEscalation(
 ): Promise<EscalationRow> {
   const work = async (tx: Queryable): Promise<EscalationRow> => {
     const escalation = await createEscalation({
+      id: args.id,
       transaction_id: args.transactionId ?? null,
       question: args.question,
       source: args.source,

@@ -204,8 +204,6 @@ describe("named refusals and negotiated views (F-T10)", () => {
     }
     const unfinished = await call({ action: "artifact", now: T });
     expect([unfinished.status, unfinished.body]).toEqual([409, { error: "artifact_unavailable" }]);
-    const support = await call({ action: "support", form: "payer-signed", now: T, request: { requestId: "s-1", message: "Hi" } });
-    expect([support.status, support.body]).toEqual([409, { error: "unsupported_action" }]);
     const unknown = await call({ action: "confirmation", form: "payer-signed", now: T });
     expect([unknown.status, unknown.body]).toEqual([409, { error: "unsupported_action" }]);
   });

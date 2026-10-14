@@ -138,9 +138,10 @@ returned.
 - `operations` is `{schemaVersion: 1, revision, observedAt, fulfillment,
   support, recovery}`. The semantic projection and its revision are persisted
   with the claim (core migration 004); `fulfillment` and `recovery` are always
-  `null` in this starter, and all-null content keeps revision 0 forever. A
-  database trigger requires a higher revision for any content change and
-  refuses a revision change without one.
+  `null` in this starter, `support` appears once a support receipt exists,
+  and all-null content keeps revision 0 forever. A database trigger requires
+  a higher revision for any content change and refuses a revision change
+  without one.
 - `observedAt` is the database clock at the moment of the read. Every answer
   is built and signed for its request: the gateway accepts observations at
   most 300 s old and 30 s in the future, so a cached signed body goes stale.
@@ -255,6 +256,24 @@ fresh signature. An `input` that completes the order carries the frozen
 unrevealed projection, whose hash the attestation signs. `operations` is
 observed afresh and signed per answer, as for dispatch. No `inputRequest` or
 `documents` view is added, whether or not `daski-order-status-view` asks.
+
+`support` takes exactly `{requestId, message}`: the gateway's business
+`requestId` (1 to 128 of `A-Za-z0-9_-`, kept by the buyer across retries) and
+1 to 4,000 non-blank characters without control characters other than tab and
+line breaks. It is deduplicated by order, payer and `requestId`, bound to the
+hash of the request (core migration 007): a retry with the same body under a
+fresh authorization returns the original receipt, while different content
+under the same `requestId` is `action_conflict`. A new request records the
+protected buyer message (never part of the task projection), opens or joins
+the order's human support Review (`standard_order_support`), and publishes
+`operations.support = {reviewId, status: "open", lastAcceptedRequest:
+{requestId, messageId, acceptedAt}}` under a higher revision in the same
+transaction. The answer's `result` is `{supportReceipt: {requestId, messageId,
+reviewId, acceptedAt}}` with UUID ids and an ISO time; terminal evidence is
+untouched. Closing the Review (the `resolve_order_support` review action, or
+any path that closes it) reports `status: "closed"` under a higher revision in
+that same transaction; a later request opens a new Review. Operator replies
+are not published in this release.
 
 Every failure is a refusal with exactly one key:
 

@@ -103,6 +103,14 @@ All notable changes to this project will be documented here.
   refused, and a verification outage stays retryable instead of looking like
   a wrong signature. Asset actions and queries verify the gateway grant
   before the payer signature, so an ungranted request never spends RPC.
+- Support accepts the gateway's `{requestId, message}`, deduplicated by
+  order, payer and `requestId` against its content hash (core migration 007):
+  a retry under a fresh authorization returns the original signed
+  `supportReceipt` with UUID message and Review ids, and changed content is
+  `action_conflict`. Each request records the protected buyer message, opens
+  or joins the order's human support Review and publishes `operations.support`
+  under a higher revision; closing the Review publishes `closed` the same way.
+  Support never touches terminal evidence.
 - Lifecycle calls verify the gateway grant before any authorization, accept
   the gateway's grant-attested `DaskiReadCap` stub for status and artifact
   reads (never for mutations), verify payer-signed authorizations against the

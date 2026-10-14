@@ -14,6 +14,7 @@ const { encryptString } = await import("../src/core/chain/encryption.js");
 const { canonicalJson } = await import("../src/core/standardRail/canonical.js");
 const { WIRE_AUTHORIZATION_KEY, plantFrozenResult, startWireHarness, wire } = await import("./providerWireHarness.js");
 const { context, expectWireAnswer, fixture, order, vector } = await import("./providerWireFixture.js");
+const { LIFECYCLE_HTTP, lifecycleBody } = await import("./lifecycleWire.js");
 
 /**
  * Drives full's lifecycle handler through every vendored lifecycle and
@@ -119,6 +120,43 @@ describe("provider-wire lifecycle reads", () => {
     expectWireAnswer(await send("artifact.read-capability.working"), vector(lifecycle, "artifact.unavailable"));
     wire.faults.push("AND standard_payer IS NOT NULL");
     expectWireAnswer(await send("status.read-capability.working"), vector(lifecycle, "status.unavailable.read-capability"));
+  });
+});
+
+describe("provider-wire support receipts", () => {
+  const completedOrder = async () => {
+    await admittedOrder();
+    await plantFrozenResult(harness.database, vector(lifecycle, "status.completed-task.accepted").provider);
+  };
+
+  it("accepts a support request after completion: a receipt, a higher revision, the same identity", async () => {
+    await completedOrder();
+    expectWireAnswer(await send("support.payer-signed"), vector(lifecycle, "support.receipt.accepted"));
+  });
+
+  it("refuses the same requestId bound to a different message as a conflict", async () => {
+    await completedOrder();
+    const at = lifecycle.requests["support.payer-signed"].gateway.now - 60;
+    await harness.at(at);
+    const first = await harness.send({ url: LIFECYCLE_HTTP.url, headers: LIFECYCLE_HTTP.headers, body: await lifecycleBody({
+      action: "support", form: "payer-signed", now: at,
+      request: { requestId: context.support.requestId, message: "A different first message." },
+    }) });
+    expect(first.status).toBe(200);
+    expectWireAnswer(await send("support.payer-signed"), vector(lifecycle, "support.conflict"));
+  });
+
+  it("keeps the terminal identity when a support message raises the operations revision", async () => {
+    await completedOrder();
+    const expected = vector(terminal, "task-projection.after-support-message.accepted");
+    const at = expected.provider.operations.support.lastAcceptedRequest.acceptedAt;
+    await harness.at(at);
+    const accepted = await harness.send({ url: LIFECYCLE_HTTP.url, headers: LIFECYCLE_HTTP.headers, body: await lifecycleBody({
+      action: "support", form: "payer-signed", now: at,
+      request: { requestId: context.support.requestId, message: "Is the note saved?" },
+    }) });
+    expect(accepted.status).toBe(200);
+    expectWireAnswer(await send("status.payer-signed.completed"), expected);
   });
 });
 

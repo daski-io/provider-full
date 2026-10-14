@@ -28,6 +28,8 @@ export type EventSource =
 export type EventSeverity = "debug" | "info" | "warn" | "error";
 
 export interface EmitEventArgs {
+  /** A pre-minted event id, for a caller that publishes it (support receipts). */
+  id?: string;
   transactionId?: string;
   assetId?: string;
   serviceId?: string;
@@ -77,7 +79,7 @@ function protectedEventContext(eventId: string) {
 }
 
 function eventValues(args: EmitEventArgs): unknown[] {
-  const id = randomUUID();
+  const id = args.id ?? randomUUID();
   const protectedCustomerEvent = CUSTOMER_EVENT_TYPES.has(args.type);
   if (protectedCustomerEvent && !args.transactionId) {
     throw new Error(`${args.type} requires a transaction id`);
@@ -114,12 +116,14 @@ function eventValues(args: EmitEventArgs): unknown[] {
   ];
 }
 
-/** Write a required audit row inside the caller's business transaction. */
+/** Write a required audit row inside the caller's business transaction; returns its id. */
 export async function recordMandatoryAudit(
   db: Queryable,
   args: EmitEventArgs,
-): Promise<void> {
-  await db.query(INSERT, eventValues({ ...args, mandatory: true }));
+): Promise<string> {
+  const values = eventValues({ ...args, mandatory: true });
+  await db.query(INSERT, values);
+  return values[0] as string;
 }
 
 export async function emitEvent(args: EmitEventArgs): Promise<void> {

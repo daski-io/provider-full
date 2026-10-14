@@ -7,3 +7,13 @@ import { randomUUID } from "node:crypto";
 export function newStandardTaskId(): string {
   return `task-${randomUUID()}`;
 }
+
+/** The id of a buyer support message, published in its support receipt. */
+export function newSupportMessageId(): string {
+  return randomUUID();
+}
+
+/** The id a newly opened support Review takes, published in its receipt. */
+export function newSupportReviewId(): string {
+  return randomUUID();
+}

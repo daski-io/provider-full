@@ -80,6 +80,8 @@ export interface EscalationRow {
 }
 
 export async function createEscalation(args: {
+  /** A pre-minted id for a new escalation; a deduplicated one keeps its own. */
+  id?: string;
   transaction_id: string | null;
   question: string;
   source: EscalationSource;
@@ -97,7 +99,7 @@ export async function createEscalation(args: {
   available_actions?: ReviewAction[];
   review_due_at?: Date | null;
 }, existingDb?: Queryable): Promise<EscalationRow> {
-  const id = randomUUID();
+  const id = args.id ?? randomUUID();
   const severity = args.severity ?? "warning";
   const reviewKind = args.review_kind
     ?? (args.source === "pre_execute" ? "pre_execute_resolution" : "unclassified_review");

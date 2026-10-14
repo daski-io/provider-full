@@ -461,6 +461,15 @@ completed or its deliverable bytes are not retained. `503 lifecycle_unavailable`
 is retryable and claims nothing about an earlier attempt; a payer-signed retry
 needs a fresh authorization.
 
+### A support request stays open
+
+Each accepted support request opens or joins the order's
+`standard_order_support` Review. Record the disposition with the
+`resolve_order_support` review action; the order's `operations.support` then
+reports `closed` under a higher revision. A support `requestId` reused with a
+different message is refused as `action_conflict`: the buyer needs a new
+`requestId` for a new message.
+
 ### A terminal order answers `dispatch_status_unavailable` or `lifecycle_unavailable`
 
 The order became terminal before frozen terminal results existed, or recorded
