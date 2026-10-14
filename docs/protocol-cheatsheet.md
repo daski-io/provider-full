@@ -376,8 +376,14 @@ the manifest matches its record; the directory is checked out with `-text`.
 The vector tests drive the real quote, intake, dispatch, status and lifecycle
 handlers against a disposable PostgreSQL database with a frozen clock and
 require byte-for-byte canonical equality with each vector a full provider
-answers. To re-vendor after an intentional gateway change, from a gateway
-checkout at the new commit:
+answers. The tests also carry a port of the gateway's dispatch and lifecycle
+consumers that must reproduce the gateway's verdict on every vector,
+including the rejected forms no provider should send; every dispatch, status
+and lifecycle answer the wire tests receive is then judged by that port
+against the gateway's stored view of the order, so a lifecycle answer the
+gateway would reject, an unnamed 409 or 503 refusal, a revision that names two
+projections or a changed terminal identity fails the test. To re-vendor after
+an intentional gateway change, from a gateway checkout at the new commit:
 
 ```sh
 git -C ../gateway archive <commit> test/fixtures/provider-wire | tar -x

@@ -5,6 +5,7 @@ import pg from "pg";
 import type { Hex } from "viem";
 import { vi } from "vitest";
 import type { FulfillmentAdapter, ServiceModule } from "../src/core/serviceRegistry/types.js";
+import { createGatewayView } from "./gatewayView.js";
 import { createMigratedDatabase, type DisposableDatabase } from "./postgresHarness.js";
 import { context, fixedListing, dynamicListing, order, wireConfig, type WireAnswer } from "./providerWireFixture.js";
 import { seedFixtureService } from "./standardRailFixture.js";
@@ -33,6 +34,8 @@ export const wire = {
   /** Runs before each provider statement, e.g. to emulate a concurrent writer. */
   beforeQuery: null as ((text: string) => Promise<void>) | null,
   adapter: null as unknown as FulfillmentAdapter,
+  /** The gateway's judgement of every answer; a defect fails the send. */
+  gateway: createGatewayView(),
 };
 
 function injectFault(text: unknown): void {
@@ -102,6 +105,14 @@ const WIRE_CLOCK_SQL = `
   CREATE FUNCTION wire_clock.clock_timestamp() RETURNS timestamptz LANGUAGE sql VOLATILE
     AS $$ SELECT COALESCE((SELECT at FROM wire_clock.frozen LIMIT 1), pg_catalog.clock_timestamp()) $$;`;
 
+function parsedOrNull(text: string | undefined): unknown {
+  try {
+    return text === undefined ? null : JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
 const KEPT_TABLES = new Set(["_migrations", "_service_migrations", "services", "skills"]);
 
 export interface WireHarness {
@@ -149,14 +160,17 @@ export async function startWireHarness(
         headers: http.headers,
         body: http.bodyText ?? JSON.stringify(http.body),
       });
-      return {
+      const answer = {
         status: response.status,
         contentType: response.headers.get("content-type"),
         contentEncoding: response.headers.get("content-encoding"),
         text: await response.text(),
       };
+      await wire.gateway.observe(http.url, http.body ?? parsedOrNull(http.bodyText), answer);
+      return answer;
     },
     async reset() {
+      wire.gateway.reset();
       wire.faults.length = 0;
       wire.readinessFailures.length = 0;
       wire.taskIds.length = 0;
