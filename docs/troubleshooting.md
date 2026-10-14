@@ -466,6 +466,14 @@ Set the exact trusted hop count and narrow proxy CIDRs for the actual platform.
 Confirm it strips untrusted forwarded headers at the edge. Do not trust all
 proxies or use broad CIDRs as a convenience.
 
+### Standard-rail request answers `invalid_json`, `413`, or `415`
+
+The standard rail accepts only bounded, uncompressed `application/json` in
+strict UTF-8 without duplicate or prototype-named keys. A proxy or test client
+that compresses request bodies, rewrites the media type, or re-serializes JSON
+with duplicated fields is refused before any handler runs. Send the gateway's
+bytes unchanged; do not relax the parser.
+
 ### Public provider fails the live doctor probe
 
 Confirm DNS, TLS certificate, public path routing, `BASE_URL`, container port,

@@ -17,6 +17,7 @@ import type { ProviderStandardRailConfig } from "./config.js";
 import type { ProviderWalletConfig } from "./walletConfig.js";
 import { ProviderAssetQueryService } from "./assetQuery.js";
 import { ProviderAssetActionService } from "./assetAction.js";
+import { sendSignedJson } from "./transport.js";
 
 export function createStandardRailRouter(
   core: Config,
@@ -88,7 +89,7 @@ export function createStandardRailRouter(
         res.status(400).json({ error: "invalid_quote_request" });
         return;
       }
-      res.json(await quote.quote(request as never));
+      sendSignedJson(res, await quote.quote(request as never));
     } catch (error) {
       logError("Standard quote rejected", {
         errorClass: error instanceof Error ? error.name : "UnknownError",
@@ -114,7 +115,7 @@ export function createStandardRailRouter(
       const quoteEnvelope = body.quote;
       const request = body.request;
       const evidenceBundle = body.evidenceBundle;
-      res.json(await dispatch.accept({
+      sendSignedJson(res, await dispatch.accept({
         dispatch: dispatchEnvelope,
         quote: quoteEnvelope,
         request,
@@ -136,7 +137,7 @@ export function createStandardRailRouter(
         res.status(400).json({ error: "invalid_dispatch_status" });
         return;
       }
-      res.json(await dispatch.status(query));
+      sendSignedJson(res, await dispatch.status(query));
     } catch (error) {
       logError("Standard dispatch status rejected", {
         errorClass: error instanceof Error ? error.name : "UnknownError",

@@ -42,6 +42,9 @@ All notable changes to this project will be documented here.
 - Renamed the private package metadata to match the public provider
   repository.
 - Clarified standard-rail release accounting as an interval-based invariant.
+- Standard-rail requests are parsed as bounded, uncompressed, strict UTF-8
+  JSON with duplicate, prototype-named, oversized, and deeply nested keys
+  refused before any handler runs; signed answers are never cached.
 
 ### Fixed
 

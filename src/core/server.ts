@@ -21,6 +21,10 @@ import {
   configureHttpTimeouts,
 } from "./security/httpCapacity.js";
 import { createStandardRailRouter } from "./standardRail/routes.js";
+import {
+  isStrictlyParsedStandardRailJson,
+  standardRailJsonIngress,
+} from "./standardRail/transport.js";
 import { a2aRouter } from "./a2a/router.js";
 import { agentCardRouter } from "./agentCards/routes.js";
 import { adminRouter } from "./admin/routes.js";
@@ -95,27 +99,9 @@ export async function startServer(
       verify: captureRawBody,
     }),
   );
-  app.use(
-    "/standard-rail",
-    (req, res, next) => {
-      if (req.method !== "POST" && req.method !== "PUT") {
-        next();
-        return;
-      }
-      const mediaType = req.header("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
-      const encoding = req.header("content-encoding")?.trim().toLowerCase();
-      if (mediaType !== "application/json" || (encoding && encoding !== "identity")) {
-        res.status(415).json({ error: "uncompressed_application_json_required" });
-        return;
-      }
-      next();
-    },
-    express.json({
-      limit: "2mb",
-      inflate: false,
-      verify: captureRawBody,
-    }),
-  );
+  // Gateway traffic: bounded, uncompressed, strict UTF-8 JSON with duplicate
+  // and unsafe keys rejected before any handler trusts the parsed value.
+  app.use("/standard-rail", ...standardRailJsonIngress());
   app.use(
     "/a2a",
     express.json({
@@ -131,7 +117,7 @@ export async function startServer(
   );
   app.use((req, res, next) => {
     const rawBody = (req as express.Request & { rawBody?: Buffer }).rawBody;
-    if (!rawBody?.length) {
+    if (!rawBody?.length || isStrictlyParsedStandardRailJson(req)) {
       next();
       return;
     }

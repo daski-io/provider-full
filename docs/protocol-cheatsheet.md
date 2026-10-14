@@ -41,6 +41,22 @@ The exact schemas are defined in `src/core/standardRail/schema.ts` and
 `src/core/standardRail/types.ts`. Treat signatures and hash fields as opaque
 protocol commitments; callers must canonicalize exactly as the gateway does.
 
+## Transport
+
+Every `POST`/`PUT` under `/standard-rail` must be uncompressed
+`application/json` (no `Content-Encoding` other than `identity`, UTF-8 only).
+Bodies are bounded (2 MiB; 16 KiB for `/dispatch/status`), decoded as strict
+UTF-8, and rejected before any handler runs when they contain a duplicate key
+at any depth, a `__proto__`/`constructor`/`prototype` key, a key longer than
+256 characters, more than 64 levels of nesting, or more than 262,144 values.
+Those refusals are `400 {"error":"invalid_json"}`,
+`413 {"error":"request_too_large"}`, or
+`415 {"error":"uncompressed_application_json_required"}`.
+
+Answers are plain `application/json` with `Cache-Control: no-store`; the
+starter installs no compression middleware. Signed bodies are built and
+signed for each request and never cached.
+
 ## ERC-8004 identity
 
 `PROVIDER_AGENT_ID` identifies the provider in the canonical per-chain
