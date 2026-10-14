@@ -98,6 +98,35 @@ describe("protected-data rotation sink", () => {
     expect(rollbackEncryption.decryptString(String(row.secret), context)).toBe("PII_SENTINEL@example.com");
   });
 
+  it("rotates a frozen terminal projection under the context its writer used", async () => {
+    const { terminalProjectionContext } = await import("../src/core/standardRail/terminalResult.js");
+    const frozenContext = terminalProjectionContext("task-1");
+    const oldEncryption = await encryptionWith(oldKey, "old");
+    const row: Record<string, unknown> = {
+      transaction_id: "task-1",
+      projection_encrypted: oldEncryption.encryptString('{"id":"task-1"}', frozenContext),
+    };
+    const activeEncryption = await encryptionWith(newKey, "new", `old=${oldKey}`);
+    const { allProtectedDataSinks } = await import("../src/core/security/protectedDataSinks.js");
+    const sink = allProtectedDataSinks().find((candidate) => candidate.name === "standard-terminal-results");
+    expect(sink?.registeredColumns).toEqual(["standard_terminal_results.projection_encrypted"]);
+    const db: Queryable = {
+      async query(text: string, values: unknown[] = []) {
+        if (text.startsWith("SELECT")) {
+          return { rows: values[0] === null ? [row] : [], rowCount: values[0] === null ? 1 : 0 } as never;
+        }
+        if (text.startsWith("UPDATE")) {
+          row.projection_encrypted = values[2];
+          return { rows: [], rowCount: 1 } as never;
+        }
+        throw new Error(`unexpected query: ${text}`);
+      },
+    };
+    expect((await sink!.processBatch({ db, after: null, limit: 100, fromKeyId: "old" })).rotated).toBe(1);
+    expect(activeEncryption.decryptString(String(row.projection_encrypted), frozenContext)).toBe('{"id":"task-1"}');
+    expect(activeEncryption.inspectEncryptionEnvelope(String(row.projection_encrypted)).keyId).toBe("new");
+  });
+
   it("rotates archived fulfillment-hold evidence with its original escalation context", async () => {
     const archivedContext = {
       purpose: "escalation-review-binding",
