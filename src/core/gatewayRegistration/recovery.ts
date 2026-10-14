@@ -1,4 +1,4 @@
-import type { Hex } from "viem";
+import type { Address, Hex } from "viem";
 import { canonicalHash } from "../standardRail/canonical.js";
 import type { GatewayRegistrationRow } from "./store.js";
 import type { GatewayRegistrationView } from "./types.js";
@@ -19,6 +19,7 @@ export type FreshIntentReason =
   | "card-changed"
   | "gateway-terminal"
   | "gateway-unknown"
+  | "stale-activation"
   | "never-prepared";
 
 /**
@@ -57,11 +58,12 @@ function storedPreparationMatches(
 
 /**
  * State-aware recovery. A local record is never replaced while the gateway
- * still holds its registration as pending or active: its intent, preparation,
- * splitter writes and accepted evidence are what the gateway admitted. Only a
- * first admission, a changed card of a promoted registration, a registration
- * the gateway ended or no longer knows, or an intent the gateway never
- * prepared gets a new intent.
+ * still holds its registration as pending, or as active and promotable: its
+ * intent, preparation, splitter writes and accepted evidence are what the
+ * gateway admitted. Only a first admission, a changed card of a promoted
+ * registration, an activation the changed rail policy or payee no longer
+ * lets this provider promote, a registration the gateway ended or no longer
+ * knows, or an intent the gateway never prepared gets a new intent.
  */
 export function planRegistration(args: {
   local: GatewayRegistrationRow | null;
@@ -69,6 +71,8 @@ export function planRegistration(args: {
   /** The gateway's view of the local registration; "unknown" when it holds none. */
   live: GatewayRegistrationView | "unknown" | null;
   railPolicyHash: Hex;
+  /** The payee the provider registers with now. */
+  providerPayee: Address;
   nowSeconds: number;
 }): RegistrationPlan {
   const { local, cardMatches, live } = args;
@@ -80,6 +84,8 @@ export function planRegistration(args: {
   }
   const railPolicyChanged =
     local.canonical_intent.payload.railPolicyHash !== args.railPolicyHash;
+  const payeeChanged = local.canonical_intent.payload.providerPayee.toLowerCase() !==
+    args.providerPayee.toLowerCase();
   if (!needsLiveRegistrationView(local)) {
     // A signed intent the gateway never answered may still have been
     // prepared, and posting it under its idempotency key is the only way to
@@ -122,6 +128,16 @@ export function planRegistration(args: {
       detail: `gateway registration ${live.registrationId} no longer matches the persisted preparation`,
     };
   }
+  if (live.state === "ACTIVE" && (railPolicyChanged || payeeChanged)) {
+    // Promotion verifies the activation against the current rail policy and
+    // payee, so it can never succeed. The gateway prepares a superseding
+    // registration for a fresh intent, without reusing any listing.
+    return {
+      kind: "sign-intent",
+      reason: "stale-activation",
+      attention: "activated_registration_stale",
+    };
+  }
   if (!cardMatches) {
     return {
       kind: "blocked",
@@ -140,6 +156,14 @@ export function planRegistration(args: {
       code: "rail_policy_changed_during_prepare",
       attention: "rail_policy_changed_during_prepare",
       detail: `the gateway rail policy changed while registration ${live.registrationId} is ${live.state}`,
+    };
+  }
+  if (payeeChanged) {
+    return {
+      kind: "blocked",
+      code: "payee_changed_during_registration",
+      attention: "payee_changed_during_registration",
+      detail: `the provider payee changed while registration ${live.registrationId} is ${live.state}`,
     };
   }
   const evidence = local.canonical_evidence;

@@ -391,13 +391,21 @@ export class FakeGateway {
     const active = this.activeRegistrationId
       ? this.registrations.get(this.activeRegistrationId)!
       : null;
-    if (active && active.intent.payload.serviceContractHash === intent.payload.serviceContractHash) {
+    // The same card, policy and payee refresh the active registration; any
+    // change prepares a superseding one, reusing listings only while the
+    // payee and rail policy are unchanged.
+    const policyKept = active?.prepared.railPolicyHash === this.railPolicyHash;
+    if (
+      active && policyKept &&
+      active.intent.payload.serviceContractHash === intent.payload.serviceContractHash &&
+      getAddress(active.prepared.providerPayee as string) === getAddress(this.payee)
+    ) {
       return json(200, this.view(active));
     }
     this.sequence += 1;
     const registrationId = `00000000-0000-4000-8000-${this.sequence.toString().padStart(12, "0")}`;
     const card = serviceCard(this.skills).extensions["https://daski.io/a2a/v2"];
-    const priorUsable = active && (this.reuseAcrossPayees ||
+    const priorUsable = active && policyKept && (this.reuseAcrossPayees ||
       getAddress(active.prepared.providerPayee as string) === getAddress(this.payee));
     const providerIntentHash = canonicalHash(intent);
     const listings = [];

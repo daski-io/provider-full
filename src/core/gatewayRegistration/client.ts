@@ -55,6 +55,7 @@ export async function planServiceRegistration(context: RegistrationContext): Pro
       cardMatches: cardMatchesRegistration(local, context),
       live,
       railPolicyHash: context.policy.railPolicyHash,
+      providerPayee: context.providerPayee,
       nowSeconds: Math.floor(Date.now() / 1_000),
     }),
   };

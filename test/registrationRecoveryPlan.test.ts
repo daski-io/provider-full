@@ -10,6 +10,9 @@ import type { GatewayRegistrationView } from "../src/core/gatewayRegistration/ty
 // intent the gateway never prepared.
 
 const RAIL = `0x${"6".repeat(64)}` as const;
+const PAYEE = "0x1111111111111111111111111111111111111111" as const;
+const intent = (railPolicyHash: string = RAIL, providerPayee: string = PAYEE) =>
+  ({ payload: { railPolicyHash, providerPayee } }) as GatewayRegistrationRow["canonical_intent"];
 const NOW = 1_800_000_000;
 const prepared = { registrationId: "registration-1", listings: [] } as unknown as
   GatewayRegistrationView["prepared"];
@@ -24,7 +27,7 @@ function row(patch: Partial<GatewayRegistrationRow> = {}): GatewayRegistrationRo
     state: "EVIDENCE_SUBMITTED",
     idempotency_key: "svc-key",
     gateway_registration_id: "registration-1",
-    canonical_intent: { payload: { railPolicyHash: RAIL } } as GatewayRegistrationRow["canonical_intent"],
+    canonical_intent: intent(),
     prepared_response: { prepared } as GatewayRegistrationView,
     canonical_evidence: { validBefore: NOW + 60 } as GatewayRegistrationRow["canonical_evidence"],
     last_error_code: null,
@@ -41,7 +44,14 @@ const plan = (
   local: GatewayRegistrationRow | null,
   view: GatewayRegistrationView | "unknown" | null,
   cardMatches = true,
-) => planRegistration({ local, cardMatches, live: view, railPolicyHash: RAIL, nowSeconds: NOW });
+) => planRegistration({
+  local,
+  cardMatches,
+  live: view,
+  railPolicyHash: RAIL,
+  providerPayee: PAYEE,
+  nowSeconds: NOW,
+});
 
 describe("registration recovery plan", () => {
   it("signs a first intent, keeps an unchanged promoted registration, re-registers a changed card", () => {
@@ -61,7 +71,7 @@ describe("registration recovery plan", () => {
     expect(plan(row({
       state: "INTENT_READY",
       ...unprepared,
-      canonical_intent: { payload: { railPolicyHash: `0x${"7".repeat(64)}` } } as GatewayRegistrationRow["canonical_intent"],
+      canonical_intent: intent(`0x${"7".repeat(64)}`),
     }), null)).toEqual({ kind: "post-intent" });
     expect(plan(row({ state: "INTENT_READY", ...unprepared }), null, false))
       .toEqual({ kind: "post-intent" });
@@ -134,10 +144,29 @@ describe("registration recovery plan", () => {
       code: "activated_registration_unpromoted",
     });
     expect(plan(row({
-      canonical_intent: { payload: { railPolicyHash: `0x${"7".repeat(64)}` } } as GatewayRegistrationRow["canonical_intent"],
+      canonical_intent: intent(`0x${"7".repeat(64)}`),
     }), live("PREPARED"))).toMatchObject({
       kind: "blocked",
       attention: "rail_policy_changed_during_prepare",
+    });
+  });
+
+  it("re-registers an activation the changed rail policy or payee can no longer promote", () => {
+    const moved = { canonical_intent: intent(RAIL, "0x2222222222222222222222222222222222222222") };
+    const repriced = { canonical_intent: intent(`0x${"7".repeat(64)}`) };
+    for (const patch of [moved, repriced]) {
+      for (const cardMatches of [true, false]) {
+        expect(plan(row({ state: "ATTENTION", ...patch }), live("ACTIVE"), cardMatches)).toEqual({
+          kind: "sign-intent",
+          reason: "stale-activation",
+          attention: "activated_registration_stale",
+        });
+      }
+    }
+    expect(plan(row(moved), live("EVIDENCE_PENDING"))).toMatchObject({
+      kind: "blocked",
+      code: "payee_changed_during_registration",
+      attention: "payee_changed_during_registration",
     });
   });
 

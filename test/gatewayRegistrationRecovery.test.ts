@@ -351,6 +351,34 @@ describe("activated registrations left in ATTENTION", { timeout: 30_000 }, () =>
     expect(promoted.get("track-orbit")!.listing_id).toBe(trackListing);
   });
 
+  it("re-register once a changed rail policy leaves the activation unpromotable", async () => {
+    await register();
+    const trackListing = (await heads()).get("track-orbit")!.listing_id as string;
+    changePaidSkill();
+    gateway.corruptCommitmentFor = trackListing;
+    await expect(register()).rejects.toThrow(/exact runtime commitment set/);
+    const attention = await localRow();
+    expect(attention.state).toBe("ATTENTION");
+    gateway.corruptCommitmentFor = null;
+    gateway.railPolicyHash = `0x${"9".repeat(64)}`;
+
+    const restarted = await register();
+    expect(restarted).toMatchObject({ state: "ACTIVE" });
+    expect(restarted.registrationId).not.toBe(attention.gateway_registration_id);
+    expect(gateway.registrations.get(attention.gateway_registration_id)!.state).toBe("SUPERSEDED");
+    expect(gateway.registrations.get(restarted.registrationId)!.prepared.listings
+      .some((listing) => listing.reused)).toBe(false);
+    expect((await localRow())).toMatchObject({ id: attention.id, state: "ACTIVE" });
+    expect(h.logs).toContainEqual(expect.objectContaining({
+      message: "Gateway registration restarts with a new intent",
+      extra: expect.objectContaining({
+        reason: "stale-activation",
+        priorRegistrationId: attention.gateway_registration_id,
+        priorErrorCode: "activated_registration_stale",
+      }),
+    }));
+  });
+
   it("restart with a fresh intent once the gateway ended the persisted registration", async () => {
     await register();
     changePaidSkill();
