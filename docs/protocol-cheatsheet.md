@@ -280,18 +280,24 @@ are not published in this release.
 `{reason?}`) and have no business request id, so each is identified by its
 admitted task and its own content (core migration 008): a cancellation once
 per order, an input by its request hash. The identity is claimed under a
-300-second lease before the service is called and committed in the same
-transaction as the task state it produced. A retry under a fresh gateway
-grant or payer nonce therefore answers the committed outcome without calling
-the service again; a cancellation with a different reason, or a different
-input while one is unresolved, is `action_conflict`. A failure before the
-service acted, or a definite service refusal (`CancellationRefusedError`),
-frees the identity; any other failure keeps it bound and answers
-`lifecycle_unavailable`, and the next attempt with the same content
-reconciles it: it records an effect that already happened (the order moved
-on) or calls the service again, whose own supplier journal must make that
-call safe. An identical input repeated in a later input round is the same
-identity; send it with different content.
+300-second lease, renewed while the service call runs, before the service is
+called, and committed in the same transaction as the task state it produced;
+every later write of the claim is fenced by its attempt number, so an attempt
+that outlived its lease can never commit for, release or cut the lease of the
+attempt that took over. A retry under a fresh gateway grant or payer nonce
+therefore answers the committed outcome without calling the service again; a
+cancellation with a different reason, or a different input while one is
+unresolved, is `action_conflict`. A definite service refusal
+(`CancellationRefusedError`), or a failure before the service was called when
+no earlier attempt could have acted, frees the identity. Any other failure
+keeps it bound and answers `lifecycle_unavailable`, and the next attempt with
+the same content reconciles it: once the order moved on (for a cancellation,
+once it is terminal, canceled or not) that state is recorded as the outcome
+and answered; otherwise the service is called again with
+`task.lifecycleAction.resumed` set and the same
+`task.lifecycleAction.idempotencyKey`, so its supplier journal reconciles
+instead of repeating. An identical input repeated in a later input round is
+the same identity; send it with different content.
 
 Every failure is a refusal with exactly one key:
 

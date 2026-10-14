@@ -17,6 +17,8 @@ export interface LifecycleActionClaim {
   identity: Buffer;
   /** An earlier attempt left this identity with an uncertain outcome. */
   resumed: boolean;
+  /** This attempt's number: the lease token every later write of the claim must match. */
+  attempt: number;
 }
 
 interface ActionRow {
@@ -65,13 +67,17 @@ export async function claimLifecycleAction(
       if (!own.request_hash.equals(requestHash)) throw actionConflict("The action already bound different content");
       if (own.state === "committed") return { kind: "replay" as const };
       if (own.live) throw lifecycleUnavailable("Another attempt of this action is in progress");
-      await db.query(
+      const resumed = await db.query<{ attempts: number }>(
         `UPDATE standard_lifecycle_actions
             SET attempts=attempts+1,lease_expires_at=now() + ($4 * interval '1 second')
-          WHERE transaction_id=$1 AND action=$2 AND identity_hash=$3`,
+          WHERE transaction_id=$1 AND action=$2 AND identity_hash=$3
+          RETURNING attempts`,
         [task.id, action, identity, LIFECYCLE_ACTION_LEASE_SECONDS],
       );
-      return { kind: "claimed" as const, claim: { transactionId: task.id, action, identity, resumed: true } };
+      return {
+        kind: "claimed" as const,
+        claim: { transactionId: task.id, action, identity, resumed: true, attempt: resumed.rows[0]!.attempts },
+      };
     }
     const unresolved = rows.filter((row) => row.state === "claimed");
     if (action === "input" && unresolved.some((row) => row.action === "input")) {
@@ -85,31 +91,48 @@ export async function claimLifecycleAction(
        VALUES ($1,$2,$3,$4,'claimed',now() + ($5 * interval '1 second'))`,
       [task.id, action, identity, requestHash, LIFECYCLE_ACTION_LEASE_SECONDS],
     );
-    return { kind: "claimed" as const, claim: { transactionId: task.id, action, identity, resumed: false } };
+    return {
+      kind: "claimed" as const,
+      claim: { transactionId: task.id, action, identity, resumed: false, attempt: 1 },
+    };
   });
 }
 
-const CLAIMED = "transaction_id=$1 AND action=$2 AND identity_hash=$3 AND state='claimed'";
+/// Every write of a claim is fenced by its attempt number, so an attempt that
+/// outlived its lease can neither commit, release nor cut the lease of the
+/// attempt that took the identity over.
+const OWNED = "transaction_id=$1 AND action=$2 AND identity_hash=$3 AND state='claimed' AND attempts=$4";
+const owned = (claim: LifecycleActionClaim) => [claim.transactionId, claim.action, claim.identity, claim.attempt];
 
 /** Commit the action with the task state it produced, inside that transaction. */
 export async function commitLifecycleAction(db: Queryable, claim: LifecycleActionClaim, outcomeState: string): Promise<void> {
   const committed = await db.query(
     `UPDATE standard_lifecycle_actions
-        SET state='committed',outcome_state=$4,committed_at=now(),lease_expires_at=NULL
-      WHERE ${CLAIMED}`,
-    [claim.transactionId, claim.action, claim.identity, outcomeState],
+        SET state='committed',outcome_state=$5,committed_at=now(),lease_expires_at=NULL
+      WHERE ${OWNED}`,
+    [...owned(claim), outcomeState],
   );
   if (committed.rowCount !== 1) throw new Error("Lifecycle action claim was lost before commit");
 }
 
-/** The attempt failed before any effect: the identity is free again. */
+/**
+ * Extend the lease while this attempt still owns the claim. False means
+ * another attempt took the identity over: this one must not call the service.
+ */
+export async function renewLifecycleAction(claim: LifecycleActionClaim): Promise<boolean> {
+  const renewed = await pool.query(
+    `UPDATE standard_lifecycle_actions SET lease_expires_at=now() + ($5 * interval '1 second') WHERE ${OWNED}`,
+    [...owned(claim), LIFECYCLE_ACTION_LEASE_SECONDS],
+  );
+  return renewed.rowCount === 1;
+}
+
+/** Nothing took effect, in this attempt or any earlier one: the identity is free again. */
 export async function releaseLifecycleAction(claim: LifecycleActionClaim): Promise<void> {
-  await pool.query(`DELETE FROM standard_lifecycle_actions WHERE ${CLAIMED}`,
-    [claim.transactionId, claim.action, claim.identity]);
+  await pool.query(`DELETE FROM standard_lifecycle_actions WHERE ${OWNED}`, owned(claim));
 }
 
 /** The outcome is uncertain: keep the identity bound and let the next attempt reconcile it now. */
 export async function abandonLifecycleAction(claim: LifecycleActionClaim): Promise<void> {
-  await pool.query(`UPDATE standard_lifecycle_actions SET lease_expires_at=now() WHERE ${CLAIMED}`,
-    [claim.transactionId, claim.action, claim.identity]);
+  await pool.query(`UPDATE standard_lifecycle_actions SET lease_expires_at=now() WHERE ${OWNED}`, owned(claim));
 }

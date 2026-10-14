@@ -11,6 +11,7 @@ vi.mock("../src/core/engine/preExecuteRunner.js", () => ({
 
 const { ProviderEvidenceVerifier } = await import("../src/core/standardRail/evidence.js");
 const { CancellationRefusedError } = await import("../src/core/serviceRegistry/types.js");
+const { processAdapterResult } = await import("../src/core/engine/taskFinalization.js");
 const { WIRE_AUTHORIZATION_KEY, startWireHarness, wire } = await import("./providerWireHarness.js");
 const { context, fixture, order } = await import("./providerWireFixture.js");
 const { LIFECYCLE_HTTP, lifecycleBody } = await import("./lifecycleWire.js");
@@ -28,11 +29,13 @@ let executeResult: AdapterResult = { status: "working" };
 let onCancel: () => Promise<void> = async () => undefined;
 let onInput: () => Promise<AdapterResult> = async () => ({ status: "working" });
 const calls = { cancel: 0, input: 0 };
+/** The action context every service call received, in order. */
+const contexts: unknown[] = [];
 
 wire.adapter = {
   execute: async () => executeResult,
-  handleInput: async () => { calls.input += 1; return onInput(); },
-  cancel: async () => { calls.cancel += 1; await onCancel(); },
+  handleInput: async (task) => { calls.input += 1; contexts.push(task.lifecycleAction); return onInput(); },
+  cancel: async (task) => { calls.cancel += 1; contexts.push(task.lifecycleAction); await onCancel(); },
   quote: async () => ({ ok: true, amount: 250_000n, currency: "USDC" }),
 } satisfies FulfillmentAdapter;
 
@@ -72,6 +75,7 @@ beforeEach(async () => {
   await harness.reset();
   calls.cancel = 0;
   calls.input = 0;
+  contexts.length = 0;
   onCancel = async () => undefined;
   onInput = async () => ({ status: "working" });
 });
@@ -109,6 +113,47 @@ describe("cancellation idempotency (F-T09)", () => {
     expect(await actions()).toEqual([{ action: "cancel", state: "committed", attempts: 2, outcome_state: "canceled" }]);
   });
 
+  it("records the terminal state an uncertain cancellation met as its outcome, never as unsupported", async () => {
+    await admittedOrder({ status: "working" });
+    // The service cancels, but a worker completes the order first, so the
+    // cancellation's own write loses its fence: its effect is unknown.
+    onCancel = async () => {
+      await processAdapterResult(order.providerTaskId, { status: "completed", message: "Done." }, harness.serviceId);
+    };
+    const uncertain = await call("cancel", {});
+    expect([uncertain.status, uncertain.body]).toEqual([503, { error: "lifecycle_unavailable" }]);
+    const retry = await call("cancel", {}, T + 10);
+    expect([retry.status, retry.body.state, retry.body.terminalAttestation.payload.state])
+      .toEqual([200, "completed", "completed"]);
+    expect(calls.cancel).toBe(1);
+    expect(await actions()).toEqual([{ action: "cancel", state: "committed", attempts: 2, outcome_state: "completed" }]);
+  });
+
+  it("never lets an attempt that outlived its lease disturb the attempt that took over", async () => {
+    await admittedOrder({ status: "working" });
+    const gates: Array<{ open: () => void; wait: Promise<void> }> = [0, 1].map(() => {
+      let open!: () => void;
+      const wait = new Promise<void>((resolve) => { open = resolve; });
+      return { open, wait };
+    });
+    const pending = [...gates];
+    onCancel = async () => { await pending.shift()?.wait; };
+    const first = call("cancel", {});
+    await vi.waitFor(() => expect(calls.cancel).toBe(1));
+    // The first supplier call outlives the 300-second lease: a retry takes over.
+    const second = call("cancel", {}, T + 400);
+    await vi.waitFor(() => expect(calls.cancel).toBe(2));
+    gates[0]!.open();
+    expect(await first).toEqual({ status: 503, body: { error: "lifecycle_unavailable" } });
+    // The stale attempt's failure left the new owner's lease alone.
+    const third = await call("cancel", {}, T + 401);
+    expect([third.status, third.body]).toEqual([503, { error: "lifecycle_unavailable" }]);
+    gates[1]!.open();
+    expect((await second).body.state).toBe("canceled");
+    expect(calls.cancel).toBe(2);
+    expect(await actions()).toEqual([{ action: "cancel", state: "committed", attempts: 2, outcome_state: "canceled" }]);
+  });
+
   it("frees the identity after a definite refusal, so a later cancellation may run", async () => {
     await admittedOrder({ status: "working" });
     onCancel = async () => { throw new CancellationRefusedError("not yet cancelable"); };
@@ -141,6 +186,34 @@ describe("input idempotency (F-T09)", () => {
     const cancel = await call("cancel", {}, T + 6);
     expect(cancel.status).toBe(200);
     expect(cancel.body.state).toBe("canceled");
+    expect(calls.input).toBe(1);
+  });
+
+  it("calls the service again only as a resumed attempt under the same action key", async () => {
+    await admittedOrder({ status: "input-required", message: "Confirm the title." });
+    onInput = async () => { throw new Error("supplier timeout"); };
+    expect((await call("input", INPUT)).status).toBe(503);
+    onInput = async () => ({ status: "working" });
+    expect((await call("input", INPUT, T + 5)).body.state).toBe("working");
+    const [first, resumed] = contexts as Array<{ idempotencyKey: string; resumed: boolean }>;
+    expect(first).toEqual({
+      idempotencyKey: expect.stringMatching(new RegExp(`^standard-lifecycle:${order.providerTaskId}:input:0x[0-9a-f]{64}$`)),
+      resumed: false,
+    });
+    expect(resumed).toEqual({ idempotencyKey: first!.idempotencyKey, resumed: true });
+  });
+
+  it("keeps an unresolved input bound when a resumed attempt fails before calling the service", async () => {
+    await admittedOrder({ status: "input-required", message: "Confirm the title." });
+    onInput = async () => { throw new Error("supplier timeout"); };
+    expect((await call("input", INPUT)).status).toBe(503);
+    // The resumed attempt's first read fails like a lost connection.
+    wire.faults.push("c.operations_revision::text AS operations_revision");
+    const failed = await call("input", INPUT, T + 5);
+    expect([failed.status, failed.body]).toEqual([503, { error: "lifecycle_unavailable" }]);
+    expect(await actions()).toEqual([{ action: "input", state: "claimed", attempts: 2, outcome_state: null }]);
+    const other = await call("input", { inputText: "Something else.", data: { title: "Synthetic fixture note" } }, T + 6);
+    expect([other.status, other.body]).toEqual([409, { error: "action_conflict" }]);
     expect(calls.input).toBe(1);
   });
 

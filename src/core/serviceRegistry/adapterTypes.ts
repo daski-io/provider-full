@@ -55,6 +55,21 @@ export interface TaskContext {
    * `assertSupplierSpendWithinCeiling`. Retries reuse this same value.
    */
   supplierCostCeiling?: SupplierCostCeiling;
+  /** Present on handleInput() and cancel() calls for a buyer's standard-rail order action. */
+  lifecycleAction?: LifecycleActionContext;
+}
+
+/**
+ * The buyer order action a handleInput() or cancel() call performs. Core
+ * calls at most one attempt of an action at a time, and never again once an
+ * attempt's outcome is committed; after an attempt whose outcome is unknown,
+ * the next attempt calls again with `resumed`.
+ */
+export interface LifecycleActionContext {
+  /** Stable across every attempt of this one action: key supplier journal operations on it. */
+  idempotencyKey: string;
+  /** An earlier attempt may already have taken effect: reconcile supplier state before acting. */
+  resumed: boolean;
 }
 
 interface TaskInputAuthorizationBase {

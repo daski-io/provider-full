@@ -14,6 +14,7 @@ import {
   claimLifecycleAction,
   commitLifecycleAction,
   releaseLifecycleAction,
+  renewLifecycleAction,
   type LifecycleActionClaim,
 } from "./lifecycleActions.js";
 import type { LifecycleCall } from "./lifecycleAuthorization.js";
@@ -23,7 +24,10 @@ import { enqueueReputationOutcome } from "./reputationOutcomeStore.js";
 import { freezeTerminalResult } from "./terminalResult.js";
 
 const CANCELABLE: ReadonlySet<string> = new Set(["submitted", "dispatching", "working", "input-required"]);
+const TERMINAL: ReadonlySet<string> = new Set(["completed", "failed", "canceled"]);
 export const CANCELED_MESSAGE = "Canceled at the buyer's request.";
+/** How often an attempt renews its lease while the service call runs. */
+const LEASE_RENEWAL_MS = 60_000;
 
 async function adapterFor(task: StandardTaskRow): Promise<FulfillmentAdapter> {
   const service = await getServiceById(task.service_id);
@@ -105,27 +109,58 @@ const nothingChanged = (refusal: LifecycleRefusal): LifecycleRefusal => {
   return refusal;
 };
 
+/** The service's view of the action: its stable key, and whether an earlier attempt may have acted. */
+function serviceTask(task: StandardTaskRow, claim: LifecycleActionClaim) {
+  return {
+    ...task,
+    supplierMutationStarted: task.metadata.supplier_mutation_started === true,
+    supplierCostCeiling: admittedSupplierCostCeiling(task.metadata),
+    lifecycleAction: {
+      idempotencyKey: `standard-lifecycle:${task.id}:${claim.action}:0x${claim.identity.toString("hex")}`,
+      resumed: claim.resumed,
+    },
+  };
+}
+
+interface ServiceCall {
+  /** Call the service while this attempt still owns the claim, keeping its lease alive meanwhile. */
+  run<T>(effect: () => Promise<T>): Promise<T>;
+}
+
 /**
- * Run one claimed action attempt. A failure before the service is called,
- * or a definite refusal from it, releases the identity; any other failure
- * after the service was called leaves the outcome uncertain, so the identity
- * stays bound for the next attempt to reconcile and the caller answers
- * temporarily unavailable, never as if the action had not happened.
+ * Run one claimed action attempt. A definite refusal from the service frees
+ * the identity, and so does a failure before the service was called when no
+ * earlier attempt could have acted. Anything else (a failure after the
+ * service was called, or any failure of a resumed attempt) keeps the identity
+ * bound for the next attempt to reconcile, and the caller answers temporarily
+ * unavailable, never as if the action had not happened.
  */
-async function attempt(
-  claim: LifecycleActionClaim,
-  work: (effect: { started(): void }) => Promise<void>,
-): Promise<void> {
+async function attempt(claim: LifecycleActionClaim, work: (service: ServiceCall) => Promise<void>): Promise<void> {
   let started = false;
+  const service: ServiceCall = {
+    async run(effect) {
+      if (!await renewLifecycleAction(claim)) throw lifecycleUnavailable("Another attempt took the action over");
+      started = true;
+      const renewal = setInterval(() => {
+        void renewLifecycleAction(claim).catch(() => undefined);
+      }, LEASE_RENEWAL_MS);
+      try {
+        return await effect();
+      } finally {
+        clearInterval(renewal);
+      }
+    },
+  };
   try {
-    await work({ started: () => { started = true; } });
+    await work(service);
   } catch (error) {
-    if (!started || (typeof error === "object" && error !== null && NOTHING_CHANGED.has(error))) {
+    const definite = typeof error === "object" && error !== null && NOTHING_CHANGED.has(error);
+    if (definite || (!started && !claim.resumed)) {
       await releaseLifecycleAction(claim).catch(() => undefined);
       throw error;
     }
     await abandonLifecycleAction(claim).catch(() => undefined);
-    throw lifecycleUnavailable("Lifecycle action outcome is unknown");
+    throw lifecycleUnavailable(started ? "Lifecycle action outcome is unknown" : "An earlier attempt is unresolved");
   }
 }
 
@@ -142,12 +177,13 @@ export async function applyLifecycleCancel(
   const claimed = await claimLifecycleAction(task, call);
   if (claimed.kind === "replay") return;
   const claim = claimed.claim;
-  await attempt(claim, async (effect) => {
+  await attempt(claim, async (service) => {
     // Read under the claim, so no other attempt of this action interleaves.
     const publicState = await readPublicState();
-    if (publicState === "canceled" && claim.resumed) {
-      // An earlier attempt's cancellation took effect; record it.
-      await commitLifecycleAction(pool, claim, "canceled");
+    if (claim.resumed && TERMINAL.has(publicState)) {
+      // The order settled after an attempt whose effect is unknown: its
+      // terminal state, canceled or not, is the action's outcome. Record it.
+      await commitLifecycleAction(pool, claim, publicState);
       return;
     }
     if (!CANCELABLE.has(publicState) || !CANCELABLE.has(task.status)) {
@@ -155,19 +191,16 @@ export async function applyLifecycleCancel(
     }
     const adapter = await adapterFor(task);
     const fenced = await claimLifecycleMutation(task);
-    effect.started();
-    try {
-      await adapter.cancel({
-        ...fenced,
-        supplierMutationStarted: fenced.metadata.supplier_mutation_started === true,
-        supplierCostCeiling: admittedSupplierCostCeiling(fenced.metadata),
-      });
-    } catch (error) {
-      if (error instanceof CancellationRefusedError) {
-        throw nothingChanged(unsupportedAction("The service refused the cancellation"));
+    await service.run(async () => {
+      try {
+        await adapter.cancel(serviceTask(fenced, claim));
+      } catch (error) {
+        if (error instanceof CancellationRefusedError) {
+          throw nothingChanged(unsupportedAction("The service refused the cancellation"));
+        }
+        throw error;
       }
-      throw error;
-    }
+    });
     await persistLifecycleState(fenced, "canceled", new Date(), claim);
   });
 }
@@ -214,7 +247,7 @@ export async function applyLifecycleInput(
   const claimed = await claimLifecycleAction(task, call);
   if (claimed.kind === "replay") return;
   const claim = claimed.claim;
-  await attempt(claim, async (effect) => {
+  await attempt(claim, async (service) => {
     const publicState = await readPublicState();
     if (claim.resumed && publicState !== "input-required") {
       // An earlier attempt of this input moved the order on; record it.
@@ -228,17 +261,12 @@ export async function applyLifecycleInput(
     assertInputMatchesCommittedRequest(task, data);
     const adapter = await adapterFor(task);
     const fenced = await claimLifecycleMutation(task);
-    effect.started();
-    const result = await adapter.handleInput(
-      {
-        ...fenced,
-        supplierMutationStarted: fenced.metadata.supplier_mutation_started === true,
-        supplierCostCeiling: admittedSupplierCostCeiling(fenced.metadata),
-      },
+    const result = await service.run(() => adapter.handleInput(
+      serviceTask(fenced, claim),
       call.request.inputText as string,
       data,
       { requestHash: canonicalHash(call.request), payer: fenced.standard_payer, standardOrderId: fenced.standard_order_id },
-    );
+    ));
     const processed = await processAdapterResult(fenced.id, result, fenced.service_id);
     await persistLifecycleState(
       { ...fenced, status: processed.status, version: processed.version },

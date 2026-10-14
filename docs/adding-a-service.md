@@ -302,13 +302,17 @@ Implement bounded classification, retry, circuit-breaker, cancellation, and
 recovery tests alongside the service.
 
 Buyer `input` and `cancel` reach `handleInput()` and `cancel()` at most once
-per durable action identity at a time. Core claims the identity before calling
-you and commits it with the state you produce, so a buyer's retry under a fresh
-authorization never calls you again after a committed outcome. When your call
-throws anything other than `CancellationRefusedError` (a definite refusal that
-changed nothing), core cannot know whether you acted: the next attempt calls
-you again with the same task, and your supplier journal must make that repeat
-safe. Throw `CancellationRefusedError` only when nothing changed.
+per durable action identity at a time, with `task.lifecycleAction`. Core
+claims the identity before calling you and commits it with the state you
+produce, so a buyer's retry under a fresh authorization never calls you again
+after a committed outcome. When your call throws anything other than
+`CancellationRefusedError` (a definite refusal that changed nothing), or core
+fails after you returned, core cannot know whether you acted: the next attempt
+calls you again with `task.lifecycleAction.resumed` set. Key every supplier
+operation of the action on `task.lifecycleAction.idempotencyKey`, which every
+attempt shares, and on a resumed call reconcile the supplier's authoritative
+state before acting; never repeat the mutation blindly. Throw
+`CancellationRefusedError` only when nothing changed.
 
 ### Supplier-cost ceilings
 
