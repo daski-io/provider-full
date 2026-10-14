@@ -100,6 +100,56 @@ export async function finishReviewedPaidOrder(row: PreExecuteEscalationRow): Pro
   }
 }
 
+/**
+ * The outcome of an approved reviewed order. Owner-only work resumes only
+ * for the asset's current owner: otherwise the outcome is the definitive
+ * withheld failure, without supplier work, recorded through the same sealed
+ * result as a supplier answer so the review finalizes like any other.
+ */
+async function reviewedOutcome(
+  args: { row: PreExecuteEscalationRow; input: Record<string, unknown> },
+  context: CurrentContext,
+): Promise<AdapterResult> {
+  try {
+    await readmitPaidTaskOwner(context.task.id);
+  } catch (error) {
+    if (error instanceof AssetOwnerChangedError) return ASSET_OWNER_CHANGED_RESULT;
+    throw error;
+  }
+  let task = context.task;
+  // Parsed before the mutation claim: a reviewed re-execution spends under
+  // the same admitted ceiling as the original attempt, never a new one.
+  const supplierCostCeiling = admittedSupplierCostCeiling(task.metadata);
+  if (args.row.source === "pre_execute") {
+    const claimed = await claimSupplierMutation({
+      taskId: task.id,
+      expectedStatus: task.status,
+      expectedVersion: task.version,
+    });
+    if (!claimed) throw new Error("reviewed supplier mutation claim was lost");
+    task = claimed;
+  }
+  try {
+    return await executeAdapter(
+      context.service.adapter_name,
+      context.skill.skill_id,
+      {
+        id: task.id,
+        service_id: task.service_id,
+        skill_id: task.skill_id,
+        status: task.status,
+        supplierMutationStarted: true,
+        supplierCostCeiling,
+      },
+      args.input,
+      context.asset ?? undefined,
+    );
+  } catch (error) {
+    await markResolutionAttention(args.row.id, "Reviewed supplier outcome is ambiguous and requires reconciliation");
+    throw error;
+  }
+}
+
 export async function resolveReviewedPaidOrder(args: {
   row: PreExecuteEscalationRow;
   snapshot: ExecutionSnapshot;
@@ -129,52 +179,7 @@ export async function resolveReviewedPaidOrder(args: {
     );
     return;
   }
-  let task = context.task;
-  // Owner-only work resumes only for the asset's current owner; otherwise
-  // the order fails definitively, before any supplier work.
-  try {
-    await readmitPaidTaskOwner(task.id);
-  } catch (error) {
-    if (!(error instanceof AssetOwnerChangedError)) throw error;
-    const failed = await processAdapterResult(task.id, ASSET_OWNER_CHANGED_RESULT, context.service.id);
-    await persistDispatchState(failed, ASSET_OWNER_CHANGED_RESULT, failed.status);
-    if (!await finalizeResolution(args.row.id, args.row.reviewer_decision!)) {
-      throw new Error("paid review finalization claim was lost");
-    }
-    return;
-  }
-  // Parsed before the mutation claim: a reviewed re-execution spends under
-  // the same admitted ceiling as the original attempt, never a new one.
-  const supplierCostCeiling = admittedSupplierCostCeiling(task.metadata);
-  if (args.row.source === "pre_execute") {
-    const claimed = await claimSupplierMutation({
-      taskId: task.id,
-      expectedStatus: task.status,
-      expectedVersion: task.version,
-    });
-    if (!claimed) throw new Error("reviewed supplier mutation claim was lost");
-    task = claimed;
-  }
-  let result;
-  try {
-    result = await executeAdapter(
-      context.service.adapter_name,
-      context.skill.skill_id,
-      {
-        id: task.id,
-        service_id: task.service_id,
-        skill_id: task.skill_id,
-        status: task.status,
-        supplierMutationStarted: true,
-        supplierCostCeiling,
-      },
-      args.input,
-      context.asset ?? undefined,
-    );
-  } catch (error) {
-    await markResolutionAttention(args.row.id, "Reviewed supplier outcome is ambiguous and requires reconciliation");
-    throw error;
-  }
+  const result = await reviewedOutcome(args, context);
   const current = await getPreExecuteResolution(args.row.id);
   if (!current || current.status !== "resolution_executing") {
     await markResolutionAttention(args.row.id, "Review state changed after supplier execution");
