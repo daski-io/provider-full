@@ -3,16 +3,15 @@ import { logInfo } from "../logger.js";
 import { canonicalHash } from "../standardRail/canonical.js";
 import { loadRegistrationContext, type RegistrationContext } from "./chainContext.js";
 import { findGatewayRegistrationView } from "./gatewayApi.js";
+import { prepareRegistration, type StaleIntentReason } from "./intentPreparation.js";
 import {
   activate,
   cardMatchesRegistration,
   continueRegistration,
-  prepareRegistration,
   signRegistrationIntent,
   verifyRegistrationView,
   type RegistrationOutcome,
   type RegistrationPhase,
-  type StaleIntentReason,
 } from "./progress.js";
 import {
   needsLiveRegistrationView,
