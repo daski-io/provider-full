@@ -204,7 +204,10 @@ export interface ListEventsFilter {
 /// Filter/paginate the events feed for the admin Platform Log page and
 /// per-transaction timelines. All filters are optional; default ordering
 /// is created_at DESC.
-export async function listEvents(filter: ListEventsFilter = {}): Promise<EventRow[]> {
+export async function listEvents(
+  filter: ListEventsFilter = {},
+  db: Queryable = pool,
+): Promise<EventRow[]> {
   const where: string[] = [];
   const args: unknown[] = [];
   const push = (clause: string, value: unknown) => {
@@ -234,7 +237,7 @@ export async function listEvents(filter: ListEventsFilter = {}): Promise<EventRo
     (where.length ? ` WHERE ${where.join(" AND ")}` : "") +
     ` ORDER BY created_at DESC LIMIT $${limitIdx} OFFSET $${offsetIdx}`;
 
-  const result = await pool.query(sql, args);
+  const result = await db.query(sql, args);
   return result.rows as EventRow[];
 }
 

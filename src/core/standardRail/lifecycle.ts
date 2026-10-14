@@ -14,7 +14,16 @@ import { getServiceById } from "../db/queries/services.js";
 import { processAdapterResult } from "../engine/taskFinalization.js";
 import { validateTransition } from "../engine/stateMachine.js";
 import { emitEvent } from "../events/emitter.js";
-import { fetchStandardTaskResponse } from "../a2a/responseBuilder.js";
+import { revealFrozenTaskProjection } from "../a2a/responseBuilder.js";
+import { ORDER_SUPPORT_CHANNEL } from "../a2a/taskHistory.js";
+import { recordMandatoryAudit } from "../events/emitter.js";
+import {
+  FROZEN_TERMINAL_COLUMNS,
+  freezeTerminalResult,
+  loadFrozenTerminalProjection,
+  publicTerminalIdentity,
+  type FrozenTerminalColumns,
+} from "./terminalResult.js";
 import type { TransactionStatus } from "../db/queries/transactions.js";
 import { decryptString } from "../chain/encryption.js";
 import { getTransactionById } from "../db/queries/transactions.js";
@@ -131,28 +140,19 @@ export class StandardLifecycleService {
         source: "system",
         type: "transaction.message.user",
         message: String(args.request.message),
-        payload: { content: String(args.request.message), channel: "standard-order-support" },
+        payload: { content: String(args.request.message), channel: ORDER_SUPPORT_CHANNEL },
         actor: task.standard_payer,
         mandatory: true,
       });
     }
     if (args.action === "status" || args.action === "artifact" || args.action === "support") {
-      const stableResult = await fetchStandardTaskResponse(task);
       if (args.action === "artifact") {
-        if (task.status !== "completed") throw new Error("Artifacts are available only after completion");
-        const result = await fetchStandardTaskResponse(task, true);
-        return this.signedResult({
-          orderId: task.standard_order_id,
-          taskId: task.id,
-          state: task.status,
-          result,
-        }, task.completed_at, stableResult);
+        const frozen = await loadFrozenTerminalProjection(pool, task.id).catch(() => null);
+        if (task.status !== "completed" || !frozen) throw new Error("Artifacts are available only after completion");
+        const result = await revealFrozenTaskProjection(task.id, frozen.projection, frozen.references);
+        return this.signedResult({ orderId: task.standard_order_id, taskId: task.id, result });
       }
-      return this.signedResult({
-        orderId: task.standard_order_id,
-        taskId: task.id,
-        state: task.status,
-      }, task.completed_at, stableResult);
+      return this.signedResult({ orderId: task.standard_order_id, taskId: task.id });
     }
     const service = await getServiceById(task.service_id);
     if (!service) throw new Error("Task service is unavailable");
@@ -167,14 +167,8 @@ export class StandardLifecycleService {
         supplierMutationStarted: claimed.metadata.supplier_mutation_started === true,
         supplierCostCeiling: admittedSupplierCostCeiling(claimed.metadata),
       });
-      const completedAt = new Date();
-      await this.persistTaskState(claimed, "canceled", null, completedAt);
-      const stableResult = await fetchStandardTaskResponse({ ...claimed, status: "canceled" });
-      return this.signedResult(
-        { orderId: claimed.standard_order_id, taskId: claimed.id, state: "canceled" },
-        completedAt,
-        stableResult,
-      );
+      await this.persistTaskState(claimed, "canceled", null, new Date());
+      return this.signedResult({ orderId: claimed.standard_order_id, taskId: claimed.id });
     }
     if (args.action === "input") {
       if (task.status !== "input-required") throw new Error("Task is not awaiting buyer input");
@@ -205,13 +199,16 @@ export class StandardLifecycleService {
         null,
         processed.completed_at,
       );
-      const stableResult = await fetchStandardTaskResponse({ ...claimed, status: processed.status });
+      // A completion answered here carries the frozen unrevealed projection,
+      // whose hash the attestation signs.
+      const frozen = processed.status === "completed"
+        ? await loadFrozenTerminalProjection(pool, claimed.id)
+        : null;
       return this.signedResult({
         orderId: claimed.standard_order_id,
         taskId: claimed.id,
-        state: processed.status,
-        ...(processed.status === "completed" ? { result: stableResult } : {}),
-      }, processed.completed_at, stableResult);
+        ...(frozen ? { result: frozen.projection } : {}),
+      });
     }
     throw new Error("Unsupported lifecycle action");
   }
@@ -250,24 +247,34 @@ export class StandardLifecycleService {
     }
   }
 
-  private async signedResult(
-    payload: Record<string, unknown>,
-    completedAt: Date | null,
-    terminalResult: unknown = payload.result ?? null,
-  ): Promise<Record<string, unknown>> {
-    const state = payload.state;
-    let response: Record<string, unknown> = payload;
-    if (state === "completed" || state === "failed" || state === "canceled") {
-      if (!completedAt) throw new Error("Terminal task completion time is missing");
+  /// The public state comes from one read of the task and its frozen
+  /// terminal identity; a terminal attestation always signs that identity.
+  private async signedResult(payload: {
+    orderId: string;
+    taskId: string;
+    result?: unknown;
+  }): Promise<Record<string, unknown>> {
+    const row = (await pool.query<FrozenTerminalColumns & { status: string }>(
+      `SELECT t.status,${FROZEN_TERMINAL_COLUMNS}
+         FROM transactions t LEFT JOIN standard_terminal_results r ON r.transaction_id=t.id
+        WHERE t.id=$1 AND t.standard_order_id=$2`,
+      [payload.taskId, payload.orderId],
+    )).rows[0];
+    if (!row) throw new Error("Standard task disappeared");
+    const identity = publicTerminalIdentity(row, row);
+    const state = identity?.state ?? row.status;
+    let response: Record<string, unknown> = { orderId: payload.orderId, taskId: payload.taskId, state,
+      ...(payload.result === undefined ? {} : { result: payload.result }) };
+    if (identity) {
       const terminalPayload = {
         orderId: payload.orderId,
         taskId: payload.taskId,
-        state,
-        resultHash: canonicalHash(terminalResult),
-        completedAt: Math.floor(completedAt.getTime() / 1_000),
+        state: identity.state,
+        resultHash: identity.resultHash,
+        completedAt: identity.completedAt,
       };
       response = {
-        ...payload,
+        ...response,
         terminalAttestation: {
           payload: terminalPayload,
           signature: await privateKeyToAccount(this.config.terminalAttestationPrivateKey).signMessage({
@@ -340,6 +347,15 @@ export class StandardLifecycleService {
       if (updated.rowCount !== 1) throw new Error("Standard task state update lost its fence");
       const persisted = await getTransactionById(task.id, client);
       if (!persisted) throw new Error("Standard task disappeared after state update");
+      if (state === "canceled" && task.status !== "canceled") {
+        await recordMandatoryAudit(client, {
+          transactionId: task.id, serviceId: task.service_id, source: "system",
+          type: "transaction.message.agent", message: "Canceled at the buyer's request.",
+          payload: { role: "agent", content: "Canceled at the buyer's request." },
+        });
+      }
+      // The first terminal transition freezes the order's terminal identity.
+      if (state !== task.status) await freezeTerminalResult(client, persisted);
       await enqueueReputationOutcome(persisted, client);
       await client.query(
         `UPDATE standard_dispatch_claims SET state=$2,

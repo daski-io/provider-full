@@ -62,6 +62,20 @@ async function persistOrderQuote(): Promise<void> {
   expect(stored.rows.map((row) => `0x${row.hash}`)).toContain(order.providerQuoteHash);
 }
 
+/** The vector's terminal task state: completed at its time with its frozen projection. */
+async function plantFrozenResult(provider: { result: unknown; resultHash: Hex; completedAt: number }): Promise<void> {
+  const { insertFrozenTerminalResult } = await import("../src/core/standardRail/terminalResult.js");
+  await harness.database.pool.query(
+    "UPDATE transactions SET status='completed',completed_at=to_timestamp($2) WHERE id=$1",
+    [order.providerTaskId, provider.completedAt],
+  );
+  await insertFrozenTerminalResult(harness.database.pool, {
+    transactionId: order.providerTaskId, state: "completed", completedAt: new Date(provider.completedAt * 1_000),
+    resultHash: provider.resultHash, projection: provider.result as never, references: [],
+    provenance: "terminal-transition", evidenceId: null,
+  });
+}
+
 beforeAll(async () => {
   vi.spyOn(ProviderEvidenceVerifier.prototype, "verify").mockResolvedValue({ authorizationKey: WIRE_AUTHORIZATION_KEY });
   vi.spyOn(ProviderEvidenceVerifier.prototype, "assertNotSanctioned").mockResolvedValue();
@@ -236,6 +250,16 @@ describe("provider-wire dispatch-status vectors", () => {
     const expected = vector(status, "working.accepted");
     await harness.at(expected.provider.now);
     expectWireAnswer(await harness.send(status.requests.working.http), expected);
+  });
+
+  it("answers a completed full order with the frozen unrevealed projection's identity", async () => {
+    await persistOrderQuote();
+    await harness.at(context.times.dispatchAnswered);
+    expect((await harness.send(dispatch.requests.initial.http)).status).toBe(200);
+    const expected = vector(status, "completed-task.accepted");
+    await plantFrozenResult(expected.provider);
+    await harness.at(expected.provider.now);
+    expectWireAnswer(await harness.send(status.requests.completed.http), expected);
   });
 
   it("proves absence with the no-claim 404 only after an authoritative lookup", async () => {

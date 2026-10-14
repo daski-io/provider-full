@@ -225,9 +225,65 @@ apply. A client whose status queries fail authentication 30 times within a
 minute is answered `429 {"error":"rate_limit_exceeded"}` before any signature
 recovery until the minute passes; verified reads and `RATE_LIMIT_BYPASS_IPS`
 never consume that budget. The terminal
-`resultHash` is still derived from the task projection today; the frozen
-terminal-result store replaces that single seam
-(`src/core/standardRail/terminalResult.ts`).
+`resultHash` comes from the frozen terminal-result store described below.
+
+## Frozen terminal results
+
+`standard_terminal_results` (core migration 006) holds one immutable row per
+terminal standard order, written in the transaction of its first terminal
+transition after every deliverable and message of that transition:
+
+- `state`, `completed_at` and `result_hash`, the canonical hash of the
+  unrevealed A2A task projection (latest message and persisted artifacts with
+  protected fields still redacted; buyer support messages are never part of
+  it);
+- that projection itself, encrypted at rest and bound to its row, and the
+  `artifact_secrets` references it may reveal;
+- provenance: `terminal-transition`, `verified-attestation` or
+  `unobserved-reconstruction`.
+
+Every dispatch, status and lifecycle terminal attestation signs exactly this
+identity, forever: later messages, support requests, event retention, a
+restart or an internal revival of the task never change it. The public state
+of a frozen order is the frozen state. A database trigger refuses any update
+or delete except re-encrypting the projection under a newer key (readers
+re-verify its hash) and a one-way isolation. An authorized artifact read
+returns a separate representation in which the frozen protected references
+carry their current, unexpired values; its plaintext is never the hash input.
+
+### Legacy terminal rows
+
+A standard order that became terminal before this release has no frozen row,
+because earlier releases re-hashed a projection rebuilt from mutable events.
+The provider never signs a guess for it: dispatch status answers
+`503 dispatch_status_unavailable` and lifecycle reads answer unavailable until
+the row is reconciled from recorded evidence:
+
+| Evidence | Result |
+| --- | --- |
+| A provider terminal attestation the gateway retained (dispatch or lifecycle form, signed by this provider's terminal attestation key, bound to this task and order) and a reconstruction that hashes to it | frozen with those bytes (`verified-attestation`) |
+| The same, but no reconstruction matches (deliverable events were already purged or drifted) | the identity alone is frozen; status keeps its evidence, artifact reads are unavailable |
+| The gateway handoff states that no terminal identity was admitted | the deterministic reconstruction is frozen (`unobserved-reconstruction`) |
+| No evidence, conflicting attestations, an attestation that does not match the row, or an attestation contradicting an already frozen identity | isolated with a stable diagnostic (`legacy_identity_unverified`, `legacy_evidence_conflict`, `legacy_evidence_mismatch`) |
+
+The bearer-admin endpoints `GET /admin/standard-rail/terminal-results/unresolved`
+(read-only; ids, states, times and diagnostics only) and
+`POST /admin/standard-rail/terminal-results/<taskId>/evidence` (header
+`x-admin-actor`, body `{"kind":"attestation","attestation":{payload,signature},"reference"}`
+or `{"kind":"unobserved","reference"}`) list and reconcile these rows.
+Evidence is append-only and audited. Obtain the retained attestations or the
+no-identity statement from the gateway migration handoff before release; a
+reconciled row is served from then on, and other orders stay serviceable
+throughout.
+
+### Retention
+
+Event retention keeps every event of a standard order whose terminal identity
+is not frozen yet (nonterminal and unreconciled legacy orders), because those
+events are still its deliverable bytes. Once frozen, the order's events may be
+purged; the frozen projection and its protected references are never removed
+by retention, and the protocol has no paid-order read expiry. Protected
+artifact values keep their own validity window (`artifact_secrets.expires_at`).
 
 ## Conformance fixtures
 

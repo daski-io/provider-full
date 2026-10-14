@@ -4,7 +4,13 @@ import { pool } from "../db/pool.js";
 import { canonicalHash } from "./canonical.js";
 import type { ProviderStandardRailConfig } from "./config.js";
 import { observeOperations, type OrderOperations } from "./operations.js";
-import { TERMINAL_STATES, terminalResultIdentity, type TerminalState } from "./terminalResult.js";
+import {
+  FROZEN_TERMINAL_COLUMNS,
+  publicTerminalIdentity,
+  TerminalIdentityUnavailableError,
+  type FrozenTerminalColumns,
+  type TerminalState,
+} from "./terminalResult.js";
 
 /** The task states the gateway accepts in a dispatch or status answer. */
 export const DISPATCH_RESPONSE_STATES = [
@@ -41,26 +47,27 @@ export class DispatchSnapshotUnavailableError extends Error {
   }
 }
 
-interface SnapshotRow {
+interface SnapshotRow extends FrozenTerminalColumns {
   dispatch_hash: Buffer;
   transaction_id: string | null;
   claim_state: string;
   operations_revision: string;
   operations_projection: unknown;
   status: string | null;
-  completed_at: Date | null;
   observed_at: string;
 }
 
-// One statement reads the task state, the persisted operations projection and
-// the database clock, so the observation is consistent and never cached.
+// One statement reads the task state, its frozen terminal identity, the
+// persisted operations projection and the database clock, so the
+// observation is consistent and never cached.
 const SNAPSHOT_SQL = `
   SELECT c.dispatch_hash,c.transaction_id,c.state AS claim_state,
          c.operations_revision::text AS operations_revision,c.operations_projection,
-         t.status,t.completed_at,
+         t.status,${FROZEN_TERMINAL_COLUMNS},
          floor(extract(epoch FROM now()))::bigint::text AS observed_at
     FROM standard_dispatch_claims c
     LEFT JOIN transactions t ON t.id=c.transaction_id AND t.standard_order_id=c.order_id
+    LEFT JOIN standard_terminal_results r ON r.transaction_id=t.id
    WHERE c.gateway_audience=$1 AND c.order_id=$2`;
 
 const isResponseState = (state: string): state is DispatchResponseState =>
@@ -83,7 +90,14 @@ export async function signedDispatchSnapshot(
   if (!row?.transaction_id || `0x${row.dispatch_hash.toString("hex")}` !== claim.dispatchHash) {
     throw new DispatchSnapshotUnavailableError("Admitted claim is unavailable for this dispatch");
   }
-  const state = row.status ?? row.claim_state;
+  let identity: ReturnType<typeof publicTerminalIdentity>;
+  try {
+    identity = publicTerminalIdentity({ status: row.status ?? row.claim_state }, row);
+  } catch (error) {
+    if (error instanceof TerminalIdentityUnavailableError) throw new DispatchSnapshotUnavailableError(error.message);
+    throw error;
+  }
+  const state = identity?.state ?? row.status ?? row.claim_state;
   if (!isResponseState(state)) {
     throw new DispatchSnapshotUnavailableError("Task state cannot be published to the gateway");
   }
@@ -98,13 +112,9 @@ export async function signedDispatchSnapshot(
     config.providerAuthorityPrivateKey,
     canonicalHash({ taskId, dispatchHash, state, operations }),
   );
-  if (!TERMINAL_STATES.has(state)) return { taskId, dispatchHash, signature, state, operations };
-  if (!row.completed_at) throw new DispatchSnapshotUnavailableError("Terminal task completion time is missing");
-  const identity = await terminalResultIdentity({
-    id: taskId, status: state as TerminalState, completedAt: row.completed_at,
-  });
+  if (!identity) return { taskId, dispatchHash, signature, state, operations };
   const payload = {
-    taskId, dispatchHash, state: state as TerminalState,
+    taskId, dispatchHash, state: identity.state,
     resultHash: identity.resultHash, completedAt: identity.completedAt,
   };
   return {

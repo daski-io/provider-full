@@ -259,6 +259,18 @@ const coreProtectedDataSinks: ProtectedDataSink[] = [
       { recordVersion: 1 },
     )),
   }),
+  createDirectSink({
+    name: "standard-terminal-results",
+    table: "standard_terminal_results",
+    cursorColumn: "transaction_id",
+    fields: [{
+      column: "projection_encrypted",
+      context: (row) => sinkContext(
+        "standard-terminal-result", "standard_terminal_results", sinkText(row, "transaction_id"),
+        "projection_encrypted", { service: "core", recordVersion: 1 },
+      ),
+    }],
+  }),
   createJsonSink({
     name: "customer-events",
     table: "events",

@@ -30,7 +30,8 @@ import {
 } from "./standardRail/transport.js";
 import { a2aRouter } from "./a2a/router.js";
 import { agentCardRouter } from "./agentCards/routes.js";
-import { adminRouter } from "./admin/routes.js";
+import { adminRouter, requireAdminAuth } from "./admin/routes.js";
+import { createTerminalReconciliationRouter } from "./standardRail/terminalReconciliationRoutes.js";
 import { skillsDocsRouter } from "./docs/skillsRouter.js";
 import { applyOnlyToOpenFreeRequests } from "./security/openA2aBoundary.js";
 import { fileURLToPath } from "node:url";
@@ -198,6 +199,12 @@ export function createProviderApp(
     a2aRouter,
   );
   app.use("/skills", skillsDocsRouter);
+  // Bearer-admin legacy terminal reconciliation needs the rail's keys.
+  app.use(
+    "/admin/standard-rail/terminal-results",
+    requireAdminAuth,
+    createTerminalReconciliationRouter(standardRailConfig),
+  );
   app.use("/admin", adminRouter);
   app.use(
     "/standard-rail",

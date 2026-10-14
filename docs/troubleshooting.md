@@ -448,6 +448,18 @@ exists for a different dispatch hash: reconcile the gateway order with the
 claim the provider holds rather than re-dispatching. `503 ...
 "admission_in_progress"` and `"unavailable"` clear on retry.
 
+### A terminal order answers `dispatch_status_unavailable` or `lifecycle_unavailable`
+
+The order became terminal before frozen terminal results existed, or recorded
+evidence contradicts its identity. List these rows with
+`GET /admin/standard-rail/terminal-results/unresolved` (bearer `ADMIN_TOKEN`);
+each carries a stable diagnostic. Obtain the terminal attestation the gateway
+retained for the order (or its statement that it retained none) through the
+gateway migration handoff and record it with
+`POST /admin/standard-rail/terminal-results/<taskId>/evidence`. Never insert a
+frozen row by hand or re-hash current events: the gateway rejects any
+terminal identity other than the one it stored first.
+
 ### A paid task stays `working` with `standard_reconciliation_required`
 
 The service's supplier call ended ambiguously, or the task was admitted but

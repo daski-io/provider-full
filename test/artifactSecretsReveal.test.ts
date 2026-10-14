@@ -40,9 +40,10 @@ vi.mock("../src/core/chain/encryption.js", () => ({
 }));
 
 import {
-  fetchStandardTaskResponse,
   fetchTaskResponse,
+  revealFrozenTaskProjection,
 } from "../src/core/a2a/responseBuilder.js";
+import type { A2ATask } from "../src/core/a2a/responseBuilder.js";
 
 const task = {
   id: "task-1",
@@ -118,25 +119,32 @@ describe("show-once artifact secrets", () => {
     });
   });
 
-  it("makes authorized standard-rail artifact retries deterministic", async () => {
-    eventRows.push(
-      artifactEvent("secret_created", {
-        credentials: { password: "<redacted>" },
-      }),
-    );
+  it("makes authorized standard-rail artifact retries deterministic over the frozen projection", async () => {
     secretRows = [{ field_path: "credentials.password", secret: "ct-good" }];
+    const frozen: A2ATask = {
+      id: "task-1",
+      status: { state: "TASK_STATE_COMPLETED", message: { role: "ROLE_AGENT", parts: [] } },
+      artifacts: [{
+        artifactId: "evt-1", name: "secret_created",
+        parts: [{ kind: "data", data: { credentials: { password: "<redacted>" } } }],
+      }],
+    };
+    const references = [{ artifactName: "secret_created", fieldPath: "credentials.password" }];
 
-    const first = await fetchStandardTaskResponse(task, true);
-    const second = await fetchStandardTaskResponse(task, true);
+    const first = await revealFrozenTaskProjection("task-1", frozen, references);
+    const second = await revealFrozenTaskProjection("task-1", frozen, references);
 
     expect(first.artifacts?.[0]?.parts[0]?.data).toMatchObject({
       credentials: { password: "S3cretPassw0rd" },
     });
-    expect(second.artifacts?.[0]?.parts[0]?.data).toMatchObject({
-      credentials: { password: "S3cretPassw0rd" },
-    });
+    expect(second).toEqual(first);
+    // The frozen projection stays the unrevealed hash input.
+    expect(frozen.artifacts?.[0]?.parts[0]?.data).toEqual({ credentials: { password: "<redacted>" } });
     expect(readSecrets).toHaveBeenCalledTimes(2);
     expect(bumpReveal).not.toHaveBeenCalled();
+    // A protected field frozen without a reference is never revealed.
+    const unreferenced = await revealFrozenTaskProjection("task-1", frozen, []);
+    expect(unreferenced).toEqual(frozen);
   });
 
   it("leaves the placeholder in place when decryption fails", async () => {

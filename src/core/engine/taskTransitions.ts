@@ -8,8 +8,9 @@ import {
 } from "../db/queries/transactions.js";
 import { inTransaction, type Queryable } from "../db/queryable.js";
 import { recordMandatoryAudit } from "../events/emitter.js";
+import { freezeTerminalResult } from "../standardRail/terminalResult.js";
 import { taskEvents } from "./events.js";
-import { validateTransition } from "./stateMachine.js";
+import { isTerminalState, validateTransition } from "./stateMachine.js";
 
 export type FailureClass = "retryable" | "terminal";
 export type DeferredTaskEmits = Array<() => void>;
@@ -58,6 +59,9 @@ export async function applyTaskTransition(
       payload: { role: "agent", content: opts.message },
     });
   }
+  // A standard order's first terminal transition freezes its terminal
+  // identity in this same transaction, after every deliverable and message.
+  if (isTerminalState(newStatus)) await freezeTerminalResult(db, updated);
   deferred.push(() =>
     taskEvents.emitTaskEvent({ type: "transition", task: updated })
   );

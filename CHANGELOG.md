@@ -103,6 +103,17 @@ All notable changes to this project will be documented here.
   refused, and a verification outage stays retryable instead of looking like
   a wrong signature. Asset actions and queries verify the gateway grant
   before the payer signature, so an ungranted request never spends RPC.
+- A standard order's terminal identity is frozen with its first terminal
+  transition (core migration 006): state, completion time, the canonical
+  unrevealed task projection encrypted at rest, its hash, protected artifact
+  references and provenance. Dispatch, status and lifecycle attestations sign
+  that identity forever; support messages, event retention, restarts and
+  internal revivals no longer change it, and authorized artifact reads reveal
+  protected fields in a separate representation. Terminal rows from earlier
+  releases are never answered with a guess: they are reconciled only from a
+  verified retained attestation or a recorded no-identity handoff through
+  bearer-admin endpoints, or isolated with a stable diagnostic. Event
+  retention keeps the events of every standard order not yet frozen.
 - The gateway's canonical provider-wire fixtures are vendored under
   `test/fixtures/provider-wire/` with an offline parity check, and the real
   quote, intake, dispatch and status handlers are driven through every

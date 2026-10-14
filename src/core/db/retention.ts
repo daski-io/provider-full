@@ -72,6 +72,11 @@ export async function runRetention(): Promise<Record<string, number>> {
         )`,
     [config.EMAIL_RETENTION_DAYS],
   );
+  // A standard order's events are its deliverable bytes until its terminal
+  // identity is frozen: keep them for nonterminal and unreconciled legacy
+  // orders. Frozen results and protected artifact references live in their
+  // own tables and are never removed by retention; paid-order reads have no
+  // expiry.
   await remove(
     "events",
     `DELETE FROM events e
@@ -79,6 +84,13 @@ export async function runRetention(): Promise<Record<string, number>> {
         AND NOT EXISTS (
           SELECT 1 FROM active_legal_hold_targets h
            WHERE h.transaction_id = e.transaction_id OR h.asset_id = e.asset_id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM transactions t
+           WHERE t.id = e.transaction_id AND t.standard_order_id IS NOT NULL
+             AND NOT EXISTS (
+               SELECT 1 FROM standard_terminal_results r WHERE r.transaction_id = t.id
+             )
         )`,
     [config.EVENT_RETENTION_DAYS],
   );

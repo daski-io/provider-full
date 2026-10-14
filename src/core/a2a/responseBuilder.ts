@@ -1,95 +1,27 @@
 import type { TransactionRow } from "../db/queries/transactions.js";
-import { decryptCustomerEvent, listEvents } from "../events/emitter.js";
 import {
   consumeArtifactSecrets,
   readArtifactSecrets,
 } from "../db/queries/artifactSecrets.js";
 import { decryptString } from "../chain/encryption.js";
-import { roleToProtoJson, stateToProtoJson, type InternalRole } from "./parts.js";
-import type {
-  A2AArtifact,
-  A2ATask,
-  Part,
-} from "./responseTypes.js";
+import {
+  buildA2ATaskResponse,
+  getTransactionArtifacts,
+  getTransactionMessages,
+  type ArtifactLike,
+} from "./taskHistory.js";
+import type { A2ATask } from "./responseTypes.js";
 
 export type { A2AArtifact, A2ATask, Part } from "./responseTypes.js";
+export type { ArtifactLike, MessageLike } from "./taskHistory.js";
 
 // A2A v1.0 wire shape. Parts use `kind: "text"|"data"|"file"`; roles are
 // ProtoJSON enum strings (ROLE_USER / ROLE_AGENT); task states are
 // ProtoJSON enum strings (TASK_STATE_*). Artifacts carry `artifactId`.
 //
-// v4: A2A messages and artifacts no longer live in dedicated tables.
-// They're stored as rows in `events` with type='transaction.message.*'
-// and type='transaction.artifact.created'. This module synthesizes the
-// wire response from those event rows.
-
-export interface MessageLike {
-  role: "user" | "agent" | "system";
-  content: string;
-  created_at: Date;
-}
-
-export interface ArtifactLike {
-  id: string;
-  name: string;
-  mime_type: string;
-  url: string | null;
-  data: Record<string, unknown> | null;
-  access_action: "document-download" | null;
-}
-
-/// Reconstruct the message thread for a transaction from `events`.
-/// Returns chronological order. Internal-only helper; the A2A surface
-/// flows through buildA2ATaskResponse.
-async function getTransactionMessages(transactionId: string): Promise<MessageLike[]> {
-  const events = await listEvents({ transactionId, limit: 1000 });
-  const messages: MessageLike[] = [];
-  for (const e of events) {
-    if (e.type !== "transaction.message.user" && e.type !== "transaction.message.agent") continue;
-    const protectedEvent = decryptCustomerEvent(e);
-    const payload = protectedEvent.payload ?? {};
-    const content =
-      typeof payload.content === "string"
-        ? payload.content
-        : protectedEvent.message;
-    messages.push({
-      role: e.type === "transaction.message.user" ? "user" : "agent",
-      content,
-      created_at: e.created_at,
-    });
-  }
-  // listEvents returns DESC; reverse to chronological for message history.
-  return messages.reverse();
-}
-
-/// Reconstruct the artifact list for a transaction from `events`.
-async function getTransactionArtifacts(transactionId: string): Promise<ArtifactLike[]> {
-  const events = await listEvents({
-    transactionId,
-    type: "transaction.artifact.created",
-    limit: 1000,
-  });
-  return events.reverse().map((e) => {
-    const payload = decryptCustomerEvent(e).payload ?? {};
-    return {
-      id: e.id,
-      name: typeof payload.name === "string" ? payload.name : "artifact",
-      mime_type:
-        typeof payload.mime_type === "string"
-          ? payload.mime_type
-          : "application/json",
-      url: typeof payload.url === "string" ? payload.url : null,
-      data:
-        typeof payload.data === "object" && payload.data !== null
-          ? (payload.data as Record<string, unknown>)
-          : null,
-      access_action:
-        payload.access_action === "document-download"
-          ? "document-download"
-          : null,
-    };
-  });
-}
+// Messages and artifacts live in `events` (see taskHistory.ts). This module
+// reveals protected artifact fields for the authorized responses that may
+// carry them.
 
 /// Reveal encrypted-at-rest secrets in artifacts before they're shipped
 /// to the buyer: any artifact may have `artifact_secrets` rows keyed by
@@ -100,13 +32,10 @@ async function getTransactionArtifacts(transactionId: string): Promise<ArtifactL
 async function revealArtifactSecrets(
   transactionId: string,
   artifacts: ArtifactLike[],
-  repeatable = false,
 ): Promise<ArtifactLike[]> {
   if (artifacts.length === 0) return artifacts;
   return Promise.all(
-    artifacts.map((artifact) =>
-      revealGenericSecrets(transactionId, artifact, repeatable),
-    ),
+    artifacts.map((artifact) => revealGenericSecrets(transactionId, artifact)),
   );
 }
 
@@ -127,6 +56,59 @@ export async function revealStandardActionArtifacts(
   }));
 }
 
+/** One protected field a frozen terminal projection may reveal. */
+export interface ProtectedArtifactReference {
+  artifactName: string;
+  fieldPath: string;
+}
+
+/**
+ * The authorized protected representation of a frozen terminal projection:
+ * each data artifact gains the current, unexpired value of exactly the
+ * protected fields frozen with it. The unrevealed projection stays the hash
+ * input; this representation never is.
+ */
+export async function revealFrozenTaskProjection(
+  transactionId: string,
+  projection: A2ATask,
+  references: readonly ProtectedArtifactReference[],
+): Promise<A2ATask> {
+  const revealed = structuredClone(projection);
+  for (const artifact of revealed.artifacts ?? []) {
+    const fields = new Set(references
+      .filter((reference) => reference.artifactName === artifact.name)
+      .map((reference) => reference.fieldPath));
+    if (fields.size === 0) continue;
+    const rows = (await readArtifactSecrets(transactionId, artifact.name))
+      .filter((row) => fields.has(row.field_path));
+    for (const part of artifact.parts) {
+      if (part.kind !== "data" || !part.data) continue;
+      for (const row of rows) {
+        const value = decryptSecret(transactionId, artifact.name, row);
+        if (value !== null) setAtPath(part.data, row.field_path, value);
+      }
+    }
+  }
+  return revealed;
+}
+
+function decryptSecret(
+  transactionId: string,
+  artifactName: string,
+  row: { field_path: string; secret: string },
+): string | null {
+  try {
+    return decryptString(row.secret, {
+      purpose: "customer-artifact",
+      table: "artifact_secrets",
+      recordId: `${transactionId}:${artifactName}:${row.field_path}`,
+      field: "secret",
+    });
+  } catch {
+    return null;
+  }
+}
+
 /// Graft any live `artifact_secrets` rows for this artifact back into its
 /// data payload. Decryption failures leave the redacted placeholder in
 /// place rather than failing the whole response.
@@ -141,18 +123,8 @@ async function revealGenericSecrets(
   if (rows.length === 0) return artifact;
   const data: Record<string, unknown> = structuredClone(artifact.data ?? {});
   for (const row of rows) {
-    let value: string;
-    try {
-      value = decryptString(row.secret, {
-        purpose: "customer-artifact",
-        table: "artifact_secrets",
-        recordId: `${transactionId}:${artifact.name}:${row.field_path}`,
-        field: "secret",
-      });
-    } catch {
-      continue;
-    }
-    setAtPath(data, row.field_path, value);
+    const value = decryptSecret(transactionId, artifact.name, row);
+    if (value !== null) setAtPath(data, row.field_path, value);
   }
   return { ...artifact, data };
 }
@@ -179,49 +151,6 @@ function setAtPath(
   cursor[parts[parts.length - 1]] = value;
 }
 
-function buildArtifactParts(artifact: ArtifactLike): Part[] {
-  if (artifact.url) {
-    return [{ kind: "file", file: { url: artifact.url, mimeType: artifact.mime_type } }];
-  }
-  if (artifact.data) {
-    return [{ kind: "data", data: artifact.data }];
-  }
-  return [{ kind: "text", text: `Artifact: ${artifact.name}` }];
-}
-
-function artifactToA2A(artifact: ArtifactLike): A2AArtifact {
-  return {
-    artifactId: artifact.id,
-    name: artifact.name,
-    parts: buildArtifactParts(artifact),
-  };
-}
-
-function buildA2ATaskResponse(
-  task: Pick<TransactionRow, "id" | "status">,
-  messages: MessageLike[],
-  artifacts: ArtifactLike[],
-): A2ATask {
-  const latestMessage = messages[messages.length - 1];
-  const parts: Part[] = [];
-
-  if (latestMessage?.content) {
-    parts.push({ kind: "text", text: latestMessage.content });
-  }
-
-  // Provider-side messages are always agent-authored.
-  const role: InternalRole = "agent";
-
-  return {
-    id: task.id,
-    status: {
-      state: stateToProtoJson(task.status),
-      message: { role: roleToProtoJson(role), parts },
-    },
-    ...(artifacts.length > 0 && { artifacts: artifacts.map(artifactToA2A) }),
-  };
-}
-
 /// Helper for handlers that just need to read the full v4 wire response.
 /// Single entry point so each handler doesn't repeat the
 /// `(messages, artifacts) = await Promise.all(...)` boilerplate.
@@ -237,20 +166,6 @@ async function loadTaskResponse(task: TransactionRow): Promise<{
     response: buildA2ATaskResponse(task, messages, artifacts),
     artifacts,
   };
-}
-
-export async function fetchStandardTaskResponse(
-  task: Pick<TransactionRow, "id" | "status">,
-  revealSecrets = false,
-): Promise<A2ATask> {
-  const [messages, storedArtifacts] = await Promise.all([
-    getTransactionMessages(task.id),
-    getTransactionArtifacts(task.id),
-  ]);
-  const artifacts = revealSecrets
-    ? await revealArtifactSecrets(task.id, storedArtifacts, true)
-    : storedArtifacts;
-  return buildA2ATaskResponse(task, messages, artifacts);
 }
 
 function carriesGatedDocument(artifacts: ArtifactLike[]): boolean {

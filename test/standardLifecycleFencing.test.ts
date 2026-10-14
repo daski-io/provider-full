@@ -25,6 +25,9 @@ const h = vi.hoisted(() => ({
   enqueueReputationOutcome: vi.fn(),
   decryptString: vi.fn(),
   emitEvent: vi.fn(),
+  recordMandatoryAudit: vi.fn(),
+  freezeTerminalResult: vi.fn(),
+  loadFrozenTerminalProjection: vi.fn(),
 }));
 
 vi.mock("../src/core/db/pool.js", () => ({
@@ -40,7 +43,12 @@ vi.mock("../src/core/engine/taskFinalization.js", () => ({
   processAdapterResult: h.processAdapterResult,
 }));
 vi.mock("../src/core/a2a/responseBuilder.js", () => ({
-  fetchStandardTaskResponse: h.fetchStandardTaskResponse,
+  revealFrozenTaskProjection: h.fetchStandardTaskResponse,
+}));
+vi.mock("../src/core/standardRail/terminalResult.js", async (importActual) => ({
+  ...await importActual<typeof import("../src/core/standardRail/terminalResult.js")>(),
+  freezeTerminalResult: h.freezeTerminalResult,
+  loadFrozenTerminalProjection: h.loadFrozenTerminalProjection,
 }));
 vi.mock("../src/core/db/queries/transactions.js", () => ({
   getTransactionById: h.getTransactionById,
@@ -53,6 +61,7 @@ vi.mock("../src/core/chain/encryption.js", () => ({
 }));
 vi.mock("../src/core/events/emitter.js", () => ({
   emitEvent: h.emitEvent,
+  recordMandatoryAudit: h.recordMandatoryAudit,
 }));
 
 import { StandardLifecycleService } from "../src/core/standardRail/lifecycle.js";
@@ -231,6 +240,18 @@ function transactionCalls(fragment: string): Array<{ sql: string; values: unknow
   return clientCalls.filter(({ sql }) => sql.includes(fragment));
 }
 
+// signedResult's one read of the task and its frozen terminal identity.
+const FROZEN = "LEFT JOIN standard_terminal_results r";
+const frozenRow = (status: string, frozen: boolean) => ({
+  rows: [{
+    status,
+    frozen_state: frozen ? status : null,
+    frozen_completed_at: frozen ? new Date() : null,
+    frozen_result_hash: frozen ? Buffer.alloc(32, 9) : null,
+    frozen_isolated: null,
+  }],
+  rowCount: 1,
+});
 const LOAD = "AND standard_payer IS NOT NULL";
 const CLAIM = "SET version=version+1,updated_at=now()";
 const PERSIST = "SET status=$2,updated_at=now(),version=version+1";
@@ -258,6 +279,7 @@ describe("standard lifecycle mutation fencing", () => {
         rows: [taskRow({ metadata: { supplier_mutation_started: true }, version: "4" })],
         rowCount: 1,
       })],
+      [FROZEN, () => frozenRow("canceled", true)],
     ]);
     routeClients([[PERSIST, () => ({ rows: [], rowCount: 1 })]]);
     h.adapterCancel.mockResolvedValue(undefined);
@@ -290,6 +312,8 @@ describe("standard lifecycle mutation fencing", () => {
     expect(persisted[0]!.values[5]).toBe("working");
     expect(persisted[0]!.values[6]).toBe("4");
     expect(h.enqueueReputationOutcome).toHaveBeenCalledTimes(1);
+    // The cancellation freezes the terminal identity inside its transaction.
+    expect(h.freezeTerminalResult).toHaveBeenCalledTimes(1);
   });
 
   it("refuses the cancel without touching the supplier when the claim is lost", async () => {
@@ -354,8 +378,10 @@ describe("standard lifecycle mutation fencing", () => {
         })],
         rowCount: 1,
       })],
+      [FROZEN, () => frozenRow("completed", true)],
     ]);
     routeClients([[PERSIST, () => ({ rows: [], rowCount: 1 })]]);
+    h.loadFrozenTerminalProjection.mockResolvedValue({ projection: { state: "stable" }, references: [] });
     h.adapterHandleInput.mockResolvedValue({ status: "completed" });
     h.processAdapterResult.mockResolvedValue({
       status: "completed",
