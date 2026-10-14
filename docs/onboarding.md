@@ -143,10 +143,14 @@ npm run build
 node --env-file=.env scripts/register-provider.mjs
 ```
 
-This is a chain mutation. It may register the ERC-8004 agent, bind the wallet,
-claim the Daski index entry, and pay a listing fee. Verify the displayed chain,
-contracts, signer, origin, and funded wallet before authorizing it. Put the
-minted/bound id in `PROVIDER_AGENT_ID`.
+This is a chain mutation. It may register the ERC-8004 agent, claim the Daski
+index entry, and pay a listing fee. Verify the displayed chain, contracts,
+signer, origin, and funded wallet before authorizing it. It first looks for an
+existing agent on the canonical registry, so a rerun after an interrupted
+attempt reuses that agent and never mints a second one; pass `--agent-id <id>`
+when it asks for one. The registry binds the registering wallet at mint, and
+the helper only verifies that binding. Put the minted/bound id in
+`PROVIDER_AGENT_ID`.
 
 After setting the minted/bound id, deploy the candidate so the gateway can read
 its AgentCards. Then register active service contracts:

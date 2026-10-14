@@ -37,9 +37,18 @@ function options(name: string): string[] {
   return values;
 }
 
-async function ensureProviderIdentity(updateUri: boolean): Promise<void> {
+// The identity script finds an existing agent on the canonical registry;
+// --agent-id pins it and --scan-blocks bounds the Transfer-event lookup.
+async function ensureProviderIdentity(): Promise<void> {
   const script = fileURLToPath(new URL("../scripts/register-provider.mjs", import.meta.url));
-  const args = [script, ...(updateUri ? ["--update-uri"] : [])];
+  const agentId = option("--agent-id");
+  const scanBlocks = option("--scan-blocks");
+  const args = [
+    script,
+    ...(process.argv.includes("--update-uri") ? ["--update-uri"] : []),
+    ...(agentId ? ["--agent-id", agentId] : []),
+    ...(scanBlocks ? ["--scan-blocks", scanBlocks] : []),
+  ];
   await new Promise<void>((resolve, reject) => {
     const child = spawn(process.execPath, args, {
       env: process.env,
@@ -66,7 +75,7 @@ async function main(): Promise<void> {
     throw new Error("--retire cannot be combined with --service");
   }
   if (!retirement && !process.argv.includes("--skip-provider-identity")) {
-    await ensureProviderIdentity(process.argv.includes("--update-uri"));
+    await ensureProviderIdentity();
   }
   if (!await checkDatabase()) throw new Error("provider database is unreachable");
   await runMigrations();

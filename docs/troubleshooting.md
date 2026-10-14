@@ -208,6 +208,26 @@ mutating. Review their chain, addresses, agent/service ids, origin, wallet,
 balances, gateway, and selected service/retirement flags with the onboarding
 contact before authorizing them. Doctor and boot never invoke registration.
 
+### Identity helper refuses to mint a second agent
+
+The helper finds an existing agent on the canonical IdentityRegistry, not only
+through the Daski AgentIndex: a run that stopped between `register()` and the
+index claim is found through the wallet's ERC-721 balance and its `Transfer`
+events. When the wallet owns an agent the scan cannot resolve within
+`--scan-blocks` (default 500,000 blocks), or owns several, it stops without
+sending anything. Re-run with `--agent-id <id>`; the id is verified with
+`ownerOf` against the provider wallet. `npm run daski:register` forwards
+`--agent-id` and `--scan-blocks` to the helper. Never mint a replacement to get
+past this message.
+
+### Identity helper reports no `agentWallet`
+
+The canonical registry binds the registering wallet in `register()`, and the
+helper only verifies that binding. It no longer calls `walletRotationNonce` or
+the former `setAgentWallet` consent flow, which the registry does not expose.
+An agent with no bound wallet is a separate, reviewed recovery; nothing was
+sent.
+
 ### RPC is reachable but reports the wrong chain
 
 Use `--live` to confirm the configured RPC's `eth_chainId`. Testnet requires

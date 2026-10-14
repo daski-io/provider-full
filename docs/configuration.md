@@ -115,6 +115,13 @@ registration, splitter activation, and runtime-catalog promotion. It may sign
 artifacts and send transactions. `--service <slug>` narrows the run;
 `--retire 0x<SERVICE_ID>` is a separate guarded retirement operation.
 
+| Option | Effect |
+| --- | --- |
+| `--agent-id <id>` | Passed to the identity helper: use this existing ERC-8004 agent after verifying with `ownerOf` that the provider wallet owns it. |
+| `--scan-blocks <n>` | Passed to the identity helper: how far back from the head the wallet's `Transfer` events are scanned to find an existing agent (default 500,000 blocks). |
+| `--update-uri` | Passed to the identity helper: rewrite a drifted on-chain agent URI. |
+| `--skip-provider-identity` | Skip the identity helper for an already reconciled identity. |
+
 ## Standard Exact-EVM rail
 
 These values are issued or reviewed as one environment-specific set. Missing,

@@ -1,0 +1,273 @@
+import { describe, expect, it } from "vitest";
+import { encodeAbiParameters, encodeEventTopics, zeroAddress } from "viem";
+import {
+  DEFAULT_SCAN_BLOCKS,
+  RegistrationAbort,
+  agentIndexAbi,
+  identityAbi,
+  parseAgentIdArg,
+  parseScanBlocksArg,
+  registrationSteps,
+} from "../scripts/register-provider.mjs";
+
+// The identity step of `npm run daski:register`, run against a stubbed chain.
+// The fixture is a rerun after a crash between register() and claim(): the
+// agent exists on the canonical registry and is owned by the provider
+// wallet, register() bound its agentWallet, and the AgentIndex reverse lookup
+// still answers 0. The stub RPC caps eth_getLogs at 2,000 blocks.
+const WALLET = "0x2B5AD5c4795c026514f8317c7a215E218DcCD6cF";
+const OTHER = "0x1111111111111111111111111111111111111111";
+const IDENTITY = "0x8004000000000000000000000000000000000001";
+const AGENT_INDEX = "0x8004000000000000000000000000000000000002";
+const PROVIDER_REGISTRY = "0x8004000000000000000000000000000000000003";
+const USDC = "0x8004000000000000000000000000000000000004";
+const AGENT_URI = "https://provider.example/.well-known/agent.json";
+const AGENT_ID = 4242n;
+const MINT_BLOCK = 7_000_000n;
+const HEAD = 7_035_000n;
+
+interface Transfer { blockNumber: bigint; tokenId: bigint; to: string }
+
+function chainStub(overrides: Partial<{
+  balance: bigint;
+  owners: Map<bigint, string>;
+  agentWallets: Map<bigint, string>;
+  transfers: Transfer[];
+  indexResolve: bigint;
+  laggingReads: number;
+  receipt: unknown;
+}> = {}) {
+  const state = {
+    head: HEAD,
+    balance: 1n,
+    owners: new Map([[AGENT_ID, WALLET]]),
+    agentWallets: new Map([[AGENT_ID, WALLET]]),
+    transfers: [{ blockNumber: MINT_BLOCK, tokenId: AGENT_ID, to: WALLET }] as Transfer[],
+    indexResolve: 0n,
+    logRangeLimit: 2_000n,
+    // Pinned getAgentWallet reads that fail before a node that has the block answers.
+    laggingReads: 0,
+    receipt: null as unknown,
+    reads: [] as Array<{ functionName: string; args?: readonly unknown[]; blockNumber?: bigint }>,
+    logQueries: [] as Array<{ fromBlock: bigint; toBlock: bigint }>,
+    writes: [] as Array<{ functionName: string }>,
+    ...overrides,
+  };
+  const pub = {
+    async getBlockNumber() { return state.head; },
+    async readContract({ functionName, args, blockNumber }: {
+      functionName: string; args?: readonly unknown[]; blockNumber?: bigint;
+    }) {
+      state.reads.push({ functionName, args, blockNumber });
+      switch (functionName) {
+        case "resolve": return state.indexResolve;
+        case "balanceOf": return state.balance;
+        case "ownerOf": {
+          const owner = state.owners.get(args![0] as bigint);
+          if (!owner) throw new Error("ERC721NonexistentToken");
+          return owner;
+        }
+        case "getAgentWallet":
+          if (blockNumber !== undefined && state.laggingReads > 0) {
+            state.laggingReads -= 1;
+            throw new Error("header not found");
+          }
+          return state.agentWallets.get(args![0] as bigint) ?? zeroAddress;
+        case "tokenURI": return AGENT_URI;
+        default: throw new Error(`unexpected read ${functionName}`);
+      }
+    },
+    async getLogs({ args, fromBlock, toBlock }: {
+      args: { to: string }; fromBlock: bigint; toBlock: bigint;
+    }) {
+      state.logQueries.push({ fromBlock, toBlock });
+      if (toBlock - fromBlock + 1n > state.logRangeLimit) {
+        throw new Error(`eth_getLogs is limited to a ${state.logRangeLimit} range`);
+      }
+      return state.transfers
+        .filter((transfer) =>
+          transfer.blockNumber >= fromBlock && transfer.blockNumber <= toBlock && transfer.to === args.to)
+        .map((transfer) => ({
+          blockNumber: transfer.blockNumber,
+          args: { from: zeroAddress, to: transfer.to, tokenId: transfer.tokenId },
+        }));
+    },
+    async waitForTransactionReceipt() { return state.receipt; },
+  };
+  const wallet = {
+    async writeContract(params: { functionName: string }) {
+      state.writes.push(params);
+      if (!state.receipt) throw new Error("no transaction expected");
+      return "0xtxhash";
+    },
+  };
+  return { state, pub, wallet };
+}
+
+function stepsFor(stub: ReturnType<typeof chainStub>, extra: Record<string, unknown> = {}) {
+  const logs: Array<Record<string, unknown>> = [];
+  const steps = registrationSteps({
+    pub: stub.pub,
+    wallet: stub.wallet,
+    account: { address: WALLET },
+    identity: IDENTITY,
+    agentIndex: AGENT_INDEX,
+    providerRegistry: PROVIDER_REGISTRY,
+    usdc: USDC,
+    agentUri: AGENT_URI,
+    log: (entry) => logs.push(entry),
+    sleep: async () => undefined,
+    ...extra,
+  });
+  return { steps, logs };
+}
+
+const readNames = (state: ReturnType<typeof chainStub>["state"]) =>
+  state.reads.map((read) => read.functionName);
+
+describe("existing provider identity on the canonical registry", () => {
+  it("reuses the agent a crashed run minted instead of minting again", async () => {
+    const stub = chainStub();
+    const { steps, logs } = stepsFor(stub);
+    await expect(steps.ensureAgent()).resolves.toEqual({ agentId: AGENT_ID });
+    expect(stub.state.writes).toEqual([]);
+    expect(logs.find((entry) => entry.step === "identity.skip")?.agentId).toBe(AGENT_ID.toString());
+    expect(readNames(stub.state)).toContain("balanceOf");
+    // The scan started wide, shrank to what the RPC accepts, and stopped once
+    // the owned id was in hand rather than walking the whole cap.
+    const first = stub.state.logQueries[0]!;
+    expect(first.toBlock - first.fromBlock + 1n).toBeGreaterThan(2_000n);
+    const served = stub.state.logQueries.filter((query) => query.toBlock - query.fromBlock + 1n <= 2_000n);
+    expect(served.length).toBeGreaterThan(0);
+    expect(served.length).toBeLessThan(40);
+    expect(served.at(-1)!.fromBlock).toBeLessThanOrEqual(MINT_BLOCK);
+    expect(served.at(-1)!.toBlock).toBeGreaterThanOrEqual(MINT_BLOCK);
+  });
+
+  it("verifies --agent-id with ownerOf and uses it without any lookup", async () => {
+    const stub = chainStub();
+    const { steps, logs } = stepsFor(stub, { agentIdArg: AGENT_ID });
+    await expect(steps.ensureAgent()).resolves.toEqual({ agentId: AGENT_ID });
+    expect(readNames(stub.state)).toEqual(["ownerOf", "tokenURI"]);
+    expect(stub.state.logQueries).toEqual([]);
+    expect(String(logs.find((entry) => entry.step === "identity.skip")?.note)).toMatch(/--agent-id/);
+  });
+
+  it("aborts before sending anything when --agent-id is not the wallet's", async () => {
+    const stub = chainStub({ owners: new Map([[AGENT_ID, OTHER]]) });
+    await expect(stepsFor(stub, { agentIdArg: AGENT_ID }).steps.ensureAgent())
+      .rejects.toThrow(/owned by/);
+    await expect(stepsFor(stub, { agentIdArg: 7n }).steps.ensureAgent())
+      .rejects.toThrow(/no such agent/);
+    expect(stub.state.writes).toEqual([]);
+  });
+
+  it("keeps the AgentIndex binding as the fast path", async () => {
+    const stub = chainStub({ indexResolve: AGENT_ID });
+    await expect(stepsFor(stub).steps.ensureAgent()).resolves.toEqual({ agentId: AGENT_ID });
+    expect(readNames(stub.state)).not.toContain("balanceOf");
+    expect(stub.state.logQueries).toEqual([]);
+  });
+
+  it("refuses to mint while a registry balance the scan cannot resolve remains", async () => {
+    const stub = chainStub({ transfers: [] });
+    const attempt = stepsFor(stub, { scanBlocks: 10_000n }).steps.ensureAgent();
+    await expect(attempt).rejects.toBeInstanceOf(RegistrationAbort);
+    await expect(attempt).rejects.toThrow(/--agent-id[\s\S]*Refusing to mint a second agent/);
+    expect(stub.state.writes).toEqual([]);
+    // The whole cap was covered before giving up.
+    expect(stub.state.logQueries.at(-1)!.fromBlock).toBe(HEAD - 10_000n);
+  });
+
+  it("names several owned agents and leaves the choice to --agent-id", async () => {
+    const stub = chainStub({
+      balance: 2n,
+      owners: new Map([[AGENT_ID, WALLET], [AGENT_ID + 1n, WALLET]]),
+      transfers: [
+        { blockNumber: MINT_BLOCK, tokenId: AGENT_ID, to: WALLET },
+        { blockNumber: MINT_BLOCK + 10n, tokenId: AGENT_ID + 1n, to: WALLET },
+      ],
+    });
+    await expect(stepsFor(stub).steps.ensureAgent()).rejects.toThrow(/4242, 4243|4243, 4242/);
+    expect(stub.state.writes).toEqual([]);
+  });
+
+  it("does not mistake a transferred-away token for the wallet's agent", async () => {
+    const stub = chainStub({
+      owners: new Map([[AGENT_ID, WALLET], [9_000n, OTHER]]),
+      transfers: [
+        { blockNumber: MINT_BLOCK, tokenId: AGENT_ID, to: WALLET },
+        { blockNumber: MINT_BLOCK + 5n, tokenId: 9_000n, to: WALLET },
+      ],
+    });
+    await expect(stepsFor(stub).steps.ensureAgent()).resolves.toEqual({ agentId: AGENT_ID });
+  });
+
+  it("mints only at a zero balance and reads the id from the Registered event", async () => {
+    const topics = encodeEventTopics({
+      abi: identityAbi,
+      eventName: "Registered",
+      args: { agentId: AGENT_ID, owner: WALLET },
+    } as never);
+    const data = encodeAbiParameters([{ type: "string" }], [AGENT_URI]);
+    const stub = chainStub({
+      balance: 0n,
+      owners: new Map(),
+      transfers: [],
+      receipt: { status: "success", blockNumber: MINT_BLOCK, logs: [{ address: IDENTITY, data, topics }] },
+    });
+    const { steps, logs } = stepsFor(stub);
+    await expect(steps.ensureAgent()).resolves.toEqual({ agentId: AGENT_ID, registeredAt: MINT_BLOCK });
+    expect(stub.state.writes.map((write) => write.functionName)).toEqual(["register"]);
+    expect(logs.map((entry) => entry.step)).toContain("identity.register.done");
+  });
+});
+
+describe("payment wallet binding", () => {
+  it("skips when register() bound the wallet, reading at the mint block through the lag retry", async () => {
+    const stub = chainStub({ laggingReads: 2 });
+    const { steps, logs } = stepsFor(stub);
+    await steps.ensureAgentWallet(AGENT_ID, MINT_BLOCK);
+    expect(logs.map((entry) => entry.step)).toEqual(["retry", "retry", "wallet.skip"]);
+    const reads = stub.state.reads.filter((read) => read.functionName === "getAgentWallet");
+    expect(reads).toHaveLength(3);
+    expect(reads.every((read) => read.blockNumber === MINT_BLOCK)).toBe(true);
+    expect(stub.state.writes).toEqual([]);
+  });
+
+  it("fails an unbound wallet naming walletRotationNonce and sends nothing", async () => {
+    const stub = chainStub({ agentWallets: new Map() });
+    const attempt = stepsFor(stub).steps.ensureAgentWallet(AGENT_ID, undefined);
+    await expect(attempt).rejects.toThrow(/walletRotationNonce/);
+    await expect(attempt).rejects.toMatchObject({ exitCode: 2 });
+    expect(stub.state.writes).toEqual([]);
+  });
+
+  it("leaves a deliberately bound payout wallet alone", async () => {
+    const stub = chainStub({ agentWallets: new Map([[AGENT_ID, OTHER]]) });
+    const { steps, logs } = stepsFor(stub);
+    await steps.ensureAgentWallet(AGENT_ID, undefined);
+    expect(logs.map((entry) => entry.step)).toEqual(["wallet.mismatch"]);
+    expect(stub.state.writes).toEqual([]);
+  });
+
+  it("has no wallet-rotation consent calls left in the registration ABIs", () => {
+    const names = [...identityAbi, ...agentIndexAbi]
+      .map((item) => ("name" in item ? item.name : ""));
+    expect(names).not.toContain("walletRotationNonce");
+    expect(names).not.toContain("setAgentWallet");
+    expect(names).toEqual(expect.arrayContaining(["ownerOf", "balanceOf", "getAgentWallet"]));
+  });
+});
+
+describe("arguments", () => {
+  it("parses --agent-id and --scan-blocks strictly", () => {
+    expect(parseAgentIdArg([])).toBeUndefined();
+    expect(parseAgentIdArg(["--update-uri", "--agent-id", "4242"])).toBe(4242n);
+    expect(() => parseAgentIdArg(["--agent-id", "abc"])).toThrow(RegistrationAbort);
+    expect(() => parseAgentIdArg(["--agent-id"])).toThrow(RegistrationAbort);
+    expect(parseScanBlocksArg([])).toBe(DEFAULT_SCAN_BLOCKS);
+    expect(parseScanBlocksArg(["--scan-blocks", "4000"])).toBe(4000n);
+    expect(() => parseScanBlocksArg(["--scan-blocks", "0"])).toThrow(RegistrationAbort);
+  });
+});

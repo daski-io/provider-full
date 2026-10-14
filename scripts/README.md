@@ -27,9 +27,12 @@ These scripts use the configured wallet or RPC. Review the chain banner,
 addresses, signer, and funded wallet before use:
 
 - `node --env-file=.env scripts/register-provider.mjs` registers or
-  reconciles the provider identity, wallet binding, AgentIndex entry, and
-  marketplace listing. It sends transactions and may spend ETH and USDC.
-  `--update-uri` also changes the on-chain agent URI.
+  reconciles the provider identity, AgentIndex entry, and marketplace
+  listing, and verifies the wallet binding `register()` made. It finds an
+  existing agent on the canonical registry (`--agent-id <id>` pins one,
+  `--scan-blocks <n>` bounds the event scan) and never mints while the wallet
+  owns one. It sends transactions and may spend ETH and USDC. `--update-uri`
+  also changes the on-chain agent URI.
 - `npm run daski:register -- --gateway <origin>` registers every active
   service contract with the gateway, persists splitter writes before
   broadcast, submits activation evidence, and promotes runtime-catalog heads.

@@ -50,6 +50,9 @@ All notable changes to this project will be documented here.
   45-second budget pauses while a broadcast receipt is awaited, each receipt
   wait is bounded, a duplicate-registration revert is adopted from the latest
   block, and an abandoned cycle can no longer overwrite a newer verdict.
+- The identity helper finds an existing agent on the canonical registry
+  (`--agent-id`, or the wallet's balance and `Transfer` events), never mints
+  while the wallet owns one, and no longer calls `walletRotationNonce`.
 
 ### Removed
 
