@@ -4,7 +4,8 @@ import { ReusedListingDriftError, describeCrossCheck } from "./activationIdentit
 import { loadRegistrationContext } from "./chainContext.js";
 import { planServiceRegistration } from "./client.js";
 import { staleIntentBindings, verifyRegistrationView } from "./progress.js";
-import { crossCheckActivation, priorHeadsFor } from "./promotion.js";
+import { resolveActivationEvidence } from "./activationEvidence.js";
+import { judgeActivation, priorHeadsFor } from "./promotion.js";
 import type { EvidenceStep, RegistrationPlan } from "./recovery.js";
 import { listGatewaySplitterWrites } from "./splitterRows.js";
 import type { GatewayRegistrationRow } from "./store.js";
@@ -31,6 +32,8 @@ export interface RegistrationForecast {
   gatewayState?: string;
   changedSkills?: string[];
   crossCheck?: { ok: boolean; matched: number; total: number; reused: number; detail: string };
+  /** Whether promotion's deployment evidence resolves, as a run would resolve it. */
+  evidence?: { ok: boolean; detail: string };
   splitters?: { required: number; journaled: number; confirmed: number };
 }
 
@@ -150,23 +153,13 @@ export async function checkServiceRegistration(
           splitters: await splitterSummary(local!, plan),
         };
       }
+      let judged: Awaited<ReturnType<typeof judgeActivation>>;
       try {
-        const check = crossCheckActivation({ view: plan.view, policy: context.policy, priorHeads: heads });
-        return {
-          ...base,
-          state: "RESUME",
-          action: "promote",
-          detail: `gateway registration ${plan.view.registrationId} ACTIVE; local ${local!.state}; promotion cross-check ${check.ok ? "passes" : "FAILS"}`,
-          registrationId,
-          gatewayState,
-          crossCheck: {
-            ok: check.ok,
-            matched: check.verdicts.filter((verdict) => verdict.match).length,
-            total: check.verdicts.length,
-            reused: check.verdicts.filter((verdict) => verdict.reused).length,
-            detail: describeCrossCheck(check),
-          },
-        };
+        judged = await judgeActivation({
+          gatewayOrigin: context.gatewayOrigin,
+          view: plan.view,
+          policy: context.policy,
+        });
       } catch (error) {
         if (!(error instanceof ReusedListingDriftError)) throw error;
         return {
@@ -178,11 +171,45 @@ export async function checkServiceRegistration(
           gatewayState,
         };
       }
+      const { check } = judged;
+      let evidence: NonNullable<RegistrationForecast["evidence"]> | undefined;
+      if (check.ok) {
+        try {
+          await resolveActivationEvidence({
+            registration: local!,
+            view: plan.view,
+            policy: context.policy,
+            check,
+            priorHeads: judged.priorHeads,
+          });
+          evidence = { ok: true, detail: "" };
+        } catch (error) {
+          evidence = { ok: false, detail: safeDetail(error) };
+        }
+      }
+      return {
+        ...base,
+        state: "RESUME",
+        action: "promote",
+        detail: `gateway registration ${plan.view.registrationId} ACTIVE; local ${local!.state}; promotion cross-check ${check.ok ? "passes" : "FAILS"}${evidence ? `; deployment evidence ${evidence.ok ? "resolves" : "FAILS"}` : ""}`,
+        registrationId,
+        gatewayState,
+        crossCheck: {
+          ok: check.ok,
+          matched: check.verdicts.filter((verdict) => verdict.match).length,
+          total: check.verdicts.length,
+          reused: check.verdicts.filter((verdict) => verdict.reused).length,
+          detail: describeCrossCheck(check),
+        },
+        ...(evidence ? { evidence } : {}),
+      };
     }
   }
 }
 
 /** True when a forecast predicts a refused or failing run. */
 export function forecastFails(forecast: RegistrationForecast): boolean {
-  return forecast.state === "BLOCKED" || forecast.crossCheck?.ok === false;
+  return forecast.state === "BLOCKED" ||
+    forecast.crossCheck?.ok === false ||
+    forecast.evidence?.ok === false;
 }

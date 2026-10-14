@@ -299,16 +299,17 @@ npm run daski:register -- --gateway https://<daski-gateway> --check-only
 ```
 
 The forecast performs the same chain, card, database and gateway reads and
-the same recovery decision, verification and promotion cross-check as a run,
-then prints one JSON line per active service. It runs no migration, identity
-helper or ServiceRegistry bootstrap, opens only read-only database sessions,
-sends only gateway `GET` requests, and signs or broadcasts nothing. It exits
-non-zero when any service is `BLOCKED` or a promotion would fail.
+the same recovery decision, verification, promotion cross-check and
+deployment-evidence resolution as a run, then prints one JSON line per active
+service. It runs no migration, identity helper or ServiceRegistry bootstrap,
+opens only read-only database sessions, sends only gateway `GET` requests, and
+signs or broadcasts nothing. It exits non-zero when any service is `BLOCKED`
+or a promotion would fail.
 
 | State | Meaning |
 | --- | --- |
 | `ACTIVE` | Registered and unchanged; a run does nothing. |
-| `RESUME` | The gateway activated the registration; a run promotes it. `crossCheck` says whether the exact-set check passes. |
+| `RESUME` | The gateway activated the registration; a run promotes it. `crossCheck` says whether the exact-set check passes, and `evidence` whether each new paid listing's journaled splitter deployment and its activation checkpoint resolve as the run resolves them. |
 | `IN_PROGRESS` | A pending registration continues under its persisted intent; `action` names the evidence step (`replay-accepted-evidence`, `refresh-unaccepted-evidence`, `resubmit-unaccepted-evidence`, `confirm-splitters-and-submit-evidence`), or `post-persisted-intent` for a signed intent the gateway never answered; its `detail` says when that intent binds a previous card, rail policy or payee. |
 | `RE-REGISTER` | A run signs a new intent; `changedSkills` lists skills whose contract differs from their promoted head. |
 | `BLOCKED` | A run would refuse; `action` and `detail` name the reason. |

@@ -85,7 +85,7 @@ smoke scripts.
 | --- | --- |
 | `CHAIN_ID` | `84532` for Base Sepolia or `8453` for Base Mainnet. |
 | `BASE_RPC_URL` | Primary credential-free HTTPS Base RPC endpoint. |
-| `BASE_RPC_FALLBACK_URLS` | Optional comma-separated ordered RPC fallbacks. Keep them reviewed and credential-free. |
+| `BASE_RPC_FALLBACK_URLS` | Optional comma-separated ordered RPC fallbacks. Keep them reviewed and credential-free. Promotion of a gateway activation reads each new splitter's code, token balance and release sequence at its deployment block, so a promotion resumed long after deployment needs endpoints that serve that historical state. |
 | `IDENTITY_REGISTRY_ADDRESS` | ERC-8004 IdentityRegistry for the selected chain. Mainnet must use the canonical reviewed address. |
 | `SERVICE_REGISTRY_ADDRESS` | Daski service registry coordinated for the selected environment. |
 | `PROVIDER_REGISTRY_ADDRESS` | Provider registry used by the registration helper. |

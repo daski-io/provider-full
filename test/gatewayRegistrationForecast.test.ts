@@ -231,10 +231,36 @@ describe("read-only registration forecast", { timeout: 30_000 }, () => {
       state: "RESUME",
       action: "promote",
       crossCheck: { ok: true, matched: 3, total: 3, reused: 2, detail: "" },
+      evidence: { ok: true, detail: "" },
     });
     expect(forecastFails(passing)).toBe(false);
     await expect(registerServiceWithGateway(GATEWAY, await service()))
       .resolves.toMatchObject({ state: "ACTIVE", registrationId: passing.registrationId });
+  });
+
+  it("forecasts a promotion whose deployment evidence would not resolve, as the run fails", async () => {
+    await register();
+    const trackListing = (await database.pool.query(
+      "SELECT listing_id FROM provider_runtime_listing_versions WHERE skill_id='track-orbit'",
+    )).rows[0]!.listing_id as string;
+    changePaidSkill();
+    gateway.corruptCommitmentFor = trackListing;
+    await expect(register()).rejects.toThrow(/exact runtime commitment set/);
+    gateway.corruptCommitmentFor = null;
+    // The journal record of the new paid listing's deployment is gone.
+    await database.pool.query("DELETE FROM provider_gateway_splitter_writes");
+
+    const failing = await forecastWithoutEffects();
+    expect(failing).toMatchObject({
+      state: "RESUME",
+      action: "promote",
+      crossCheck: { ok: true },
+      evidence: { ok: false, detail: expect.stringContaining("has no splitter evidence for reserve-orbit") },
+    });
+    expect(failing.detail).toMatch(/deployment evidence FAILS/);
+    expect(forecastFails(failing)).toBe(true);
+    await expect(registerServiceWithGateway(GATEWAY, await service()))
+      .rejects.toThrow(/has no splitter evidence for reserve-orbit/);
   });
 
   it("forecasts an exact evidence replay for a registration the gateway is verifying", async () => {
