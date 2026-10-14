@@ -130,7 +130,12 @@ A paid order crosses several independent bindings:
    expiry fence. A funded order is an obligation: paused sales or full
    local capacity never refuse it, an exact replay returns the same task,
    and a different envelope never replaces it.
-7. Core materializes the transaction and invokes the service adapter.
+7. Core materializes the transaction, records the dispatch deadline and the
+   listing version's fulfillment duration with the claim (core migration
+   010), creates the order's durable fulfillment job leased to the admitting
+   request, and invokes the handler of the contract the order was admitted
+   under. If that request dies before the order started, a
+   `standard-paid-fulfillment` worker resumes it once the lease expires.
 8. Results, artifacts, asset ownership, status, and terminal evidence are
    persisted. The first terminal transition freezes the order's terminal
    identity (state, completion time, the canonical unrevealed task
@@ -164,6 +169,17 @@ Promoted versions are never changed or deleted (core migration 009).
 Every write to the catalog advances a database sequence, the activation
 revision. A running process compares it with the revision it validated and
 re-checks its servicing compatibility when it moves.
+
+Every run decides its next step from the local registration record and the
+gateway's live view of the same registration
+(`gatewayRegistration/recovery.ts`): promote a registration the gateway
+activated, continue a pending one under its persisted intent, or sign a new
+intent only when there is nothing to resume. A pending registration's
+intent, preparation, splitter writes and accepted evidence are never
+replaced; accepted evidence is replayed exactly, and only evidence the
+gateway never accepted is re-signed over the original splitter
+transactions. The `--check-only` forecast runs the same decision and
+verification with read-only database sessions and gateway `GET` requests.
 
 ## Retained listing versions
 
@@ -209,17 +225,6 @@ database trigger, so an admission either commits first and blocks the
 retirement, or waits and is refused. Retiring a whole service needs a
 receipt for every paid version it promoted.
 
-Every run decides its next step from the local registration record and the
-gateway's live view of the same registration
-(`gatewayRegistration/recovery.ts`): promote a registration the gateway
-activated, continue a pending one under its persisted intent, or sign a new
-intent only when there is nothing to resume. A pending registration's
-intent, preparation, splitter writes and accepted evidence are never
-replaced; accepted evidence is replayed exactly, and only evidence the
-gateway never accepted is re-signed over the original splitter
-transactions. The `--check-only` forecast runs the same decision and
-verification with read-only database sessions and gateway `GET` requests.
-
 ## Assets and wallet actions
 
 Returning `AdapterResult.asset` provisions a new asset and links it to the
@@ -250,6 +255,22 @@ quote admitted, bound immutably at admission. When the service declares the
 planned spend (`runSupplierOperation({ spend })`), the journal compares it
 with that ceiling immediately before the mutation and refuses an
 over-ceiling operation without calling the supplier.
+
+Every admitted paid order owns one durable `standard-paid-fulfillment` job,
+created in the admission transaction and leased to the admitting request.
+Exactly one executor wins the order's start fence (`submitted` to
+`working`), so the service's `execute` runs at most once per order; a
+database or connection failure before the call leaves the order
+resumable, and the job's worker resumes it on any replica whose build can
+run the order's contract (a job names the executable definition it needs).
+A started call whose answer was never persisted is never repeated: the
+order is parked for reconciliation. Three clocks stay separate: the
+dispatch deadline bounds only when a new claim may commit, the job lease
+and task watchdog watch worker progress, and the admitted fulfillment
+duration, counted from durable acceptance, marks work overdue. Only an
+order that never started fails at that deadline, as never started;
+accepted, started or ambiguous work stays nonterminal so a late result is
+still delivered.
 
 Workers declare heartbeat ids and service invariants through
 `operations.readiness`. Dead letters surface as human reviews rather than

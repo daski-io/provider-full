@@ -25,6 +25,17 @@ All notable changes to this project will be documented here.
 
 ### Changed
 
+- Admitted paid work is resumable (core migration 010): each claim records
+  the order's dispatch deadline and its listing version's fulfillment
+  duration, and admission creates the order's durable
+  `standard-paid-fulfillment` job leased to the admitting request. A new
+  required worker resumes a never-started order after that request died,
+  only on a build that can run its admitted contract, and parks a started
+  call whose answer was lost instead of repeating it. One start fence makes
+  `execute` run at most once, a database failure before the call no longer
+  signs a failure, and only a never-started order fails, as
+  `standard_fulfillment_expired`, once its admitted fulfillment deadline
+  passed; the dispatch deadline never fails admitted work.
 - Every promoted listing version stays resolvable by its commitment hash
   (core migration 009): dispatch, lifecycle, support, reviews and legacy
   terminal evidence use the version an order was sold under, so a timely-paid

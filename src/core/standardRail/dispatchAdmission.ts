@@ -97,7 +97,7 @@ export async function prepareDispatchAdmission(input: {
   const providerQuote = await loadAdmittedProviderQuote({ quote: args.quote, dispatch, outcome });
   const validate = await withDispatchRejection("validator", () => outcomeRequestValidator(outcome));
   await withDispatchRejection("validator", () => validateProviderRequest(validate, args.request));
-  const { handler } = admissionHandler(config, version);
+  const { handler, capability } = admissionHandler(config, version);
   // Fulfilment here is synchronous: executing during a declared product
   // outage would sign a terminal failure, whereas a refusal before admission
   // makes the gateway retry this funded order with a fresh envelope.
@@ -129,6 +129,8 @@ export async function prepareDispatchAdmission(input: {
       dispatch, dispatchHash: input.dispatchHash, request: args.request, outcome, service,
       supplierCostCeiling: providerQuote.supplierCostCeiling,
       providerQuoteHash: providerQuote.quoteHash,
+      fulfillmentSeconds: version.fulfillmentSeconds!,
+      capability,
     },
   };
 }

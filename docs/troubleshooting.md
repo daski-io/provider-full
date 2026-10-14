@@ -515,11 +515,24 @@ terminal identity other than the one it stored first.
 
 ### A paid task stays `working` with `standard_reconciliation_required`
 
-The service's supplier call ended ambiguously, or the task was admitted but
-never started and the task watchdog flagged it. The provider deliberately did
-not sign a failure: the supplier may have acted. Reconcile authoritative
-supplier state through the service's journal (`supplier_operations`) before
-completing or failing the task; never repeat the purchase blindly.
+The service's supplier call ended ambiguously, or the process died during
+the call and the paid-fulfillment worker found no persisted answer. The
+provider deliberately did not sign a failure: the supplier may have acted.
+Reconcile authoritative supplier state through the service's journal
+(`supplier_operations`) before completing or failing the task; never repeat
+the purchase blindly.
+
+### An admitted order stays `submitted`
+
+Its admitting request ended before the order started. The order's
+`standard-paid-fulfillment` job resumes it once the request's 300-second
+lease expires, or 30 seconds after an attempt failed on the database. Check
+that the worker is healthy (`/health/ready`), that the job is not dead
+lettered, and that a replica's build can run the order's admitted contract:
+a job naming an executable definition no build retains is never claimed.
+Once the order's admitted fulfillment duration passed with nothing started,
+it fails as never started (`standard_fulfillment_expired`); work that did
+start is never failed by that deadline.
 
 ### Quote succeeds but execute rejects input
 

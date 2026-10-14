@@ -10,6 +10,7 @@ import {
   DispatchCommitUncertainError,
   DispatchRejectedError,
 } from "./dispatchErrors.js";
+import { insertAdmittedFulfillmentJob, type FulfillmentJobLease } from "./fulfillmentJobs.js";
 import { newStandardTaskId } from "./identifiers.js";
 import { recordStandardSecurityIncident } from "./incidents.js";
 import type { ProviderOutcomeConfig, StandardRailDispatchV2 } from "./types.js";
@@ -82,7 +83,7 @@ export async function probeDispatchClaim(
   }
 }
 
-async function insertAdmission(client: PoolClient, args: AdmissionArgs): Promise<string> {
+async function insertAdmission(client: PoolClient, args: AdmissionArgs): Promise<{ taskId: string; job: FulfillmentJobLease }> {
   const { dispatch } = args;
   const taskId = newStandardTaskId();
   const customer = await upsertCustomer(dispatch.payer, client);
@@ -118,17 +119,23 @@ async function insertAdmission(client: PoolClient, args: AdmissionArgs): Promise
       args.outcome.token, dispatch.grossAmount, dispatch.providerNetAmount, dispatch.daskiCommissionAmount,
     ],
   );
+  // The deadlines the order was sold with: the dispatch envelope's own
+  // deadline and the version's fulfillment duration, from acceptance now.
   await client.query(
     `INSERT INTO standard_dispatch_claims
       (gateway_audience,order_id,dispatch_nonce,dispatch_hash,request_hash,payer,state,
-       transaction_id,provider_quote_hash)
-     VALUES ($1,$2,$3,$4,$5,$6,'dispatching',$7,$8)`,
+       transaction_id,provider_quote_hash,admitted_dispatch_seconds,admitted_fulfillment_seconds)
+     VALUES ($1,$2,$3,$4,$5,$6,'dispatching',$7,$8,$9,$10)`,
     [
       dispatch.gatewayAudience, dispatch.orderId, bytes(dispatch.dispatchNonce), bytes(args.dispatchHash),
       bytes(dispatch.canonicalProviderRequestHash), dispatch.payer, taskId, bytes(args.providerQuoteHash),
+      dispatch.dispatchDeadlineSeconds, args.fulfillmentSeconds,
     ],
   );
-  return taskId;
+  const job = await insertAdmittedFulfillmentJob(client, {
+    taskId, orderId: dispatch.orderId, gatewayAudience: dispatch.gatewayAudience, capability: args.capability,
+  });
+  return { taskId, job };
 }
 
 export interface AdmissionArgs {
@@ -139,7 +146,15 @@ export interface AdmissionArgs {
   service: ServiceRow;
   supplierCostCeiling: SupplierCostCeiling | null;
   providerQuoteHash: Hex;
+  /** The admitted fulfillment duration of the order's listing version. */
+  fulfillmentSeconds: number;
+  /** The executable definition a worker needs to resume the order; null for a configured head. */
+  capability: Hex | null;
 }
+
+export type AdmissionOutcome =
+  | { kind: "admitted"; taskId: string; job: FulfillmentJobLease }
+  | { kind: "existing"; claim: DispatchClaim };
 
 /**
  * Durably admit one paid order. Under the order's advisory lock it either
@@ -149,9 +164,7 @@ export interface AdmissionArgs {
  * request arrived. A commit whose outcome is unknown is ambiguous. Capacity
  * is deliberately not counted here: the order is already funded.
  */
-export async function admitDispatchClaim(
-  args: AdmissionArgs,
-): Promise<{ kind: "admitted"; taskId: string } | { kind: "existing"; claim: DispatchClaim }> {
+export async function admitDispatchClaim(args: AdmissionArgs): Promise<AdmissionOutcome> {
   const client = await pool.connect();
   let destroy = false;
   try {
@@ -164,7 +177,7 @@ export async function admitDispatchClaim(
       await client.query("ROLLBACK");
       return { kind: "existing", claim: toClaim(existing) };
     }
-    const taskId = await insertAdmission(client, args);
+    const { taskId, job } = await insertAdmission(client, args);
     const fence = await client.query<{ open: boolean }>(
       "SELECT clock_timestamp() < to_timestamp($1) AS open", [args.dispatch.validBefore],
     );
@@ -175,9 +188,9 @@ export async function admitDispatchClaim(
       await client.query("COMMIT");
     } catch (error) {
       destroy = true;
-      throw new DispatchCommitUncertainError(taskId, error);
+      throw new DispatchCommitUncertainError(taskId, error, job);
     }
-    return { kind: "admitted", taskId };
+    return { kind: "admitted", taskId, job };
   } catch (error) {
     if (error instanceof DispatchAmbiguousError) throw error;
     await client.query("ROLLBACK").catch(() => { destroy = true; });

@@ -233,6 +233,13 @@ Never log request data to debug validation.
 
 ## 5. Implement fulfillment
 
+Core calls `execute` at most once per admitted paid order, usually inside the
+dispatch request. When that request dies before the call, a worker on any
+replica makes the call later, possibly after the gateway's dispatch deadline
+but within the order's admitted fulfillment duration; once the call has
+started it is never made again. Return `working` for work that continues in
+your own durable jobs.
+
 Dispatch from the adapter by exact skill id:
 
 ```typescript

@@ -7,6 +7,7 @@ import {
   admitDispatchClaim,
   findDispatchClaim,
   probeDispatchClaim,
+  type AdmissionOutcome,
   type ClaimKey,
   type DispatchClaim,
 } from "./dispatchClaim.js";
@@ -17,6 +18,7 @@ import {
   DispatchStatusError,
 } from "./dispatchErrors.js";
 import { fulfillAdmittedDispatch } from "./dispatchExecution.js";
+import { underFulfillmentLease } from "./fulfillmentJobs.js";
 import { assertForwardedQuoteIntegrity } from "./dispatchQuoteBinding.js";
 import { signedDispatchSnapshot, type DispatchSnapshotV1 } from "./dispatchResponse.js";
 import { ORDER_ID, verifyDispatchEnvelope } from "./dispatchVerification.js";
@@ -120,7 +122,7 @@ export class StandardDispatchService {
       if (error instanceof DispatchRejectedError) return this.confirmRefusal(error, key, dispatchHash);
       throw error;
     }
-    let admitted: Awaited<ReturnType<typeof admitDispatchClaim>>;
+    let admitted: AdmissionOutcome;
     try {
       admitted = await admitDispatchClaim(admission.claim);
     } catch (error) {
@@ -129,17 +131,21 @@ export class StandardDispatchService {
       admitted = await this.resolveUncertainCommit(error, key, dispatchHash);
     }
     if (admitted.kind === "existing") return this.answerExisting(admitted.claim, key, dispatchHash);
+    const { taskId, job } = admitted;
     try {
-      await fulfillAdmittedDispatch({
-        taskId: admitted.taskId,
-        dispatch,
+      // The admission created the order's fulfillment job leased to this
+      // request; if the request dies before the order starts, a worker
+      // resumes it once the lease expires.
+      await underFulfillmentLease(job, () => fulfillAdmittedDispatch({
+        taskId,
+        order: { gatewayAudience: dispatch.gatewayAudience, orderId: dispatch.orderId, payer: dispatch.payer },
         request: args.request,
         skillId: admission.claim.outcome.skillId,
         service: admission.claim.service,
         skill: admission.skill,
         handler: admission.handler,
         supplierCostCeiling: admission.claim.supplierCostCeiling,
-      });
+      }));
       return await signedDispatchSnapshot(this.config, { ...key, dispatchHash });
     } catch (error) {
       throw new DispatchAmbiguousError("Admitted dispatch cannot be answered", { cause: error });
@@ -182,7 +188,7 @@ export class StandardDispatchService {
     uncertain: DispatchCommitUncertainError,
     key: ClaimKey,
     dispatchHash: Hex,
-  ): Promise<{ kind: "admitted"; taskId: string } | { kind: "existing"; claim: DispatchClaim }> {
+  ): Promise<AdmissionOutcome> {
     // The committing backend may still hold the order lock for a moment.
     let probe: Awaited<ReturnType<typeof probeDispatchClaim>> | null = null;
     for (let attempt = 0; attempt < UNCERTAIN_COMMIT_PROBES; attempt += 1) {
@@ -191,8 +197,8 @@ export class StandardDispatchService {
       await new Promise((resolve) => setTimeout(resolve, UNCERTAIN_COMMIT_PROBE_DELAY_MS));
     }
     if (probe?.kind !== "claim") throw uncertain;
-    if (probe.claim.dispatchHash === dispatchHash && probe.claim.transactionId === uncertain.taskId) {
-      return { kind: "admitted", taskId: uncertain.taskId };
+    if (probe.claim.dispatchHash === dispatchHash && probe.claim.transactionId === uncertain.taskId && uncertain.job) {
+      return { kind: "admitted", taskId: uncertain.taskId, job: uncertain.job };
     }
     return { kind: "existing", claim: probe.claim };
   }

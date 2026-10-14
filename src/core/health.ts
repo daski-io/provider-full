@@ -43,6 +43,7 @@ const CORE_REQUIRED_WORKERS = [
   "provider-write-reconciler",
   "standard-reputation-outcome",
   "standard-review-resolution",
+  "standard-paid-fulfillment",
   "operator-escalation",
 ] as const;
 let readinessCache: { expiresAt: number; result: ReadinessResult } | null = null;

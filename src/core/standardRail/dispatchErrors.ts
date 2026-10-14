@@ -40,7 +40,12 @@ export class DispatchAmbiguousError extends Error {
  * task id can prove whether this request's own transaction committed.
  */
 export class DispatchCommitUncertainError extends DispatchAmbiguousError {
-  constructor(readonly taskId: string, cause: unknown) {
+  constructor(
+    readonly taskId: string,
+    cause: unknown,
+    /** The fulfillment job the uncertain transaction would have created. */
+    readonly job: { id: string; leaseToken: string } | null = null,
+  ) {
     super("Dispatch admission commit outcome is unknown", { cause });
     this.name = "DispatchCommitUncertainError";
   }

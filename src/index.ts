@@ -50,6 +50,7 @@ import { retainAdmittedActionDefinitions } from "./core/standardRail/actionDefin
 import { startReputationOutcomeWorker } from "./core/standardRail/reputationOutcome.js";
 import { deriveProviderLaunchPolicy } from "./core/standardRail/launchPolicy.js";
 import { startStandardReviewResolutionWorker } from "./core/standardRail/reviewResolutionWorker.js";
+import { startPaidFulfillmentWorker } from "./core/standardRail/paidFulfillmentWorker.js";
 
 let shuttingDown = false;
 let serviceWorkerStops: Array<() => void | Promise<void>> = [];
@@ -58,6 +59,7 @@ let stopStandardRailReadiness: (() => void) | null = null;
 let stopStandardTaskWatchdog: (() => void) | null = null;
 let stopReputationOutcomeWorker: (() => void) | null = null;
 let stopStandardReviewResolutionWorker: (() => Promise<void>) | null = null;
+let stopPaidFulfillmentWorker: (() => Promise<void>) | null = null;
 
 async function main(): Promise<void> {
   logInfo("Config loaded", {
@@ -106,6 +108,9 @@ async function main(): Promise<void> {
     standardRailConfig,
     walletConfig,
   );
+  // Admitted paid orders whose admitting request ended before they started
+  // resume from their durable fulfillment jobs.
+  stopPaidFulfillmentWorker = startPaidFulfillmentWorker(standardRailConfig);
   const { checkedAt: registrationCheckedAt } = await enforceInitialChainReadiness();
 
   const services = getAllServices();
@@ -158,6 +163,8 @@ async function shutdown(reason: string, exitCode: number): Promise<void> {
     stopReputationOutcomeWorker = null;
     await stopStandardReviewResolutionWorker?.();
     stopStandardReviewResolutionWorker = null;
+    await stopPaidFulfillmentWorker?.();
+    stopPaidFulfillmentWorker = null;
     await stopAuthSecurityCleanup();
     await stopRetentionWorker();
     await stopEmailIngressWorker();

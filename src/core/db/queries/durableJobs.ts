@@ -26,6 +26,7 @@ export interface DurableJobRow {
   lease_owner: string | null;
   lease_token: string | null;
   lease_expires_at: Date | null;
+  required_capability?: string | null;
   last_error: string | null;
   dead_letter_surfaced_at: Date | null;
   created_at: Date;
@@ -79,14 +80,7 @@ export async function getDurableQueueMetrics(): Promise<DurableQueueMetrics[]> {
   }));
 }
 
-export async function enqueueDurableJob(args: {
-  queue: string;
-  idempotencyKey: string;
-  payload: Record<string, unknown>;
-  maxAttempts?: number;
-  availableAt?: Date;
-  db?: Queryable;
-}): Promise<DurableJobRow> {
+function protectedJobPayload(args: { queue: string; idempotencyKey: string; payload: Record<string, unknown> }): string {
   if (!args.queue || args.queue.length > MAX_QUEUE_CHARS) {
     throw new Error("durable job queue is invalid");
   }
@@ -98,6 +92,25 @@ export async function enqueueDurableJob(args: {
   if (Buffer.byteLength(serializedPayload, "utf8") > MAX_PAYLOAD_BYTES) {
     throw new Error("durable job payload exceeds the protected queue limit");
   }
+  return serializedPayload;
+}
+
+const CAPABILITY = /^0x[0-9a-f]{64}$/;
+
+export async function enqueueDurableJob(args: {
+  queue: string;
+  idempotencyKey: string;
+  payload: Record<string, unknown>;
+  maxAttempts?: number;
+  availableAt?: Date;
+  /** Only a worker whose build runs this executable definition may claim the job. */
+  requiredCapability?: string | null;
+  db?: Queryable;
+}): Promise<DurableJobRow> {
+  const serializedPayload = protectedJobPayload(args);
+  if (args.requiredCapability && !CAPABILITY.test(args.requiredCapability)) {
+    throw new Error("durable job capability is invalid");
+  }
   const db = args.db ?? pool;
   // "Available immediately" uses the DATABASE clock (COALESCE → now()):
   // claim eligibility compares against now() too, so a skewed application
@@ -105,8 +118,8 @@ export async function enqueueDurableJob(args: {
   // future. Explicit delays remain caller-supplied timestamps.
   const result = await db.query<DurableJobRow>(
     `INSERT INTO durable_jobs
-       (queue, idempotency_key, payload, max_attempts, available_at)
-     VALUES ($1,$2,$3,$4,COALESCE($5, now()))
+       (queue, idempotency_key, payload, max_attempts, available_at, required_capability)
+     VALUES ($1,$2,$3,$4,COALESCE($5, now()),$6)
      ON CONFLICT (queue, idempotency_key) DO UPDATE
        SET payload = CASE
              WHEN durable_jobs.status IN ('queued','retry') THEN EXCLUDED.payload
@@ -125,15 +138,56 @@ export async function enqueueDurableJob(args: {
       serializedPayload,
       args.maxAttempts ?? 12,
       args.availableAt ?? null,
+      args.requiredCapability ?? null,
     ],
   );
   return result.rows[0];
+}
+
+/**
+ * Create a job already leased to the caller, inside the caller's
+ * transaction: the work it describes is being done right now by that
+ * caller, and any worker resumes it only after the lease expired. Returns
+ * null when the job already exists.
+ */
+export async function insertLeasedDurableJob(db: Queryable, args: {
+  queue: string;
+  idempotencyKey: string;
+  payload: Record<string, unknown>;
+  workerId: string;
+  leaseSeconds: number;
+  maxAttempts?: number;
+  requiredCapability?: string | null;
+}): Promise<{ id: string; leaseToken: string } | null> {
+  const serializedPayload = protectedJobPayload(args);
+  if (args.requiredCapability && !CAPABILITY.test(args.requiredCapability)) {
+    throw new Error("durable job capability is invalid");
+  }
+  const result = await db.query<{ id: string; lease_token: string }>(
+    `INSERT INTO durable_jobs
+       (queue,idempotency_key,payload,status,attempts,max_attempts,available_at,
+        lease_owner,lease_token,lease_expires_at,required_capability)
+     VALUES ($1,$2,$3,'running',1,$4,now(),$5,gen_random_uuid(),now() + ($6 * interval '1 second'),$7)
+     ON CONFLICT (queue, idempotency_key) DO NOTHING
+     RETURNING id,lease_token`,
+    [
+      args.queue, args.idempotencyKey, serializedPayload, args.maxAttempts ?? 12,
+      args.workerId, args.leaseSeconds, args.requiredCapability ?? null,
+    ],
+  );
+  const row = result.rows[0];
+  return row ? { id: row.id, leaseToken: row.lease_token } : null;
 }
 
 export async function claimDurableJob(args: {
   queue: string;
   workerId: string;
   leaseSeconds: number;
+  /**
+   * The executable definitions this worker's build runs. When given, a job
+   * that requires another one is left for a worker that can run it.
+   */
+  capabilities?: readonly string[];
 }): Promise<DurableJobClaim | null> {
   return inTransaction(pool, async (db) => {
     await db.query(
@@ -167,6 +221,8 @@ export async function claimDurableJob(args: {
             AND status IN ('queued','retry')
             AND attempts < max_attempts
             AND available_at <= now()
+            AND ($4::text[] IS NULL OR required_capability IS NULL
+              OR required_capability = ANY($4::text[]))
           ORDER BY available_at, created_at
           FOR UPDATE SKIP LOCKED
           LIMIT 1
@@ -181,7 +237,7 @@ export async function claimDurableJob(args: {
          FROM candidate
         WHERE j.id = candidate.id
        RETURNING j.*`,
-      [args.queue, args.workerId, args.leaseSeconds],
+      [args.queue, args.workerId, args.leaseSeconds, args.capabilities ? [...args.capabilities] : null],
     );
     return result.rows[0] ?? null;
   });
