@@ -243,8 +243,10 @@ transactions are mined and run it again; steps already on chain are skipped.
 The canonical registry binds the registering wallet in `register()`, and the
 helper only verifies that binding. It no longer calls `walletRotationNonce` or
 the former `setAgentWallet` consent flow, which the registry does not expose.
-An agent with no bound wallet is a separate, reviewed recovery; the message
-names any transaction the run already sent.
+The binding is checked before anything is written for the agent, so an agent
+transferred into the wallet, whose binding the registry cleared, stops here
+before its URI is rewritten. An agent with no bound wallet is a separate,
+reviewed recovery; the message names any transaction the run already sent.
 
 ### RPC is reachable but reports the wrong chain
 

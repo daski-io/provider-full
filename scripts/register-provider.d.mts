@@ -38,6 +38,7 @@ export interface RegistrationSteps {
   heldAgents(balance: bigint, head: bigint): Promise<{ minted: bigint[]; transferredIn: bigint[] }>;
   ensureAgent(): Promise<{ agentId: bigint; registeredAt?: bigint }>;
   ensureAgentWallet(agentId: bigint, registeredAt: bigint | undefined): Promise<void>;
+  reconcileUri(agentId: bigint): Promise<void>;
   ensureIndexed(agentId: bigint): Promise<void>;
   ensureListed(agentId: bigint): Promise<void>;
   run(): Promise<Record<string, unknown>>;

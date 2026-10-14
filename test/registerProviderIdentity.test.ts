@@ -169,7 +169,7 @@ describe("existing provider identity on the canonical registry", () => {
     const stub = chainStub();
     const { steps, logs } = stepsFor(stub, { agentIdArg: AGENT_ID });
     await expect(steps.ensureAgent()).resolves.toEqual({ agentId: AGENT_ID });
-    expect(readNames(stub.state)).toEqual(["ownerOf", "tokenURI"]);
+    expect(readNames(stub.state)).toEqual(["ownerOf"]);
     expect(stub.state.logQueries).toEqual([]);
     expect(String(logs.find((entry) => entry.step === "identity.skip")?.note)).toMatch(/--agent-id/);
   });
@@ -342,16 +342,34 @@ describe("payment wallet binding", () => {
     expect(stub.state.writes).toEqual([]);
   });
 
-  it("names what the run already sent when it stops on an unbound wallet", async () => {
+  it("verifies the wallet binding before rewriting any agent's URI", async () => {
+    // A transferred-in agent: owned by the wallet, binding cleared at transfer.
     const stub = chainStub({
       agentWallets: new Map(),
       tokenUri: "https://elsewhere.example/agent.json",
       receipt: { status: "success", blockNumber: HEAD, logs: [] },
     });
     const { steps } = stepsFor(stub, { agentIdArg: AGENT_ID, updateUri: true });
-    await expect(steps.ensureAgent()).resolves.toEqual({ agentId: AGENT_ID });
-    await expect(steps.ensureAgentWallet(AGENT_ID, undefined))
-      .rejects.toThrow(/This run already sent: identity\.setAgentURI\./);
+    await expect(steps.run()).rejects.toThrow(/walletRotationNonce[\s\S]*Nothing was sent\./);
+    expect(stub.state.writes).toEqual([]);
+  });
+
+  it("names what the run already sent when it stops on an unbound wallet", async () => {
+    const topics = encodeEventTopics({
+      abi: identityAbi,
+      eventName: "Registered",
+      args: { agentId: AGENT_ID, owner: WALLET },
+    } as never);
+    const data = encodeAbiParameters([{ type: "string" }], [AGENT_URI]);
+    const stub = chainStub({
+      balance: 0n,
+      owners: new Map(),
+      transfers: [],
+      agentWallets: new Map(),
+      receipt: { status: "success", blockNumber: MINT_BLOCK, logs: [{ address: IDENTITY, data, topics }] },
+    });
+    await expect(stepsFor(stub).steps.run())
+      .rejects.toThrow(/This run already sent: identity\.register\./);
   });
 
   it("leaves a deliberately bound payout wallet alone", async () => {

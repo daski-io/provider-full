@@ -265,7 +265,6 @@ export function registrationSteps({
         throw new RegistrationAbort(`--agent-id ${agentIdArg} is owned by ${owner}, not the provider wallet ${account.address}`, 1);
       }
       log({ step: "identity.skip", agentId: agentIdArg.toString(), note: "--agent-id verified against ownerOf" });
-      await reconcileUri(agentIdArg);
       return { agentId: agentIdArg };
     }
 
@@ -274,7 +273,6 @@ export function registrationSteps({
     });
     if (indexed !== 0n) {
       log({ step: "identity.skip", agentId: indexed.toString(), note: "already registered (AgentIndex)" });
-      await reconcileUri(indexed);
       return { agentId: indexed };
     }
 
@@ -290,7 +288,6 @@ export function registrationSteps({
       const { minted, transferredIn } = await heldAgents(balance, head);
       if (minted.length === 1) {
         log({ step: "identity.skip", agentId: minted[0].toString(), note: "already registered (minted to the provider wallet; id recovered from Transfer events)" });
-        await reconcileUri(minted[0]);
         return { agentId: minted[0] };
       }
       if (minted.length > 1 || BigInt(transferredIn.length) !== balance) {
@@ -428,7 +425,11 @@ export function registrationSteps({
   async function run() {
     log({ step: "start", wallet: account.address, agentURI: agentUri, identity, agentIndex, providerRegistry });
     const { agentId, registeredAt } = await ensureAgent();
+    // The wallet binding is verified before anything is written for the
+    // agent: a transferred-in agent, whose binding the registry cleared,
+    // stops here instead of having its URI rewritten first.
     await ensureAgentWallet(agentId, registeredAt);
+    await reconcileUri(agentId);
     await ensureIndexed(agentId);
     await ensureListed(agentId);
 
@@ -454,7 +455,7 @@ export function registrationSteps({
     return summary;
   }
 
-  return { retryOnLag, sendTx, heldAgents, ensureAgent, ensureAgentWallet, ensureIndexed, ensureListed, run };
+  return { retryOnLag, sendTx, heldAgents, ensureAgent, ensureAgentWallet, reconcileUri, ensureIndexed, ensureListed, run };
 }
 
 export async function main(argv = process.argv.slice(2), env = process.env) {
