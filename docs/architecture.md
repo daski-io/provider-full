@@ -333,6 +333,37 @@ The admitted owner is compared with the current one at three boundaries:
   that compared the version, so no owner change commits between the check
   and the signature. A stale owner gets `403` with nothing loaded or signed.
 
+### Asset delivery admissions
+
+Core delivers no asset information itself: its email paths answer inbound
+mail and deliver no asset record or protected data. A service that emails an
+owner, releases a protected document or sends a notice about an asset uses
+`deliverAssetInformation` (`src/core/standardRail/assetDeliveryAdmission.ts`,
+core migration 013):
+
+1. the delivery is admitted in a short transaction under the asset owner
+   fence for the owner it addresses, recording that owner's version; any
+   recipient resolution runs in the same transaction through the fenced
+   connection;
+2. the send runs outside every lock;
+3. `sendEmail`'s `beforeSend` hook renews the admission under the fence
+   immediately before the bounded outbound call. A revoked or finished
+   admission, or a changed owner or version, is an explicit refusal
+   (`OutboundSendRefusedError`): the journaled email is recorded
+   `send_skipped` and never resent. Any other failure of the check is
+   infrastructure: nothing was sent, the email is recorded `send_retryable`
+   with its request fingerprint and a cooldown, and the same logical send is
+   validated again when it is retried; changed content is refused for
+   review;
+4. the admission is closed with the attempt's outcome.
+
+An unknown Postmark outcome stays `outcome_unknown` and is never resent
+automatically, unlike a refusal or a retryable check. No lock holder needs a
+second pooled connection and no lock is held across the outbound call. An
+open admission counts as live work for an owner change for ten minutes after
+its last renewal, far longer than the bounded outbound call that follows a
+renewal.
+
 ### Owner changes
 
 The starter ships no path that changes an owner, and the architecture gate

@@ -43,6 +43,7 @@ free reads may be called anonymously.
 | Payment | Verify finalized standard dispatch and release evidence bound to provider, service, skill, payer, amount, recipe, and order. |
 | Replay | Atomically consume wallet, provider-grant, dispatch, and envelope nonces in PostgreSQL. |
 | Ownership | Resolve the current owner only through the single owner authority (`assetOwnership.ts`); admit owner-only work under the asset owner fence with that owner's version and compare it at execution, result persistence and release; never trust caller or cached ownership metadata. |
+| Asset delivery | Admit each delivery of asset information under the owner fence for the owner it addresses, send outside every lock, and renew the admission under the fence immediately before the outbound call; an explicit refusal is terminal and an infrastructure failure stays retryable. |
 | Owner change | None ships. A fork that adds one must follow the fencing sequence in `docs/architecture.md`; the architecture gate refuses any other write to `asset_owner_overrides`. |
 | Consequential action | Require an admitted owner-only action from the signed catalog. |
 | Destructive action | Require a delayed, separately signed confirm/cancel step bound to the exact preview and request. |

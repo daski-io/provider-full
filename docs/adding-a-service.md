@@ -317,6 +317,30 @@ on (active only when omitted), and when `assetIdentifierFromData(skillId,
 data)` returns an identifier, an action whose input names another one is
 refused. Return canonical identifiers.
 
+A service that delivers information about an asset to its owner (an email, a
+protected document, a notice) must send it through `deliverAssetInformation`
+from `src/core/standardRail/assetDeliveryAdmission.ts`, passing the
+`beforeSend` hook it supplies to `sendEmail` (or calling it immediately
+before any other bounded outbound call). Resolve the recipient in its
+`prepare` callback, through the database connection it receives, rather than
+from a contact cached before the delivery was admitted:
+
+```typescript
+await deliverAssetInformation({
+  assetId,
+  purpose: "report.ready",
+  prepare: (db, owner) => loadOwnerContact(db, owner.payer),
+  send: ({ prepared, beforeSend }) => sendEmail({
+    to: prepared.email, subject, bodyText, sentBy: "system",
+    fromAddress, idempotencyKey: `report-ready:${assetId}:${reportId}`,
+  }, { beforeSend }),
+});
+```
+
+A refusal there is final for that email; an infrastructure failure leaves it
+retryable under the same idempotency key, which must therefore name the
+logical message, not the attempt.
+
 ### External supplier writes
 
 For non-convergent supplier mutations, use the core supplier-operation journal

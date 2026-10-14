@@ -406,14 +406,16 @@ const productionSources = sourceFiles.filter((file) => {
 const sourceFileSet = new Set(productionSources);
 const reachable = new Set();
 // These are public building blocks for real service modules. The dummy service
-// intentionally has no external supplier, compliance vendor, or asset
-// mutation, so these entrypoints are not reached by the starter composition.
+// intentionally has no external supplier, compliance vendor, asset mutation
+// or asset delivery, so these entrypoints are not reached by the starter
+// composition.
 const reusableCoreEntrypoints = [
   "src/core/admin/assetMutation.ts",
   "src/core/compliance/blocklist.ts",
   "src/core/compliance/lease.ts",
   "src/core/security/publicFailures.ts",
   "src/core/security/reviewedEndpoint.ts",
+  "src/core/standardRail/assetDeliveryAdmission.ts",
   "src/core/suppliers/circuitBreaker.ts",
   "src/core/suppliers/circuitBreakerPolicy.ts",
   "src/core/suppliers/circuitBreakerRecovery.ts",

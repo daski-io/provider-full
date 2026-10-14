@@ -3,6 +3,7 @@ import type { OutboundEmailRow } from "../src/core/db/queries/emails.js";
 import type { SendEmailArgs } from "../src/core/email/postmarkOutbound.js";
 
 const mocks = vi.hoisted(() => ({
+  claimOutboundRetry: vi.fn(),
   insertOutboundEmail: vi.fn(),
   setOutboundMessageId: vi.fn(),
   updateOutboundDeliveryStatus: vi.fn(),
@@ -12,6 +13,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../src/core/db/queries/emails.js", () => ({
+  claimOutboundRetry: mocks.claimOutboundRetry,
   insertOutboundEmail: mocks.insertOutboundEmail,
   setOutboundMessageId: mocks.setOutboundMessageId,
   updateOutboundDeliveryStatus: mocks.updateOutboundDeliveryStatus,
@@ -29,6 +31,7 @@ vi.mock("../src/core/events/emitter.js", () => ({ emitEvent: mocks.emitEvent }))
 vi.mock("../src/core/security/outboundHttp.js", () => ({ boundedFetch: mocks.boundedFetch }));
 
 import { sendEmail } from "../src/core/email/postmarkOutbound.js";
+import { OutboundSendRefusedError } from "../src/core/email/postmarkOutcome.js";
 
 const baseArgs: SendEmailArgs = {
   serviceId: "service-1",
@@ -164,5 +167,78 @@ describe("Postmark outbound replay safety", () => {
       mandatory: true,
       payload: { outboundId: stored.id, status: 200 },
     }));
+  });
+});
+
+describe("the last-moment refusal hook", () => {
+  const refusal = () => new OutboundSendRefusedError("the delivery admission was revoked");
+
+  it("runs after the journal write and before the outbound call", async () => {
+    const order: string[] = [];
+    mocks.insertOutboundEmail.mockImplementation(async () => {
+      order.push("journal");
+      return { row: outboundRow(), inserted: true };
+    });
+    mocks.boundedFetch.mockImplementation(async () => {
+      order.push("postmark");
+      return response(200, { MessageID: "postmark-message-2" });
+    });
+    await sendEmail(baseArgs, { beforeSend: async () => { order.push("check"); } });
+    expect(order).toEqual(["journal", "check", "postmark"]);
+  });
+
+  it("records an explicit refusal as a terminal skip and never calls Postmark, even on replay", async () => {
+    const stored = outboundRow();
+    mocks.insertOutboundEmail.mockResolvedValue({ row: stored, inserted: true });
+    await expect(sendEmail(baseArgs, { beforeSend: async () => { throw refusal(); } }))
+      .rejects.toMatchObject({ name: "OutboundEmailError", outcome: "skipped" });
+    expect(mocks.boundedFetch).not.toHaveBeenCalled();
+    expect(mocks.updateOutboundDeliveryStatus).toHaveBeenCalledWith({
+      id: stored.id, status: "send_skipped", payload: { reason: "the delivery admission was revoked" },
+    });
+    expect(mocks.emitEvent).toHaveBeenCalledWith(expect.objectContaining({ type: "email.skipped", mandatory: true }));
+    mocks.insertOutboundEmail.mockResolvedValue({
+      row: outboundRow({ delivery_status: "send_skipped" }), inserted: false,
+    });
+    let checked = 0;
+    await expect(sendEmail(baseArgs, { beforeSend: async () => { checked += 1; } }))
+      .rejects.toMatchObject({ outcome: "skipped" });
+    expect(checked).toBe(0);
+    expect(mocks.boundedFetch).not.toHaveBeenCalled();
+  });
+
+  it("keeps an infrastructure failure of the hook retryable, and the cooled-down retry validates again", async () => {
+    mocks.insertOutboundEmail.mockResolvedValue({ row: outboundRow(), inserted: true });
+    const outage = Object.assign(new Error("canceling statement due to statement timeout"), { code: "57014" });
+    await expect(sendEmail(baseArgs, { beforeSend: async () => { throw outage; } }))
+      .rejects.toMatchObject({ name: "OutboundEmailError", outcome: "retryable" });
+    expect(mocks.boundedFetch).not.toHaveBeenCalled();
+    const recorded = mocks.updateOutboundDeliveryStatus.mock.calls.at(-1)![0] as {
+      status: string; payload: { requestFingerprint: string; retryAfter: number; errorClass: string };
+    };
+    expect(recorded.status).toBe("send_retryable");
+    expect(recorded.payload.requestFingerprint).toMatch(/^[0-9a-f]{64}$/);
+    expect(recorded.payload.retryAfter).toBeGreaterThan(Date.now());
+    // Only the error class is recorded, never the message.
+    expect(recorded.payload.errorClass).toBe("Error");
+    expect(mocks.emitEvent).toHaveBeenCalledWith(expect.objectContaining({ type: "email.send_deferred" }));
+
+    const retryable = outboundRow({ delivery_status: "send_retryable", delivery_payload: recorded.payload });
+    mocks.insertOutboundEmail.mockResolvedValue({ row: retryable, inserted: false });
+    mocks.claimOutboundRetry.mockResolvedValueOnce(false);
+    await expect(sendEmail(baseArgs, { beforeSend: async () => undefined }))
+      .rejects.toMatchObject({ outcome: "retryable" });
+    expect(mocks.boundedFetch).not.toHaveBeenCalled();
+    mocks.claimOutboundRetry.mockResolvedValueOnce(true);
+    mocks.boundedFetch.mockResolvedValue(response(200, { MessageID: "postmark-message-3" }));
+    let checked = 0;
+    const sent = await sendEmail(baseArgs, { beforeSend: async () => { checked += 1; } });
+    expect(checked).toBe(1);
+    expect(mocks.claimOutboundRetry).toHaveBeenLastCalledWith(retryable.id);
+    expect(sent.message_id).toBe("postmark-message-3");
+    // A retry whose request changed is refused for review, never resent.
+    await expect(sendEmail({ ...baseArgs, subject: "A different subject" }, { beforeSend: async () => undefined }))
+      .rejects.toMatchObject({ outcome: "unknown" });
+    expect(mocks.boundedFetch).toHaveBeenCalledTimes(1);
   });
 });

@@ -454,6 +454,21 @@ export async function setOutboundMessageId(
   );
 }
 
+/// Claim a send whose last-moment validation failed for infrastructure once
+/// its cooldown has passed: exactly one caller moves it back to pending and
+/// validates and sends it again. A crashed or in-flight send stays pending
+/// or unknown and is never taken over.
+export async function claimOutboundRetry(id: string): Promise<boolean> {
+  const result = await pool.query(
+    `UPDATE emails_outbound SET delivery_status = 'send_pending', delivery_payload = NULL
+      WHERE id = $1 AND message_id IS NULL AND delivery_status = 'send_retryable'
+        AND (delivery_payload->>'retryAfter')::bigint <= (extract(epoch FROM now()) * 1000)::bigint
+      RETURNING id`,
+    [id],
+  );
+  return result.rowCount === 1;
+}
+
 export async function updateOutboundDeliveryStatus(args: {
   id?: string;
   message_id?: string;

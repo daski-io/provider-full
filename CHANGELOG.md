@@ -189,6 +189,15 @@ All notable changes to this project will be documented here.
   from both owners and ends `failed` with `asset_owner_changed`. Fenced
   wallet-action transactions now run read committed so a read after the
   fence sees what committed before it.
+- Services that deliver asset information to its owner have a generic
+  owner-fenced delivery admission (core migration 013,
+  `deliverAssetInformation`): the delivery is admitted under the asset owner
+  fence, sent outside every lock, and renewed under the fence by
+  `sendEmail`'s new `beforeSend` hook immediately before the outbound call.
+  A revoked admission or a changed owner is an explicit, terminal
+  `send_skipped` refusal; an infrastructure failure of that check records
+  `send_retryable` with the request fingerprint and a cooldown, and the
+  same logical send is validated again when retried.
 - Wallet actions act only on an asset of their service and type in a state
   the service admits for the action (`assets.assetLookupStatuses`, active
   only by default) and with the identifier their input names; a destructive
