@@ -3,7 +3,9 @@ import { privateKeyToAccount } from "viem/accounts";
 import { pool } from "../db/pool.js";
 import { canonicalHash } from "./canonical.js";
 import type { ProviderStandardRailConfig } from "./config.js";
+import { listingVersion } from "./listingVersions.js";
 import { observeOperations, type OrderOperations } from "./operations.js";
+import { orderSigningKeys, type OrderSigningKeys } from "./signingKeys.js";
 import {
   FROZEN_TERMINAL_COLUMNS,
   publicTerminalIdentity,
@@ -50,6 +52,7 @@ export class DispatchSnapshotUnavailableError extends Error {
 interface SnapshotRow extends FrozenTerminalColumns {
   dispatch_hash: Buffer;
   transaction_id: string | null;
+  listing_manifest_hash: Buffer | null;
   claim_state: string;
   operations_revision: string;
   operations_projection: unknown;
@@ -61,7 +64,8 @@ interface SnapshotRow extends FrozenTerminalColumns {
 // persisted operations projection and the database clock, so the
 // observation is consistent and never cached.
 const SNAPSHOT_SQL = `
-  SELECT c.dispatch_hash,c.transaction_id,c.state AS claim_state,
+  SELECT c.dispatch_hash,c.transaction_id,t.standard_listing_manifest_hash AS listing_manifest_hash,
+         c.state AS claim_state,
          c.operations_revision::text AS operations_revision,c.operations_projection,
          t.status,${FROZEN_TERMINAL_COLUMNS},
          floor(extract(epoch FROM now()))::bigint::text AS observed_at
@@ -75,6 +79,25 @@ const isResponseState = (state: string): state is DispatchResponseState =>
 
 async function sign(privateKey: Hex, digest: Hex): Promise<Hex> {
   return privateKeyToAccount(privateKey).signMessage({ message: { raw: digest } });
+}
+
+/**
+ * The keys of the listing version the order was sold under. An order whose
+ * version or key this deployment cannot resolve gets no answer at all
+ * rather than one signed with another key.
+ */
+export async function orderKeys(
+  config: ProviderStandardRailConfig,
+  listingManifestHash: Buffer | null,
+): Promise<OrderSigningKeys | null> {
+  if (!listingManifestHash) return null;
+  const version = await listingVersion(config, `0x${listingManifestHash.toString("hex")}`);
+  if (!version) return null;
+  try {
+    return orderSigningKeys(config, version.signingKey);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -101,6 +124,8 @@ export async function signedDispatchSnapshot(
   if (!isResponseState(state)) {
     throw new DispatchSnapshotUnavailableError("Task state cannot be published to the gateway");
   }
+  const keys = await orderKeys(config, row.listing_manifest_hash);
+  if (!keys) throw new DispatchSnapshotUnavailableError("The order's listing version or its signing key is unavailable");
   const taskId = row.transaction_id;
   const dispatchHash = claim.dispatchHash;
   const operations = observeOperations({
@@ -109,7 +134,7 @@ export async function signedDispatchSnapshot(
     observedAt: row.observed_at,
   });
   const signature = await sign(
-    config.providerAuthorityPrivateKey,
+    keys.authorityPrivateKey,
     canonicalHash({ taskId, dispatchHash, state, operations }),
   );
   if (!identity) return { taskId, dispatchHash, signature, state, operations };
@@ -121,7 +146,7 @@ export async function signedDispatchSnapshot(
     taskId, dispatchHash, signature, state, operations,
     terminalAttestation: {
       payload,
-      signature: await sign(config.terminalAttestationPrivateKey, canonicalHash(payload)),
+      signature: await sign(keys.terminalPrivateKey, canonicalHash(payload)),
     },
   };
 }

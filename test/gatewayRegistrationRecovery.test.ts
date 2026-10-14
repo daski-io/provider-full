@@ -138,7 +138,13 @@ beforeEach(async () => {
     "provider_gateway_registrations",
     "provider_chain_writes",
     "services",
-  ]) await database.pool.query(`DELETE FROM ${table}`);
+  ]) {
+    // Runtime listing versions are never deleted (core migration 009); only
+    // a disposable test database may be reset, and TRUNCATE bypasses the
+    // row guard.
+    await database.pool.query(table === "provider_runtime_listing_versions"
+      ? `TRUNCATE ${table}` : `DELETE FROM ${table}`);
+  }
   await database.pool.query(
     `INSERT INTO services
        (name,slug,version,category_family,service_type,jurisdictions,

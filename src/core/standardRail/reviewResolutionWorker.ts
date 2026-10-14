@@ -25,6 +25,8 @@ import {
 import { transitionTask } from "../engine/taskManager.js";
 import { failWorker, heartbeatWorker, setWorkerStatus } from "../health.js";
 import { errorExtra, logError } from "../logger.js";
+import { assetActionHandler, contractHandler } from "../serviceRegistry/retainedHandlers.js";
+import { admittedActionDefinition } from "./actionDefinitions.js";
 import { executeAssetAction } from "./actionExecution.js";
 import {
   completeAssetAction,
@@ -33,6 +35,7 @@ import {
 } from "./actionStore.js";
 import { assertProviderWalletAvailable, type ProviderWalletConfig } from "./walletConfig.js";
 import type { ProviderStandardRailConfig } from "./config.js";
+import { listingVersion } from "./listingVersions.js";
 import { finishReviewedPaidOrder, resolveReviewedPaidOrder } from "./reviewResolutionExecution.js";
 
 const workerId = `standard-review:${process.pid}:${randomUUID()}`;
@@ -70,9 +73,16 @@ async function resolveStandardAction(
   const task = await getTransactionById(row.transaction_id);
   if (!task) throw new Error("reviewed transaction no longer exists");
   if (!actionExecution) {
-    const admitted = [...standardRail.outcomes.values()].some((outcome) =>
-      outcome.serviceSlug === snapshot.service.slug && outcome.skillId === snapshot.skill.skillId);
-    if (!admitted) throw new Error("reviewed paid outcome is no longer admitted");
+    // The order runs under the listing version it was sold under, whatever
+    // the current head: refuse before any mutation claim when this build has
+    // no handler for that version's contract.
+    const version = task.standard_listing_manifest_hash
+      ? await listingVersion(standardRail, hex(task.standard_listing_manifest_hash))
+      : null;
+    if (
+      !version || version.serviceSlug !== snapshot.service.slug || version.skillId !== snapshot.skill.skillId ||
+      !contractHandler(version.serviceSlug, version.skillId, version.contract)
+    ) throw new Error("reviewed paid order's admitted contract is not executable by this build");
     await resolveReviewedPaidOrder({ row, snapshot, input, startedHere });
     return;
   }
@@ -91,10 +101,12 @@ async function resolveStandardAction(
       task.skill_id !== snapshot.skill.skillId || snapshot.transactionId !== task.id) {
     throw new Error("reviewed transaction changed after snapshot");
   }
-  const definition = wallet.catalog.actions.find((candidate) =>
-    candidate.actionId === task.skill_id && candidate.serviceId === snapshot.service.id &&
-    candidate.actionDefinitionHash === hex(execution.action_definition_hash));
-  if (!definition) throw new Error("reviewed action definition is no longer admitted");
+  // The signed definition the execution was admitted under, current or retained.
+  const definition = await admittedActionDefinition(wallet, hex(execution.action_definition_hash));
+  if (
+    !definition || definition.actionId !== task.skill_id || definition.serviceSlug !== snapshot.service.slug ||
+    !assetActionHandler(definition)
+  ) throw new Error("reviewed action definition is no longer admitted or executable");
   await assertProviderWalletAvailable(wallet, definition);
   const [service, skill, asset] = await Promise.all([
     getServiceById(snapshot.service.id),

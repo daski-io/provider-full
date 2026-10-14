@@ -108,14 +108,11 @@ export function assertFreshClaimEnvelope(
   ) throw new DispatchRejectedError("envelope_lifetime", "Dispatch envelope lifetime is invalid for a new claim");
 }
 
-export function findDispatchOutcome(
-  config: ProviderStandardRailConfig,
+/** The dispatched order must match the policy of the listing version it names. */
+export function assertDispatchOutcomePolicy(
   dispatch: StandardRailDispatchV2,
-): ProviderOutcomeConfig {
-  const outcome = [...config.outcomes.values()].find((item) =>
-    item.listingManifestHash === dispatch.listingManifestHash &&
-    item.providerOfferHash === dispatch.providerOfferHash);
-  if (!outcome) throw new DispatchRejectedError("outcome_policy", "Dispatch references an unknown outcome");
+  outcome: ProviderOutcomeConfig,
+): void {
   if (
     outcome.providerControlProfileHash !== dispatch.providerControlProfileHash ||
     outcome.serviceId !== dispatch.serviceId ||
@@ -124,7 +121,6 @@ export function findDispatchOutcome(
     dispatch.buyerIdentityProofHash.toLowerCase() !== ZERO_HASH ||
     outcome.bindingProfile !== dispatch.bindingProfile
   ) throw new DispatchRejectedError("outcome_policy", "Dispatch conflicts with the provider outcome policy");
-  return outcome;
 }
 
 export function assertNotSelfPurchase(
@@ -134,6 +130,7 @@ export function assertNotSelfPurchase(
 ): void {
   const forbidden = [
     config.providerAuthorityKey, config.terminalAttestationKey, outcome.providerPayee,
+    outcome.providerTerminalAttestationKey,
     outcome.daskiCommissionReceiver, outcome.splitter, ...outcome.providerControlledWallets,
   ].map((address) => getAddress(address).toLowerCase());
   if (forbidden.includes(getAddress(dispatch.payer).toLowerCase())) {

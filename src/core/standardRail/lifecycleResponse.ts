@@ -4,6 +4,7 @@ import { pool } from "../db/pool.js";
 import type { Queryable } from "../db/queryable.js";
 import { canonicalHash } from "./canonical.js";
 import type { ProviderStandardRailConfig } from "./config.js";
+import { orderKeys } from "./dispatchResponse.js";
 import { lifecycleUnavailable } from "./lifecycleErrors.js";
 import { observeOperations, type OrderOperations } from "./operations.js";
 import {
@@ -31,6 +32,7 @@ export interface LifecycleAnswerV1 {
 
 interface AnswerRow extends FrozenTerminalColumns {
   status: string;
+  listing_manifest_hash: Buffer | null;
   operations_revision: string;
   operations_projection: unknown;
   observed_at: string;
@@ -39,7 +41,7 @@ interface AnswerRow extends FrozenTerminalColumns {
 // One statement reads the task state, its frozen terminal identity, the
 // claim's persisted operations projection and the database clock.
 const ANSWER_SQL = `
-  SELECT t.status,${FROZEN_TERMINAL_COLUMNS},
+  SELECT t.status,t.standard_listing_manifest_hash AS listing_manifest_hash,${FROZEN_TERMINAL_COLUMNS},
          c.operations_revision::text AS operations_revision,c.operations_projection,
          floor(extract(epoch FROM now()))::bigint::text AS observed_at
     FROM transactions t
@@ -53,7 +55,12 @@ export async function readLifecycleState(
   config: ProviderStandardRailConfig,
   task: { orderId: string; taskId: string },
   db: Queryable = pool,
-): Promise<{ state: string; identity: TerminalIdentity | null; operations: OrderOperations }> {
+): Promise<{
+  state: string;
+  identity: TerminalIdentity | null;
+  operations: OrderOperations;
+  listingManifestHash: Buffer | null;
+}> {
   const row = (await db.query<AnswerRow>(ANSWER_SQL, [task.taskId, task.orderId, config.gatewayAudience])).rows[0];
   if (!row) throw lifecycleUnavailable("Standard task has no claim to answer for");
   const identity = publicTerminalIdentity(row, row);
@@ -62,7 +69,7 @@ export async function readLifecycleState(
   const operations = observeOperations({
     revision: row.operations_revision, projection: row.operations_projection, observedAt: row.observed_at,
   });
-  return { state, identity, operations };
+  return { state, identity, operations, listingManifestHash: row.listing_manifest_hash };
 }
 
 async function sign(privateKey: Hex, value: unknown): Promise<Hex> {
@@ -80,7 +87,10 @@ export async function signedLifecycleAnswer(
   task: { orderId: string; taskId: string },
   options: { result?: unknown; db?: Queryable } = {},
 ): Promise<LifecycleAnswerV1> {
-  const { state, identity, operations } = await readLifecycleState(config, task, options.db);
+  const { state, identity, operations, listingManifestHash } = await readLifecycleState(config, task, options.db);
+  // Signed with the keys of the version the order was sold under, forever.
+  const keys = await orderKeys(config, listingManifestHash);
+  if (!keys) throw lifecycleUnavailable("The order's listing version or its signing key is unavailable");
   const unsigned: Omit<LifecycleAnswerV1, "signature"> = {
     orderId: task.orderId, taskId: task.taskId, state, operations,
     ...(options.result === undefined ? {} : { result: options.result }),
@@ -90,7 +100,7 @@ export async function signedLifecycleAnswer(
       orderId: task.orderId, taskId: task.taskId, state: identity.state,
       resultHash: identity.resultHash, completedAt: identity.completedAt,
     };
-    unsigned.terminalAttestation = { payload, signature: await sign(config.terminalAttestationPrivateKey, payload) };
+    unsigned.terminalAttestation = { payload, signature: await sign(keys.terminalPrivateKey, payload) };
   }
-  return { ...unsigned, signature: await sign(config.providerAuthorityPrivateKey, unsigned) };
+  return { ...unsigned, signature: await sign(keys.authorityPrivateKey, unsigned) };
 }

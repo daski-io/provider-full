@@ -9,6 +9,7 @@ import { isFree } from "../pricing/index.js";
 import { config } from "../config.js";
 import { logInfo } from "../logger.js";
 import { runModuleMigrations } from "./moduleMigrations.js";
+import { registerRetainedContracts } from "./retainedHandlers.js";
 import { assertRecoverableDeadlines, skillDeadlines } from "./deadlines.js";
 import { requireScreeningScopes } from "../screening/registry.js";
 import {
@@ -184,6 +185,9 @@ export async function registerService(module: ServiceModule): Promise<void> {
       );
     }
   }
+  // Earlier contracts with admitted work outstanding keep their handlers;
+  // each must be valid and distinct before anything is registered.
+  registerRetainedContracts(module);
   if (module.screening) {
     const extension = requireScreeningScopes(module.screening.requiredScopes);
     if (!extension.policy.serviceBindings[manifest.slug]) {

@@ -3,6 +3,7 @@ import type { Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { getServiceBySlug } from "../db/queries/services.js";
 import { getAdapter } from "../serviceRegistry/registry.js";
+import { contractHandler } from "../serviceRegistry/retainedHandlers.js";
 import type { IntakeDetail } from "../serviceRegistry/types.js";
 import { canonicalHash } from "./canonical.js";
 import type { ProviderStandardRailConfig } from "./config.js";
@@ -12,6 +13,7 @@ import {
   INTAKE_RESPONSE_JSON_BUDGET,
   REQUEST_JSON_BUDGET,
 } from "./jsonBounds.js";
+import { headListingVersion } from "./listingVersions.js";
 import { QuoteRefusedError, quoteEnvelopeRefusal } from "./quoteErrors.js";
 import { MAX_QUOTE_FIELD_ERRORS, providerSchemaFieldErrors, serviceFieldErrors } from "./quoteFieldErrors.js";
 
@@ -89,7 +91,10 @@ export async function describeIntake(args: {
   }
   const service = await getServiceBySlug(outcome.serviceSlug);
   if (!service?.is_active) throw new QuoteRefusedError(503, "service_unavailable");
-  const adapter = getAdapter(service.adapter_name);
+  const version = headListingVersion(config, outcome);
+  const handler = contractHandler(version.serviceSlug, version.skillId, version.contract);
+  if (!handler) throw new QuoteRefusedError(503, "service_unavailable");
+  const adapter = handler.kind === "retained" ? handler.adapter : getAdapter(service.adapter_name);
   let detail: IntakeDetail | null = null;
   if (adapter.intake) {
     try {

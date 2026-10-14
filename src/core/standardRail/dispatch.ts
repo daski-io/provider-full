@@ -1,4 +1,3 @@
-import type { ValidateFunction } from "ajv";
 import type { Chain, Hex } from "viem";
 import { logError } from "../logger.js";
 import { canonicalHash } from "./canonical.js";
@@ -24,7 +23,6 @@ import { ORDER_ID, verifyDispatchEnvelope } from "./dispatchVerification.js";
 import { ProviderEvidenceVerifier } from "./evidence.js";
 import { verifyGatewayEnvelope } from "./gatewayEnvelope.js";
 import { recordStandardSecurityIncident } from "./incidents.js";
-import { compileProviderSchema } from "./schema.js";
 import type { DispatchStatusQueryV1 } from "./types.js";
 
 export { shouldLinkAssetOwnership } from "./dispatchExecution.js";
@@ -43,7 +41,6 @@ const UNCERTAIN_COMMIT_PROBE_DELAY_MS = 100;
  */
 export class StandardDispatchService {
   private readonly evidence: ProviderEvidenceVerifier;
-  private readonly requestValidators = new Map<string, ValidateFunction>();
 
   constructor(
     private readonly config: ProviderStandardRailConfig,
@@ -51,12 +48,6 @@ export class StandardDispatchService {
     private readonly chainId: number,
   ) {
     this.evidence = new ProviderEvidenceVerifier(config, chain);
-    for (const outcome of config.outcomes.values()) {
-      this.requestValidators.set(
-        outcome.outcomeId,
-        compileProviderSchema(outcome.requestSchema as unknown as Record<string, unknown>),
-      );
-    }
   }
 
   /**
@@ -123,7 +114,7 @@ export class StandardDispatchService {
     try {
       admission = await prepareDispatchAdmission({
         config: this.config, chainId: this.chainId, evidence: this.evidence,
-        validate: this.requestValidators, args, envelope, dispatchHash,
+        args, envelope, dispatchHash,
       });
     } catch (error) {
       if (error instanceof DispatchRejectedError) return this.confirmRefusal(error, key, dispatchHash);
@@ -146,6 +137,7 @@ export class StandardDispatchService {
         skillId: admission.claim.outcome.skillId,
         service: admission.claim.service,
         skill: admission.skill,
+        handler: admission.handler,
         supplierCostCeiling: admission.claim.supplierCostCeiling,
       });
       return await signedDispatchSnapshot(this.config, { ...key, dispatchHash });

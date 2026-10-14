@@ -8,8 +8,8 @@ import { verifyStandardAssetOwnership } from "../engine/assetManager.js";
 import { markEscalated } from "../engine/escalation.js";
 import { consultPreExecuteAgent } from "../engine/preExecuteRunner.js";
 import { processAdapterResult } from "../engine/taskFinalization.js";
-import { getAdapter, getService } from "../serviceRegistry/registry.js";
-import type { AdapterResult, SupplierCostCeiling } from "../serviceRegistry/types.js";
+import { getService } from "../serviceRegistry/registry.js";
+import type { AdapterResult, FulfillmentAdapter, SupplierCostCeiling } from "../serviceRegistry/types.js";
 import { classifySupplierError } from "../suppliers/errorClassifier.js";
 import { canonicalHash } from "./canonical.js";
 import { recordStandardSecurityIncident } from "./incidents.js";
@@ -101,6 +101,8 @@ export async function fulfillAdmittedDispatch(args: {
   skillId: string;
   service: ServiceRow;
   skill: SkillRow;
+  /** The handler of the contract the order was admitted under. */
+  handler: FulfillmentAdapter;
   supplierCostCeiling: SupplierCostCeiling | null;
 }): Promise<void> {
   const { dispatch, service, skill, taskId } = args;
@@ -142,7 +144,7 @@ export async function fulfillAdmittedDispatch(args: {
       [taskId, dispatch.orderId],
     );
     if (started.rowCount !== 1) throw new Error("Standard fulfillment claim was lost");
-    result = await getAdapter(service.adapter_name).execute(
+    result = await args.handler.execute(
       args.skillId,
       {
         id: taskId,

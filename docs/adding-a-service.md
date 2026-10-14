@@ -588,6 +588,31 @@ Send the final manifest, input/result schemas, pricing mode, service and skill
 ids, provider identity, and action definitions through Daski Testnet
 onboarding. Install the returned artifacts together.
 
+### Changing a published contract
+
+Orders, jobs and lifecycle calls run under the contract their listing
+version published, for as long as they exist; only new sales use the current
+contract. Changing a price, capacity or deadline needs nothing more: core
+enforces each version's own committed terms. Changing what the handler
+executes (input or result schema, ownership, asset action or fulfillment
+mode) needs the earlier contract retained, exactly as its card published it,
+with a handler that honors it:
+
+```typescript
+{
+  id: "build-report",
+  // ...current contract...
+  previousContracts: [{ contract: buildReportV1Contract, adapter: reportV1Adapter }],
+},
+```
+
+Registration refuses a retained contract that duplicates another, lacks
+valid schemas or has an incomplete adapter. Keep it until every listing
+version that published it is retired (`npm run daski:register -- --retire-listing`
+with the gateway's receipt); a build without it refuses those versions'
+dispatches and fails their servicing instead of running them as the current
+contract.
+
 ## 14. Verify locally and on Testnet
 
 Run the complete local checks:

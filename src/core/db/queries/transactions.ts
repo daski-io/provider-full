@@ -53,6 +53,8 @@ export interface TransactionRow {
   accepted_envelope_message_id_hash: Buffer | null;
   standard_order_id?: string | null;
   standard_order_key?: Buffer | null;
+  /** The commitment hash of the listing version a standard order was sold under. */
+  standard_listing_manifest_hash?: Buffer | null;
   standard_token?: string | null;
   standard_gross_amount?: string | null;
   standard_provider_net_amount?: string | null;

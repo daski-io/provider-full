@@ -39,10 +39,10 @@ export class StandardLifecycleService {
         return signedLifecycleAnswer(this.config, order, { result: { supportReceipt } });
       }
       case "input":
-        await applyLifecycleInput(task, call, () => this.publicState(task));
+        await applyLifecycleInput(this.config, task, call, () => this.publicState(task));
         return signedLifecycleAnswer(this.config, order, { result: await this.completionResult(task) });
       case "cancel":
-        await applyLifecycleCancel(task, call, () => this.publicState(task));
+        await applyLifecycleCancel(this.config, task, call, () => this.publicState(task));
         return signedLifecycleAnswer(this.config, order);
     }
   }

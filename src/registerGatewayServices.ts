@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { config } from "./core/config.js";
 import {
@@ -23,7 +24,10 @@ import {
   identityHelperArguments,
   registerSelectedServices,
 } from "./core/gatewayRegistration/registrationRun.js";
+import { retireListingVersion } from "./core/gatewayRegistration/listingRetirement.js";
 import { retireGatewayService } from "./core/gatewayRegistration/retirement.js";
+import { retirementReceiptDomain } from "./core/gatewayRegistration/retirementReceipt.js";
+import { assertNoDuplicateJsonKeys } from "./core/standardRail/canonical.js";
 import {
   forbidGatewayWrites,
   normalizedGatewayOrigin,
@@ -31,6 +35,7 @@ import {
 import { redactSensitiveText } from "./core/security/redaction.js";
 
 const SERVICE_ID = /^0x[0-9a-fA-F]{64}$/;
+const MAX_RECEIPT_FILE_BYTES = 1_048_576;
 
 function option(name: string): string | null {
   const index = process.argv.indexOf(name);
@@ -53,6 +58,18 @@ function options(name: string): string[] {
 
 const describe = (error: unknown) =>
   redactSensitiveText(error instanceof Error ? error.message : String(error));
+
+// Gateway retirement receipts the operator obtained from Daski, one JSON
+// receipt or an array of them per file; each is verified before use.
+function gatewayReceipts(): unknown[] {
+  return options("--gateway-receipt").flatMap((path) => {
+    if (statSync(path).size > MAX_RECEIPT_FILE_BYTES) throw new Error("gateway receipt file is too large");
+    const source = readFileSync(path, "utf8");
+    assertNoDuplicateJsonKeys(source);
+    const parsed = JSON.parse(source) as unknown;
+    return Array.isArray(parsed) ? parsed : [parsed];
+  });
+}
 
 // The identity script verifies and binds PROVIDER_AGENT_ID, the agent every
 // service is registered under; see identityHelperArguments.
@@ -125,19 +142,25 @@ async function main(): Promise<void> {
   const gateway = option("--gateway") ?? config.GATEWAY_BASE_URL;
   if (!gateway) throw new Error("--gateway or GATEWAY_BASE_URL is required");
   const retirement = option("--retire");
+  const listingRetirement = option("--retire-listing");
   if (retirement && !SERVICE_ID.test(retirement)) {
     throw new Error("--retire requires an exact bytes32 service id");
   }
-  if (retirement && options("--service").length > 0) {
+  if (listingRetirement && !SERVICE_ID.test(listingRetirement)) {
+    throw new Error("--retire-listing requires an exact bytes32 listing manifest hash");
+  }
+  if (retirement && listingRetirement) throw new Error("--retire cannot be combined with --retire-listing");
+  if ((retirement || listingRetirement) && options("--service").length > 0) {
     throw new Error("--retire cannot be combined with --service");
   }
   if (process.argv.includes("--check-only")) {
-    if (retirement) throw new Error("--check-only cannot be combined with --retire");
+    if (retirement || listingRetirement) throw new Error("--check-only cannot be combined with --retire");
     await forecast(gateway);
     return;
   }
-  if (!retirement) activationPolling();
-  if (!retirement && !process.argv.includes("--skip-provider-identity")) {
+  const retiring = Boolean(retirement || listingRetirement);
+  if (!retiring) activationPolling();
+  if (!retiring && !process.argv.includes("--skip-provider-identity")) {
     await ensureProviderIdentity();
   }
   if (!await checkDatabase()) throw new Error("provider database is unreachable");
@@ -150,7 +173,25 @@ async function main(): Promise<void> {
     const result = await retireGatewayService(
       normalizedGatewayOrigin(gateway),
       retirement.toLowerCase() as `0x${string}`,
+      {
+        receipts: gatewayReceipts(),
+        providerAgentId: config.PROVIDER_AGENT_ID.toString(),
+        domain: retirementReceiptDomain(),
+      },
     );
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    return;
+  }
+  if (listingRetirement) {
+    const [receipt, ...extra] = gatewayReceipts();
+    if (!receipt || extra.length > 0) throw new Error("--retire-listing needs exactly one --gateway-receipt");
+    const result = await retireListingVersion({
+      gatewayOrigin: normalizedGatewayOrigin(gateway),
+      listingManifestHash: listingRetirement.toLowerCase() as `0x${string}`,
+      receipt,
+      providerAgentId: config.PROVIDER_AGENT_ID.toString(),
+      domain: retirementReceiptDomain(),
+    });
     process.stdout.write(`${JSON.stringify(result)}\n`);
     return;
   }

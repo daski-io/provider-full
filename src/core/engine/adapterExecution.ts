@@ -2,16 +2,30 @@ import { randomUUID } from "node:crypto";
 import type { AssetRow } from "../db/queries/assets.js";
 import { emitEvent } from "../events/emitter.js";
 import { getAdapter } from "../serviceRegistry/registry.js";
+import { hasRetainedContracts, retainedTaskHandler } from "../serviceRegistry/retainedHandlers.js";
 import {
   CancellationCleanupError,
   CancellationRefusedError,
   type AdapterResult,
+  type FulfillmentAdapter,
   type TaskInputAuthorizationContext,
   type TaskContext,
 } from "../serviceRegistry/types.js";
 
 export function generateTaskId(): string {
   return `task-${randomUUID()}`;
+}
+
+/**
+ * The handler for one call on a task: the service's adapter, or, for a skill
+ * that retains earlier contracts, the handler of the contract the task was
+ * admitted under. A task whose admitted contract this build cannot execute
+ * fails here, before the service is called.
+ */
+async function adapterForTask(adapterName: string, skillId: string, taskId: string): Promise<FulfillmentAdapter> {
+  if (!hasRetainedContracts(adapterName, skillId)) return getAdapter(adapterName);
+  const handler = await retainedTaskHandler(adapterName, skillId, taskId);
+  return handler.kind === "retained" ? handler.adapter : getAdapter(adapterName);
 }
 
 function executionPayload(
@@ -35,7 +49,7 @@ export async function executeAdapter(
   data: Record<string, unknown>,
   assetContext?: AssetRow,
 ): Promise<AdapterResult> {
-  const adapter = getAdapter(adapterName);
+  const adapter = await adapterForTask(adapterName, skillId, task.id);
   const startedAt = Date.now();
   try {
     const result = await adapter.execute(skillId, task, data, assetContext);
@@ -77,7 +91,7 @@ export async function handleAdapterInput(
   data: Record<string, unknown>,
   authorization: TaskInputAuthorizationContext,
 ): Promise<AdapterResult> {
-  const adapter = getAdapter(adapterName);
+  const adapter = await adapterForTask(adapterName, task.skill_id, task.id);
   const startedAt = Date.now();
   try {
     const result = await adapter.handleInput(
@@ -126,7 +140,7 @@ export async function cancelAdapterTask(
   adapterName: string,
   task: TaskContext,
 ): Promise<void> {
-  const adapter = getAdapter(adapterName);
+  const adapter = await adapterForTask(adapterName, task.skill_id, task.id);
   const startedAt = Date.now();
   try {
     await adapter.cancel(task);

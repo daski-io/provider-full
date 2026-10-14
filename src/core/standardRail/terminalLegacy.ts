@@ -6,6 +6,7 @@ import { inTransaction, type Queryable } from "../db/queryable.js";
 import { recordMandatoryAudit } from "../events/emitter.js";
 import { canonicalHash } from "./canonical.js";
 import type { ProviderStandardRailConfig } from "./config.js";
+import { listingVersion } from "./listingVersions.js";
 import {
   insertFrozenTerminalResult,
   projectionHash,
@@ -46,6 +47,7 @@ interface LegacyTaskRow {
   status: string;
   completed_at: Date | null;
   standard_order_id: string;
+  standard_listing_manifest_hash: Buffer | null;
   dispatch_hash: Buffer | null;
 }
 
@@ -66,7 +68,9 @@ const seconds = (value: Date): number => Math.floor(value.getTime() / 1_000);
 
 /**
  * A provider terminal attestation in its dispatch or lifecycle form, bound to
- * this task and order and signed by this provider's terminal attestation key.
+ * this task and order and signed by the terminal attestation key the order's
+ * listing version names (an earlier wallet's key for an order sold before a
+ * rotation).
  */
 export async function verifyRetainedAttestation(
   config: ProviderStandardRailConfig,
@@ -91,7 +95,10 @@ export async function verifyRetainedAttestation(
   const signer = await recoverMessageAddress({
     message: { raw: canonicalHash(payload) }, signature: attestation.signature as Hex,
   }).catch(() => null);
-  if (!signer || getAddress(signer) !== getAddress(config.terminalAttestationKey)) {
+  const version = task.standard_listing_manifest_hash
+    ? await listingVersion(config, `0x${task.standard_listing_manifest_hash.toString("hex")}`)
+    : null;
+  if (!signer || !version || getAddress(signer) !== getAddress(version.signingKey)) {
     throw new Error("terminal attestation is not signed by this provider");
   }
   return {
@@ -140,7 +147,7 @@ async function loadEvidence(db: Queryable, transactionId: string): Promise<Evide
 
 async function lockLegacyTask(db: Queryable, transactionId: string): Promise<LegacyTaskRow> {
   const task = (await db.query<LegacyTaskRow>(
-    `SELECT t.id,t.status,t.completed_at,t.standard_order_id,c.dispatch_hash
+    `SELECT t.id,t.status,t.completed_at,t.standard_order_id,t.standard_listing_manifest_hash,c.dispatch_hash
        FROM transactions t
        LEFT JOIN standard_dispatch_claims c ON c.transaction_id=t.id AND c.order_id=t.standard_order_id
       WHERE t.id=$1 AND t.standard_order_id IS NOT NULL FOR UPDATE OF t`,

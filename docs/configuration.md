@@ -103,6 +103,7 @@ coordinates.
 | --- | --- |
 | `PROVIDER_AGENT_ID` | Unsigned decimal ERC-8004 agent id minted/bound for this provider. One provider identity can publish several services. |
 | `PROVIDER_WALLET_PRIVATE_KEY` | Dedicated 32-byte EVM signing key, `0x` plus 64 hexadecimal characters. Secret. |
+| `PROVIDER_RETAINED_WALLET_PRIVATE_KEYS` | Optional, comma-separated keys of earlier agent wallets whose listing versions still have orders (at most 16, each distinct from the current key). Answers about an order are signed with the wallet its listing version was registered under; keep a rotated key here for as long as its orders can be read. Secret. |
 
 Use separate wallets for Testnet and Mainnet. The provider continuously verifies
 that the registry's wallet binding matches the configured signing key.
@@ -113,7 +114,8 @@ After deployment and explicit operator review, `npm run daski:register --
 --gateway <origin>` owns provider identity reconciliation, service
 registration, splitter activation, and runtime-catalog promotion. It may sign
 artifacts and send transactions. `--service <slug>` narrows the run;
-`--retire 0x<SERVICE_ID>` is a separate guarded retirement operation.
+`--retire 0x<SERVICE_ID>` and `--retire-listing 0x<LISTING_MANIFEST_HASH>`
+are separate guarded retirement operations.
 
 | Option | Effect |
 | --- | --- |
@@ -121,6 +123,9 @@ artifacts and send transactions. `--service <slug>` narrows the run;
 | `--agent-id <id>` | Optional and must equal `PROVIDER_AGENT_ID`. The run always pins the identity helper to `PROVIDER_AGENT_ID`, the agent every service is registered under: the helper verifies with `ownerOf` that the provider wallet owns it, and never searches for or mints another agent. `--scan-blocks` and `--mint-new-agent` are refused here; they apply only to `scripts/register-provider.mjs` run directly. |
 | `--update-uri` | Passed to the identity helper: rewrite a drifted on-chain agent URI. |
 | `--skip-provider-identity` | Skip the identity helper for an already reconciled identity. |
+| `--retire 0x<SERVICE_ID>` | Retire every paid listing version of one service from dispatch servicing, supersede its heads and deactivate it. Needs a `--gateway-receipt` for every paid version and no open local obligation; its orders stay readable. Cannot be combined with `--service`. |
+| `--retire-listing 0x<LISTING_MANIFEST_HASH>` | Retire one superseded paid listing version from dispatch servicing, with exactly one `--gateway-receipt` for it. |
+| `--gateway-receipt <file>` | A `GatewayContractRetirementV1` receipt (or a JSON array of them) Daski issued for the listing versions being retired; verified against the gateway signer, the provider audience and the exact version. Repeatable. |
 
 A run resumes a previous one from the local record and the gateway's live
 state; see [Troubleshooting](troubleshooting.md#gateway-registration-recovery).

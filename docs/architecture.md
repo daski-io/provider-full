@@ -159,8 +159,55 @@ is expected at the commitment its admission promoted, rebuilt with that
 admission's provider intent; one that no longer reproduces its head, or a
 free listing whose admission no head or signed envelope records, is refused
 as identity drift. A refused cross-check names each disagreeing listing.
-Safe retirement is a separate explicit command and fails while active tasks,
-assets, jobs, supplier operations, or reviews remain.
+Promoted versions are never changed or deleted (core migration 009).
+
+Every write to the catalog advances a database sequence, the activation
+revision. A running process compares it with the revision it validated and
+re-checks its servicing compatibility when it moves.
+
+## Retained listing versions
+
+An order belongs to the listing version it was sold under, named by the
+commitment hash it carries. New sales use the current heads; dispatch,
+workers, lifecycle reads, support and legacy terminal evidence resolve the
+order's own version from the catalog (`standardRail/listingVersions.ts`),
+whatever the head is now. A timely-paid order of a superseded version is
+therefore admitted with its original definition, price, splitter and
+deadlines, even after a new contract version is promoted or sales are
+paused.
+
+Its handler is the one for the contract it was admitted under. A skill's
+current contract runs on the service adapter; an earlier contract runs only
+on the handler the skill declares in `previousContracts`, matched by an
+executable definition hash over the input and result schemas, ownership,
+asset action and fulfillment semantics (`serviceRegistry/executableContracts.ts`).
+Pricing, capacity and deadlines are commercial terms core enforces from the
+version's own committed values, so changing only those needs no retained
+handler. A build without the handler or signing key of a version refuses
+that version's dispatch before admission (`503 service_unavailable`) and
+never runs the work on another contract's handler.
+
+Every answer about an order is signed with the keys its checkout snapshot
+names, the agent wallet the version was registered under. After a wallet
+rotation, `PROVIDER_RETAINED_WALLET_PRIVATE_KEYS` keeps the earlier wallets'
+keys for their orders; without it those orders get no signed answer at all
+rather than one under another key. Asset actions keep the signed definition
+they were admitted under: boot records every definition of the verified
+catalog, so an execution accepted under one completes under it after the
+catalog moves to a new epoch.
+
+Retirement ends a paid version's dispatch and execution support, never the
+reads of its orders, its frozen results or its key. It requires the
+gateway's signed `GatewayContractRetirementV1` receipt for the exact version,
+because an expired provider quote may already have been paid and still be
+owed its first dispatch, and no open local execution obligation: pending
+orders, unfinished jobs, unresolved supplier operations, reviews,
+reputation writes, claimed lifecycle actions and unexpired quotes. The
+obligations are counted only after the version rows are locked `FOR UPDATE`,
+the same rows every new standard order and quote locks `FOR SHARE` in a
+database trigger, so an admission either commits first and blocks the
+retirement, or waits and is refused. Retiring a whole service needs a
+receipt for every paid version it promoted.
 
 Every run decides its next step from the local registration record and the
 gateway's live view of the same registration

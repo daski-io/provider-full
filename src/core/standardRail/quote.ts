@@ -1,8 +1,8 @@
-import type { ValidateFunction } from "ajv";
 import type { Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { getServiceBySlug } from "../db/queries/services.js";
 import { getAdapter } from "../serviceRegistry/registry.js";
+import { contractHandler } from "../serviceRegistry/retainedHandlers.js";
 import { parseOptionalSupplierCostCeiling } from "../serviceRegistry/supplierCostCeiling.js";
 import type { FulfillmentAdapter, QuoteResult, SupplierCostCeiling } from "../serviceRegistry/types.js";
 import { canonicalHash } from "./canonical.js";
@@ -14,8 +14,9 @@ import { QuoteRefusedError, quoteEnvelopeRefusal, requestInvalid } from "./quote
 import { providerSchemaFieldErrors, serviceFieldErrors } from "./quoteFieldErrors.js";
 import { assertQuoteCapacity, readinessQuoteLifetimeSeconds } from "./quotePolicy.js";
 import { persistProviderQuote, type ProviderQuotePayload } from "./quoteStore.js";
+import { headListingVersion } from "./listingVersions.js";
 import { assertRequestReadiness } from "./requestReadiness.js";
-import { compileProviderSchema } from "./schema.js";
+import { outcomeRequestValidator } from "./schema.js";
 import type { ProviderOutcomeConfig } from "./types.js";
 
 interface ProviderQuoteRequest {
@@ -45,15 +46,15 @@ const SERVICE_DECLINED = {
  * persisted with its exact payer before it is signed.
  */
 export class StandardQuoteService {
-  private readonly validators = new Map<string, ValidateFunction>();
-
   constructor(
     private readonly config: ProviderStandardRailConfig,
     private readonly chainId: number,
-  ) {
-    for (const outcome of config.outcomes.values()) {
-      this.validators.set(outcome.outcomeId, compileProviderSchema(outcome.requestSchema));
-    }
+  ) {}
+
+  /** The request validator of a current head; undefined for any other outcome id. */
+  private validatorFor(outcomeId: string) {
+    const outcome = this.config.outcomes.get(outcomeId);
+    return outcome ? outcomeRequestValidator(outcome) : undefined;
   }
 
   /** Each artifact type has its own handler; neither trusts the other's shape. */
@@ -67,7 +68,7 @@ export class StandardQuoteService {
         config: this.config,
         chainId: this.chainId,
         envelope,
-        validatorFor: (outcomeId) => this.validators.get(outcomeId),
+        validatorFor: (outcomeId) => this.validatorFor(outcomeId),
       });
     }
     throw new QuoteRefusedError(400, "envelope");
@@ -95,7 +96,7 @@ export class StandardQuoteService {
       throw new QuoteRefusedError(400, "envelope");
     }
     const outcome = this.config.outcomes.get(args.outcomeId);
-    const validate = this.validators.get(args.outcomeId);
+    const validate = this.validatorFor(args.outcomeId);
     if (!outcome || !validate || outcome.listingManifestHash !== args.listingManifestHash) {
       throw new QuoteRefusedError(409, "outcome_policy");
     }
@@ -108,7 +109,11 @@ export class StandardQuoteService {
     const service = await getServiceBySlug(outcome.serviceSlug);
     if (!service?.is_active) throw new QuoteRefusedError(503, "service_unavailable");
     await assertQuoteCapacity(outcome);
-    const adapter = getAdapter(service.adapter_name);
+    // A head is sold only while this build can execute its contract.
+    const version = headListingVersion(this.config, outcome);
+    const handler = contractHandler(version.serviceSlug, version.skillId, version.contract);
+    if (!handler) throw new QuoteRefusedError(503, "service_unavailable");
+    const adapter = handler.kind === "retained" ? handler.adapter : getAdapter(service.adapter_name);
     const priced = await this.price(adapter, outcome, args.request);
     await assertRequestReadiness({
       adapter, skillId: outcome.skillId, request: args.request, payer: args.payer,

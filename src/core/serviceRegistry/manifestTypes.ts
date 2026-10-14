@@ -1,4 +1,5 @@
 import type { SkillPricing } from "../pricing/index.js";
+import type { FulfillmentAdapter } from "./adapterTypes.js";
 
 export interface AssetTypeLifecycle {
   states: string[];
@@ -63,6 +64,19 @@ export interface ServiceManifest {
   assetLifecycle?: Record<string, AssetTypeLifecycle>;
 }
 
+/**
+ * An earlier published contract of a skill whose admitted work this build
+ * still serves. Orders, jobs and lifecycle calls admitted under it run with
+ * this handler; new sales use the skill's current contract. Keep it until
+ * every listing version that published it is retired.
+ */
+export interface RetainedSkillContract {
+  /** The contract exactly as the earlier version's agent card published it. */
+  contract: Record<string, unknown>;
+  /** The handler that honors that contract's input and result schemas. */
+  adapter: FulfillmentAdapter;
+}
+
 export interface SkillDefinition extends SkillContractDefinition {
   id: string;
   name: string;
@@ -83,4 +97,6 @@ export interface SkillDefinition extends SkillContractDefinition {
   sortOrder?: number;
   humanParties?: "required" | "varies" | "none";
   documentationUrl?: string;
+  /** Earlier contracts with admitted work outstanding; see RetainedSkillContract. */
+  previousContracts?: readonly RetainedSkillContract[];
 }

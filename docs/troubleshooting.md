@@ -429,6 +429,33 @@ backup or pointing two deployments at different databases); `price` means a
 persisted quote does not bind this order. Compare the gateway order with the
 `standard_provider_quotes` row instead of loosening the check.
 
+### A delayed dispatch of an earlier listing version is refused
+
+An order is dispatched under the listing version it was sold under, even
+after a new contract version superseded it. `503 ... "service_unavailable"`
+for such an order means this build cannot serve that version: the skill no
+longer declares the earlier contract in `previousContracts`, or the version
+names an earlier agent wallet whose key is not in
+`PROVIDER_RETAINED_WALLET_PRIVATE_KEYS`. The gateway keeps retrying with a
+fresh envelope; deploy a build that retains the handler or key. Never point
+the order at the current contract or re-sign it with the current key.
+`409 ... "outcome_policy"` for an earlier version means it was retired, or no
+longer materializes under the deployment's rail policy.
+
+### Retirement is blocked
+
+`gatewayEvidence` means a paid version has no verified
+`GatewayContractRetirementV1` receipt: an expired provider quote may already
+have been paid and still be owed its first dispatch, so only the gateway can
+end that obligation. Ask Daski to retire the exact listing version and pass
+the receipt with `--gateway-receipt`. `currentHead` means the version is
+still sold; retire the whole service or promote its successor first. Every
+other count (`pendingTasks`, `durableJobs`, `supplierOperations`,
+`openReviews`, `pendingReputation`, `unresolvedLifecycleActions`,
+`unexpiredQuotes`) is local work that must finish first; nothing is written
+while any remains. A retired version's orders stay readable and signed with
+their own key; a new order or quote for it is refused by the database.
+
 ### Dispatch answers an empty 503
 
 This is deliberate: the provider either holds a claim for the order under a

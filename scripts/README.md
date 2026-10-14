@@ -44,8 +44,11 @@ addresses, signer, and funded wallet before use:
   broadcast, submits activation evidence, and promotes runtime-catalog heads.
   It can send transactions and mutate gateway/database state; a rerun
   resumes an interrupted registration. `--service <slug>` narrows an
-  intentional update. `--retire 0x<SERVICE_ID>` is a separate guarded
-  retirement and must not be combined with `--service`. `--check-only` is a
+  intentional update. `--retire 0x<SERVICE_ID>` and
+  `--retire-listing 0x<LISTING_MANIFEST_HASH>` are separate guarded
+  retirements that need the gateway's signed receipt for every version they
+  retire (`--gateway-receipt <file>`) and must not be combined with
+  `--service`. `--check-only` is a
   read-only forecast of the same run: read-only database sessions, gateway
   `GET` requests only, and no signature or transaction.
 - `node --env-file=.env scripts/probe-identity.mjs` reads the configured

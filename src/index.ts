@@ -46,6 +46,7 @@ import {
 } from "./core/chain/providerWriteReconciler.js";
 import { enforceInitialChainReadiness } from "./core/startupChainGate.js";
 import { loadProviderWalletConfig } from "./core/standardRail/walletConfig.js";
+import { retainAdmittedActionDefinitions } from "./core/standardRail/actionDefinitions.js";
 import { startReputationOutcomeWorker } from "./core/standardRail/reputationOutcome.js";
 import { deriveProviderLaunchPolicy } from "./core/standardRail/launchPolicy.js";
 import { startStandardReviewResolutionWorker } from "./core/standardRail/reviewResolutionWorker.js";
@@ -89,6 +90,9 @@ async function main(): Promise<void> {
     standardRailConfig,
     providerLaunchPolicy,
   );
+  // Executions admitted under this catalog stay executable under it after
+  // the catalog moves to a new epoch.
+  await retainAdmittedActionDefinitions(walletConfig);
   // Non-fatal by design: a drifted build must boot so its new card can be
   // re-registered; the sweep's job is the loud error, not a refusal.
   void logListingCommitmentDrift(standardRailConfig.gatewayOrigin);

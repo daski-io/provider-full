@@ -11,13 +11,15 @@ export interface StandardTaskRow {
   status: TransactionStatus;
   standard_order_id: string;
   standard_payer: Hex;
+  standard_listing_manifest_hash: Buffer | null;
   metadata: Record<string, unknown>;
   completed_at: Date | null;
   version: string;
 }
 
 export const STANDARD_TASK_COLUMNS =
-  "id,service_id,skill_id,status,standard_order_id,standard_payer,metadata,completed_at,version";
+  "id,service_id,skill_id,status,standard_order_id,standard_payer,standard_listing_manifest_hash," +
+  "metadata,completed_at,version";
 
 /**
  * The standard task an authenticated call names. A task this provider does

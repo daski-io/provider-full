@@ -1,6 +1,13 @@
 import type { Hex } from "viem";
 import { pool } from "../db/pool.js";
 import { recordMandatoryAudit } from "../events/emitter.js";
+import {
+  retireLockedListingVersions,
+  verifyRetirementReceipts,
+  ListingRetirementBlockedError,
+  type RetiredListing,
+} from "./listingRetirement.js";
+import type { RetirementReceiptDomain } from "./retirementReceipt.js";
 
 const bytes = (value: Hex): Buffer => Buffer.from(value.slice(2), "hex");
 
@@ -15,6 +22,10 @@ export interface ServiceRetirementBlockers {
   pendingSplitterWrites: number;
   pendingChainWrites: number;
   otherGatewayRegistrations: number;
+  durableJobs: number;
+  unresolvedLifecycleActions: number;
+  /** Paid listing versions still owing work, or lacking the gateway's retirement receipt. */
+  listingVersions: number;
 }
 
 export interface ServiceRetirementResult {
@@ -25,6 +36,7 @@ export interface ServiceRetirementResult {
   alreadyRetired: boolean;
   serviceDeactivated: boolean;
   supersededListings: Array<{ listingId: string; skillId: string }>;
+  retiredListings: RetiredListing[];
   blockers: ServiceRetirementBlockers;
 }
 
@@ -46,16 +58,21 @@ interface BlockerRow {
   pending_splitter_writes: number;
   pending_chain_writes: number;
   other_gateway_registrations: number;
+  durable_jobs: number;
+  unresolved_lifecycle_actions: number;
 }
 
 export class ServiceRetirementBlockedError extends Error {
-  constructor(readonly blockers: ServiceRetirementBlockers) {
-    super(`service retirement blocked: ${JSON.stringify(blockers)}`);
+  constructor(
+    readonly blockers: ServiceRetirementBlockers,
+    readonly listingBlockers: Record<string, Record<string, number>> = {},
+  ) {
+    super(`service retirement blocked: ${JSON.stringify({ ...blockers, listingBlockers })}`);
     this.name = "ServiceRetirementBlockedError";
   }
 }
 
-function mapBlockers(row: BlockerRow): ServiceRetirementBlockers {
+function mapBlockers(row: BlockerRow, listingVersions: number): ServiceRetirementBlockers {
   return {
     openTransactions: row.open_transactions,
     liveAssets: row.live_assets,
@@ -67,6 +84,9 @@ function mapBlockers(row: BlockerRow): ServiceRetirementBlockers {
     pendingSplitterWrites: row.pending_splitter_writes,
     pendingChainWrites: row.pending_chain_writes,
     otherGatewayRegistrations: row.other_gateway_registrations,
+    durableJobs: row.durable_jobs,
+    unresolvedLifecycleActions: row.unresolved_lifecycle_actions,
+    listingVersions,
   };
 }
 
@@ -75,23 +95,85 @@ function hasBlockers(blockers: ServiceRetirementBlockers): boolean {
     .some((count) => !Number.isInteger(count) || count !== 0);
 }
 
+const SERVICE_BLOCKERS_SQL = `SELECT
+  (SELECT count(*)::int FROM transactions
+    WHERE service_id=$1
+      AND status IN ('submitted','working','input-required')) AS open_transactions,
+  (SELECT count(*)::int FROM assets WHERE service_id=$1
+    AND status NOT IN ('transferred_out','deleted')) AS live_assets,
+  (SELECT count(*)::int FROM escalations e
+    LEFT JOIN transactions t ON t.id=e.transaction_id
+    WHERE (t.service_id=$1 OR e.snapshot_service_id=$1)
+      AND e.status NOT IN ('resolved','rejected','approved','edited')) AS open_escalations,
+  (SELECT count(*)::int FROM standard_asset_action_executions x
+    JOIN assets a ON a.id=x.provider_asset_id
+    WHERE a.service_id=$1
+      AND x.state NOT IN ('completed','failed','canceled','expired')) AS open_asset_actions,
+  (SELECT count(*)::int FROM supplier_operations
+    WHERE service_id=$1 AND state IN ('intent','ambiguous')) AS open_supplier_operations,
+  (SELECT count(*)::int FROM standard_reputation_outcomes r
+    JOIN transactions t ON t.id=r.transaction_id
+    WHERE t.service_id=$1
+      AND r.state IN ('pending','broadcast','operator_attention')) AS pending_standard_reputation,
+  (SELECT count(*)::int FROM provider_gateway_registrations
+    WHERE gateway_origin=$2 AND service_id=$3
+      AND state<>'ACTIVE') AS pending_gateway_registration,
+  (SELECT count(*)::int FROM provider_gateway_splitter_writes w
+    JOIN provider_gateway_registrations r
+      ON r.id=w.gateway_registration_local_id
+    WHERE r.gateway_origin=$2 AND r.service_id=$3
+      AND w.state NOT IN ('CONFIRMED','REVERTED')) AS pending_splitter_writes,
+  (SELECT count(DISTINCT w.id)::int FROM provider_chain_writes w
+    WHERE w.status NOT IN ('confirmed','reverted','replaced') AND (
+      (w.target_type='service' AND w.target_id=$1::text)
+      OR (w.target_type='gateway_listing' AND EXISTS (
+        SELECT 1 FROM provider_runtime_listing_versions v
+         WHERE v.gateway_origin=$2 AND v.service_id=$3
+           AND v.listing_id::text=w.target_id
+      ))
+      OR EXISTS (
+        SELECT 1 FROM standard_reputation_outcomes r
+        JOIN transactions t ON t.id=r.transaction_id
+         WHERE t.service_id=$1 AND r.provider_write_id=w.id
+      )
+    )) AS pending_chain_writes,
+  (SELECT count(*)::int FROM provider_gateway_registrations
+    WHERE service_id=$3 AND gateway_origin<>$2)
+    AS other_gateway_registrations,
+  (SELECT count(*)::int FROM durable_jobs j
+    WHERE j.status<>'completed' AND EXISTS (
+      SELECT 1 FROM transactions t
+       WHERE t.id=COALESCE(j.payload->>'taskId',j.payload->>'transactionId',j.payload->>'transaction_id')
+         AND t.service_id=$1)) AS durable_jobs,
+  (SELECT count(*)::int FROM standard_lifecycle_actions a
+    JOIN transactions t ON t.id=a.transaction_id
+    WHERE t.service_id=$1 AND a.state='claimed') AS unresolved_lifecycle_actions`;
+
 /**
  * Permanently retires one exact provider service from one gateway catalog.
  *
- * Visibility and gateway-order draining are deliberately proved by the
- * coordination workflow before this provider-local transaction begins. This
- * transaction then serializes against catalog promotion, rechecks every
- * provider-side obligation, deactivates the service row, and supersedes all
- * of its runtime heads atomically. Historical registrations, versions, tasks,
- * and assets are retained.
+ * Every paid listing version the service ever promoted needs the gateway's
+ * signed retirement receipt (an expired provider quote may already have
+ * been paid and still be owed its first dispatch; only the gateway can say
+ * it never will be). The transaction then serializes against catalog
+ * promotion, locks the versions every admission locks, rechecks every
+ * provider-side obligation, retires the versions, supersedes the heads and
+ * deactivates the service atomically. Historical registrations, versions,
+ * tasks, frozen results and assets are retained, and the orders stay
+ * readable.
  */
 export async function retireGatewayService(
   gatewayOrigin: string,
   serviceId: Hex,
+  evidence: { receipts: readonly unknown[]; providerAgentId: string; domain: RetirementReceiptDomain },
 ): Promise<ServiceRetirementResult> {
+  const receipts = await verifyRetirementReceipts({ ...evidence, serviceId });
   const client = await pool.connect();
   try {
-    await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
+    // Read committed with explicit locks: every count below runs after the
+    // locks it depends on were granted, so it sees each admission that
+    // committed before them.
+    await client.query("BEGIN");
     await client.query(
       "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
       [`${gatewayOrigin}\n${serviceId.toLowerCase()}`],
@@ -116,57 +198,8 @@ export async function retireGatewayService(
       throw new Error("exact provider gateway registration was not found");
     }
 
-    const blockerResult = await client.query<BlockerRow>(
-      `SELECT
-        (SELECT count(*)::int FROM transactions
-          WHERE service_id=$1
-            AND status IN ('submitted','working','input-required')) AS open_transactions,
-        (SELECT count(*)::int FROM assets WHERE service_id=$1
-          AND status NOT IN ('transferred_out','deleted')) AS live_assets,
-        (SELECT count(*)::int FROM escalations e
-          LEFT JOIN transactions t ON t.id=e.transaction_id
-          WHERE (t.service_id=$1 OR e.snapshot_service_id=$1)
-            AND e.status NOT IN ('resolved','rejected','approved','edited')) AS open_escalations,
-        (SELECT count(*)::int FROM standard_asset_action_executions x
-          JOIN assets a ON a.id=x.provider_asset_id
-          WHERE a.service_id=$1
-            AND x.state NOT IN ('completed','failed','canceled','expired')) AS open_asset_actions,
-        (SELECT count(*)::int FROM supplier_operations
-          WHERE service_id=$1 AND state IN ('intent','ambiguous')) AS open_supplier_operations,
-        (SELECT count(*)::int FROM standard_reputation_outcomes r
-          JOIN transactions t ON t.id=r.transaction_id
-          WHERE t.service_id=$1
-            AND r.state IN ('pending','broadcast','operator_attention')) AS pending_standard_reputation,
-        (SELECT count(*)::int FROM provider_gateway_registrations
-          WHERE gateway_origin=$2 AND service_id=$3
-            AND state<>'ACTIVE') AS pending_gateway_registration,
-        (SELECT count(*)::int FROM provider_gateway_splitter_writes w
-          JOIN provider_gateway_registrations r
-            ON r.id=w.gateway_registration_local_id
-          WHERE r.gateway_origin=$2 AND r.service_id=$3
-            AND w.state NOT IN ('CONFIRMED','REVERTED')) AS pending_splitter_writes,
-        (SELECT count(DISTINCT w.id)::int FROM provider_chain_writes w
-          WHERE w.status NOT IN ('confirmed','reverted','replaced') AND (
-            (w.target_type='service' AND w.target_id=$1::text)
-            OR (w.target_type='gateway_listing' AND EXISTS (
-              SELECT 1 FROM provider_runtime_listing_versions v
-               WHERE v.gateway_origin=$2 AND v.service_id=$3
-                 AND v.listing_id::text=w.target_id
-            ))
-            OR EXISTS (
-              SELECT 1 FROM standard_reputation_outcomes r
-              JOIN transactions t ON t.id=r.transaction_id
-               WHERE t.service_id=$1 AND r.provider_write_id=w.id
-            )
-          )) AS pending_chain_writes,
-        (SELECT count(*)::int FROM provider_gateway_registrations
-          WHERE service_id=$3 AND gateway_origin<>$2)
-          AS other_gateway_registrations`,
-      [service.id, gatewayOrigin, bytes(serviceId)],
-    );
-    const blockers = mapBlockers(blockerResult.rows[0]!);
-    if (hasBlockers(blockers)) throw new ServiceRetirementBlockedError(blockers);
-
+    // Everything below commits together or not at all: a blocker found
+    // after a write rolls the whole retirement back.
     const heads = await client.query<{ listing_id: string; skill_id: string }>(
       `UPDATE provider_runtime_listing_versions
           SET superseded_at=now()
@@ -174,6 +207,22 @@ export async function retireGatewayService(
         RETURNING listing_id,skill_id`,
       [gatewayOrigin, bytes(serviceId)],
     );
+    let retiredListings: RetiredListing[] = [];
+    let listingBlockers: Record<string, Record<string, number>> = {};
+    try {
+      retiredListings = (await retireLockedListingVersions(client, {
+        gatewayOrigin, serviceId, receipts, headsSuperseded: true, actor: "service-retirement",
+      })).retired;
+    } catch (error) {
+      if (!(error instanceof ListingRetirementBlockedError)) throw error;
+      listingBlockers = error.blockers;
+    }
+    const blockerResult = await client.query<BlockerRow>(
+      SERVICE_BLOCKERS_SQL,
+      [service.id, gatewayOrigin, bytes(serviceId)],
+    );
+    const blockers = mapBlockers(blockerResult.rows[0]!, Object.keys(listingBlockers).length);
+    if (hasBlockers(blockers)) throw new ServiceRetirementBlockedError(blockers, listingBlockers);
     let serviceDeactivated = false;
     if (service.is_active) {
       const updated = await client.query<{ config_revision: string }>(
@@ -194,7 +243,8 @@ export async function retireGatewayService(
         [service.id, updated.rows[0].config_revision, ["is_active"]],
       );
     }
-    if (serviceDeactivated || heads.rows.length > 0) {
+    const newlyRetired = retiredListings.filter((listing) => !listing.alreadyRetired);
+    if (serviceDeactivated || heads.rows.length > 0 || newlyRetired.length > 0) {
       await recordMandatoryAudit(client, {
         serviceId: service.id,
         source: "admin",
@@ -206,6 +256,7 @@ export async function retireGatewayService(
           onChainServiceId: serviceId.toLowerCase(),
           serviceDeactivated,
           supersededListingCount: heads.rows.length,
+          retiredListingVersions: newlyRetired.map((listing) => listing.listingManifestHash),
         },
       });
     }
@@ -215,12 +266,13 @@ export async function retireGatewayService(
       serviceId: serviceId.toLowerCase() as Hex,
       serviceSlug: service.slug,
       serviceVersion: service.version,
-      alreadyRetired: !serviceDeactivated && heads.rows.length === 0,
+      alreadyRetired: !serviceDeactivated && heads.rows.length === 0 && newlyRetired.length === 0,
       serviceDeactivated,
       supersededListings: heads.rows.map((row) => ({
         listingId: row.listing_id,
         skillId: row.skill_id,
       })),
+      retiredListings,
       blockers,
     };
   } catch (error) {

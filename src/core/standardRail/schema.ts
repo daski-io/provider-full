@@ -1,5 +1,6 @@
 import Ajv, { type ErrorObject, type ValidateFunction } from "ajv";
 import Ajv2020 from "ajv/dist/2020.js";
+import { canonicalHash } from "./canonical.js";
 import {
   assertBoundedJsonValue,
   REQUEST_JSON_BUDGET,
@@ -107,6 +108,24 @@ function assertRecursivelyClosed(schema: Record<string, unknown>): void {
     }
   };
   visit(schema, "$", 0);
+}
+
+const outcomeValidators = new Map<string, ValidateFunction>();
+const MAX_OUTCOME_VALIDATORS = 1_024;
+
+/**
+ * The compiled request validator of an outcome, cached by the canonical hash
+ * of its request schema, so a version resolved after boot (a retained version
+ * or a newly promoted head) is validated exactly like a boot-time one.
+ */
+export function outcomeRequestValidator(outcome: { requestSchema: object }): ValidateFunction {
+  const key = canonicalHash(outcome.requestSchema);
+  const cached = outcomeValidators.get(key);
+  if (cached) return cached;
+  const compiled = compileProviderSchema(outcome.requestSchema as Record<string, unknown>);
+  if (outcomeValidators.size >= MAX_OUTCOME_VALIDATORS) outcomeValidators.clear();
+  outcomeValidators.set(key, compiled);
+  return compiled;
 }
 
 export function compileProviderSchema(schema: Record<string, unknown>): ValidateFunction {

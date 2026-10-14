@@ -25,6 +25,25 @@ All notable changes to this project will be documented here.
 
 ### Changed
 
+- Every promoted listing version stays resolvable by its commitment hash
+  (core migration 009): dispatch, lifecycle, support, reviews and legacy
+  terminal evidence use the version an order was sold under, so a timely-paid
+  order of a superseded version is still admitted with its original
+  definition, price and deadlines while sales are paused. Each runs on the
+  handler of its admitted contract, current or declared in a skill's
+  `previousContracts` (matched by an executable definition hash that ignores
+  pricing, capacity and deadlines); a build without it refuses the dispatch
+  before admission. Answers are signed with the agent wallet the version names,
+  kept after a rotation by `PROVIDER_RETAINED_WALLET_PRIVATE_KEYS`, and asset
+  actions keep their admitted signed definitions across catalog epochs.
+- Retirement ends a paid version's dispatch support only with the gateway's
+  signed `GatewayContractRetirementV1` receipt for that version and no open
+  local obligation, now including unfinished durable jobs, claimed lifecycle
+  actions, unexpired quotes and quotes that may have been paid but were never
+  dispatched. It counts them after locking the version rows that a database
+  trigger makes every new order and quote lock, so a concurrent admission
+  either blocks it or is refused. `daski:register` gains `--retire-listing`
+  and `--gateway-receipt`; reads of retired versions are never retired.
 - Refreshed dependencies past current advisories: fast-uri 3.1.8, qs 6.16.0,
   js-yaml 4.3.2 (override), proxy-addr 2.0.8, source-map-js 1.2.2 and
   Vitest 4.1.11; `npm audit` reports no moderate or higher findings.

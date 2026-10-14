@@ -6,9 +6,11 @@ import { validateTransition } from "../engine/stateMachine.js";
 import { processAdapterResult } from "../engine/taskFinalization.js";
 import { recordMandatoryAudit } from "../events/emitter.js";
 import { getAdapter } from "../serviceRegistry/registry.js";
+import { contractHandler } from "../serviceRegistry/retainedHandlers.js";
 import { admittedSupplierCostCeiling } from "../serviceRegistry/supplierCostCeiling.js";
 import { CancellationRefusedError, type FulfillmentAdapter } from "../serviceRegistry/types.js";
 import { canonicalHash } from "./canonical.js";
+import type { ProviderStandardRailConfig } from "./config.js";
 import {
   abandonLifecycleAction,
   claimLifecycleAction,
@@ -20,6 +22,7 @@ import {
 import type { LifecycleCall } from "./lifecycleAuthorization.js";
 import { lifecycleUnavailable, unsupportedAction, type LifecycleRefusal } from "./lifecycleErrors.js";
 import { STANDARD_TASK_COLUMNS, type StandardTaskRow } from "./lifecycleStore.js";
+import { listingVersion } from "./listingVersions.js";
 import { enqueueReputationOutcome } from "./reputationOutcomeStore.js";
 import { freezeTerminalResult } from "./terminalResult.js";
 
@@ -29,10 +32,19 @@ export const CANCELED_MESSAGE = "Canceled at the buyer's request.";
 /** How often an attempt renews its lease while the service call runs. */
 const LEASE_RENEWAL_MS = 60_000;
 
-async function adapterFor(task: StandardTaskRow): Promise<FulfillmentAdapter> {
+/// The handler of the contract the order was admitted under, never merely
+/// the service's current one: a later listing version may execute another
+/// contract.
+async function adapterFor(config: ProviderStandardRailConfig, task: StandardTaskRow): Promise<FulfillmentAdapter> {
   const service = await getServiceById(task.service_id);
   if (!service) throw lifecycleUnavailable("Task service is unavailable");
-  return getAdapter(service.adapter_name);
+  const version = task.standard_listing_manifest_hash
+    ? await listingVersion(config, `0x${task.standard_listing_manifest_hash.toString("hex")}`)
+    : null;
+  if (!version) throw lifecycleUnavailable("Task listing version is unavailable");
+  const handler = contractHandler(version.serviceSlug, version.skillId, version.contract);
+  if (!handler) throw lifecycleUnavailable("This build has no handler for the order's admitted contract");
+  return handler.kind === "retained" ? handler.adapter : getAdapter(service.adapter_name);
 }
 
 /// Fence a supplier-facing lifecycle mutation before the adapter runs:
@@ -170,6 +182,7 @@ async function attempt(claim: LifecycleActionClaim, work: (service: ServiceCall)
  * authorization answers the committed cancellation instead of repeating it.
  */
 export async function applyLifecycleCancel(
+  config: ProviderStandardRailConfig,
   task: StandardTaskRow,
   call: LifecycleCall,
   readPublicState: () => Promise<string>,
@@ -189,7 +202,7 @@ export async function applyLifecycleCancel(
     if (!CANCELABLE.has(publicState) || !CANCELABLE.has(task.status)) {
       throw unsupportedAction("Task cannot be canceled from its current state");
     }
-    const adapter = await adapterFor(task);
+    const adapter = await adapterFor(config, task);
     const fenced = await claimLifecycleMutation(task);
     await service.run(async () => {
       try {
@@ -240,6 +253,7 @@ function assertInputMatchesCommittedRequest(task: StandardTaskRow, revealed: Rec
  * fresh authorization answers that state instead of repeating it.
  */
 export async function applyLifecycleInput(
+  config: ProviderStandardRailConfig,
   task: StandardTaskRow,
   call: LifecycleCall,
   readPublicState: () => Promise<string>,
@@ -259,7 +273,7 @@ export async function applyLifecycleInput(
     }
     const data = call.request.data as Record<string, unknown>;
     assertInputMatchesCommittedRequest(task, data);
-    const adapter = await adapterFor(task);
+    const adapter = await adapterFor(config, task);
     const fenced = await claimLifecycleMutation(task);
     const result = await service.run(() => adapter.handleInput(
       serviceTask(fenced, claim),
