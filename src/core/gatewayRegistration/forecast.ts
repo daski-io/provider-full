@@ -6,7 +6,8 @@ import { planServiceRegistration } from "./client.js";
 import { verifyRegistrationView } from "./progress.js";
 import { crossCheckActivation, priorHeadsFor } from "./promotion.js";
 import type { EvidenceStep, RegistrationPlan } from "./recovery.js";
-import { listGatewaySplitterWrites, type GatewayRegistrationRow } from "./store.js";
+import { listGatewaySplitterWrites } from "./splitterRows.js";
+import type { GatewayRegistrationRow } from "./store.js";
 
 export type RegistrationForecastState =
   /** Registered and unchanged: a run would do nothing. */

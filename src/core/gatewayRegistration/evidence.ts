@@ -2,7 +2,7 @@ import type { Hex } from "viem";
 import { config } from "../config.js";
 import { canonicalHash } from "../standardRail/canonical.js";
 import { getGatewayRegistrationView, postGatewayEvidence } from "./gatewayApi.js";
-import { saveRegistrationEvidence } from "./store.js";
+import { saveRegistrationEvidence, type RegistrationRef } from "./store.js";
 import type {
   GatewayRegistrationView,
   ProviderServiceRegistrationEvidenceEnvelope,
@@ -24,7 +24,7 @@ export class GatewayRegistrationEndedError extends Error {
 
 export interface EvidenceArgs {
   gatewayOrigin: string;
-  localId: string;
+  registration: RegistrationRef;
   /** The gateway's live view: its state decides replay versus refresh. */
   view: GatewayRegistrationView;
   existingEvidence: ProviderServiceRegistrationEvidenceEnvelope | null;
@@ -55,7 +55,7 @@ async function signEvidence(
       evidenceNonce: registrationNonce(),
     },
   });
-  await saveRegistrationEvidence(args.localId, evidence, args.existingEvidence);
+  await saveRegistrationEvidence(args.registration, evidence, args.existingEvidence);
   return evidence;
 }
 

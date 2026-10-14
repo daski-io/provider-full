@@ -27,11 +27,12 @@ const prepared = { registrationId: "registration", listings: [] } as unknown as
 const view = (state: GatewayRegistrationView["state"]) =>
   ({ registrationId: "registration", state, prepared }) as GatewayRegistrationView;
 const now = () => Math.floor(Date.now() / 1_000);
+const LOCAL = { id: "local", idempotency_key: "svc-local-intent" };
 
 function args(state: GatewayRegistrationView["state"], validBefore = now() + 300) {
   return {
     gatewayOrigin: "https://gateway.example",
-    localId: "local",
+    registration: LOCAL,
     view: view(state),
     splitterHashes: [],
     policy: {
@@ -75,7 +76,7 @@ describe("evidence awaiting first acceptance", () => {
       evidenceNonce: expect.stringMatching(/^0x[0-9a-f]{64}$/),
     });
     expect(evidence.payload.evidenceNonce).not.toBe(hash);
-    expect(h.save).toHaveBeenCalledWith("local", evidence, input.existingEvidence);
+    expect(h.save).toHaveBeenCalledWith(LOCAL, evidence, input.existingEvidence);
     expect(h.save.mock.invocationCallOrder[0]).toBeLessThan(h.post.mock.invocationCallOrder[0]!);
     expect(h.post).toHaveBeenCalledWith("https://gateway.example", "registration", evidence);
   });
@@ -100,7 +101,7 @@ describe("evidence awaiting first acceptance", () => {
     const { evidence } = await submitEvidence(input);
     expect(evidence.payload.expectedState).toBe("PREPARED");
     expect(evidence.payload.preparedRegistrationHash).toBe(canonicalHash(prepared));
-    expect(h.save).toHaveBeenCalledWith("local", evidence, null);
+    expect(h.save).toHaveBeenCalledWith(LOCAL, evidence, null);
   });
 });
 

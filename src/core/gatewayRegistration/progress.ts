@@ -14,7 +14,6 @@ import { verifyPreparedRegistration } from "./prepared.js";
 import { promoteActiveRuntimeListings } from "./promotion.js";
 import { confirmSplitterDeployments, ensureSplitterBroadcasts } from "./splitters.js";
 import {
-  getGatewayRegistration,
   markGatewayRegistrationActive,
   markGatewayRegistrationAttention,
   savePreparedRegistration,
@@ -106,7 +105,7 @@ export async function activate(
   view: GatewayRegistrationView,
 ): Promise<RegistrationOutcome> {
   await promoteActiveRuntimeListings({
-    localId: local.id,
+    registration: local,
     gatewayOrigin: context.gatewayOrigin,
     view,
     policy: context.policy,
@@ -114,7 +113,7 @@ export async function activate(
     intent: local.canonical_intent,
     finalizedBlock: context.finalizedBlock,
   });
-  await markGatewayRegistrationActive(local.id);
+  await markGatewayRegistrationActive(local, view.registrationId);
   return { serviceSlug: service.slug, state: "ACTIVE", registrationId: view.registrationId };
 }
 
@@ -130,7 +129,7 @@ export async function continueRegistration(
 ): Promise<RegistrationOutcome> {
   const evidence = local.canonical_evidence;
   if (phase === "broadcast") {
-    if (!evidence) await ensureSplitterBroadcasts(local.id, view);
+    if (!evidence) await ensureSplitterBroadcasts(local, view);
     return {
       serviceSlug: service.slug,
       state: evidence ? "EVIDENCE_SUBMITTED" : "BROADCAST",
@@ -139,11 +138,11 @@ export async function continueRegistration(
   }
   const evidenceArgs = {
     gatewayOrigin: context.gatewayOrigin,
-    localId: local.id,
+    registration: local,
     view,
     existingEvidence: evidence,
     splitterHashes: evidence?.payload.splitterTransactionHashes ??
-      await confirmSplitterDeployments(local.id, view),
+      await confirmSplitterDeployments(local, view),
     policy: context.policy,
   };
   let active: GatewayRegistrationView;
@@ -157,10 +156,10 @@ export async function continueRegistration(
       error instanceof GatewayRegistrationHttpError &&
       error.code === "PREPARED_REGISTRATION_DRIFT"
     ) {
-      await markGatewayRegistrationAttention(local.id, "prepared_registration_drift");
+      await markGatewayRegistrationAttention(local, "prepared_registration_drift");
     } else if (error instanceof GatewayRegistrationEndedError) {
       await markGatewayRegistrationAttention(
-        local.id,
+        local,
         `gateway_registration_${error.state.toLowerCase()}`,
       );
     }
@@ -196,7 +195,9 @@ export async function prepareRegistration(
       error.status === 401 &&
       error.code === "REGISTRATION_AUTH_INVALID"
     ) {
-      await markGatewayRegistrationAttention(local.id, "intent_expired_before_prepare");
+      if (!await markGatewayRegistrationAttention(local, "intent_expired_before_prepare")) {
+        throw new Error(`${service.slug}: another registration run replaced the expired intent`);
+      }
       return onExpiredIntent();
     }
     throw error;
@@ -217,11 +218,7 @@ export async function prepareRegistration(
     );
   }
   await verifyRegistrationView(context, view, local.canonical_intent);
-  await savePreparedRegistration(local.id, view);
-  const prepared = await getGatewayRegistration(context.gatewayOrigin, context.record.serviceId);
-  if (!prepared || prepared.id !== local.id || prepared.state !== "PREPARED") {
-    throw new Error("local gateway registration was not persisted");
-  }
+  const prepared = await savePreparedRegistration(local, view);
   return view.state === "ACTIVE"
     ? activate(context, service, prepared, view)
     : continueRegistration(context, service, prepared, view, phase);

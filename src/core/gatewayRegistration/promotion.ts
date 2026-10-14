@@ -16,7 +16,8 @@ import {
   type RuntimeListingHead,
   type SplitterActivationCheckpoint,
 } from "./runtimeCatalog.js";
-import { listGatewaySplitterWrites, markGatewayRegistrationAttention } from "./store.js";
+import { listGatewaySplitterWrites } from "./splitterRows.js";
+import { markGatewayRegistrationAttention, type RegistrationRef } from "./store.js";
 import type {
   GatewayRegistrationView,
   ProviderServiceRegistrationIntentEnvelope,
@@ -155,7 +156,7 @@ async function verifyListingActivationCheckpoint(args: {
  * values, and a refusal names every disagreement.
  */
 export async function promoteActiveRuntimeListings(args: {
-  localId: string;
+  registration: RegistrationRef;
   gatewayOrigin: string;
   view: GatewayRegistrationView;
   policy: RegistrationPolicy;
@@ -178,7 +179,7 @@ export async function promoteActiveRuntimeListings(args: {
         listingId: error.listingId,
         fields: error.fields,
       });
-      await markGatewayRegistrationAttention(args.localId, "reused_listing_drift");
+      await markGatewayRegistrationAttention(args.registration, "reused_listing_drift");
     }
     throw error;
   }
@@ -189,13 +190,13 @@ export async function promoteActiveRuntimeListings(args: {
       registrationId: args.view.registrationId,
       detail,
     });
-    await markGatewayRegistrationAttention(args.localId, "runtime_commitment_mismatch");
+    await markGatewayRegistrationAttention(args.registration, "runtime_commitment_mismatch");
     throw new Error(
       `${prepared.serviceSlug} activation did not report the exact runtime commitment set: ${detail}`,
     );
   }
   const writes = new Map(
-    (await listGatewaySplitterWrites(args.localId))
+    (await listGatewaySplitterWrites(args.registration.id))
       .filter((row) => row.transaction_hash !== null)
       .map((row) => [row.listing_id, row.transaction_hash as Hex]),
   );

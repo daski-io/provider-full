@@ -77,12 +77,25 @@ vi.mock("../src/core/logger.js", () => {
   };
 });
 
+import { randomUUID } from "node:crypto";
 import { getAddress } from "viem";
 import { registerServiceWithGateway } from "../src/core/gatewayRegistration/client.js";
 import {
   buildRuntimeListingCommitment,
   runtimeCommitmentHash,
 } from "../src/core/gatewayRegistration/runtimeCommitment.js";
+import { claimSplitterProviderWrite, ensureSplitterPreparations } from "../src/core/gatewayRegistration/splitterRows.js";
+import {
+  beginGatewayRegistration,
+  markGatewayRegistrationActive,
+  markGatewayRegistrationAttention,
+  markRegistrationBroadcast,
+  resumeGatewayRegistration,
+  saveRegistrationEvidence,
+  savePreparedRegistration,
+  type GatewayRegistrationRow,
+} from "../src/core/gatewayRegistration/store.js";
+import type { GatewayRegistrationView } from "../src/core/gatewayRegistration/types.js";
 import { signProviderEnvelope } from "../src/core/gatewayRegistration/wire.js";
 import type { ServiceRow } from "../src/core/db/queries/services.js";
 import { canonicalHash } from "../src/core/standardRail/canonical.js";
@@ -459,5 +472,143 @@ describe("verification diagnostics", { timeout: 30_000 }, () => {
     );
     expect(failure?.message).not.toMatch(/signature|0x[0-9a-f]{130}/);
     expect(h.coordinator!.prepared).toEqual([]);
+  });
+});
+
+describe("concurrent registration runs", { timeout: 30_000 }, () => {
+  async function pendingRejected(): Promise<GatewayRegistrationRow> {
+    await register();
+    changePaidSkill();
+    gateway.activation = "manual";
+    gateway.unavailablePendingReads = 1;
+    await expect(register()).rejects.toThrow(/did not return JSON/);
+    const pending = await localRow() as GatewayRegistrationRow;
+    gateway.registrations.get(pending.gateway_registration_id!)!.state = "REJECTED";
+    gateway.activation = "on-evidence";
+    return pending;
+  }
+
+  it("never park or replace a record another run re-registered from a stale plan", async () => {
+    const pending = await pendingRejected();
+    // Run B reads the record, then its live read of the ended registration
+    // stalls while run A restarts and completes the registration.
+    let releaseB!: () => void;
+    const held = new Promise<void>((resolve) => { releaseB = resolve; });
+    let parked = false;
+    vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => {
+      if (!parked && (init?.method ?? "GET") === "GET" &&
+        String(input).endsWith(`/v1/service-registrations/${pending.gateway_registration_id}`)) {
+        parked = true;
+        await held;
+      }
+      return gateway.fetch(input, init);
+    });
+    const runB = registerServiceWithGateway(GATEWAY, await service())
+      .then(() => null, (error: Error) => error);
+    await vi.waitFor(() => expect(parked).toBe(true));
+    const runA = await register();
+    const completed = await localRow();
+    expect(completed).toMatchObject({ state: "ACTIVE", gateway_registration_id: runA.registrationId });
+
+    releaseB();
+    expect((await runB)?.message).toMatch(/another registration run replaced the gateway record/);
+    const after = await localRow();
+    expect(after).toMatchObject({
+      state: "ACTIVE",
+      idempotency_key: completed.idempotency_key,
+      gateway_registration_id: runA.registrationId,
+      last_error_code: null,
+    });
+    expect(after.canonical_intent).toEqual(completed.canonical_intent);
+    gateway.requests.length = 0;
+    await expect(registerServiceWithGateway(GATEWAY, await service()))
+      .resolves.toMatchObject({ state: "ACTIVE", registrationId: runA.registrationId });
+    expect(gateway.requests.some((request) => request.method === "POST")).toBe(false);
+  });
+
+  it("write nothing for an intent another run replaced", async () => {
+    const pending = await pendingRejected();
+    const stale = { id: pending.id, idempotency_key: pending.idempotency_key };
+    const parked = (await markGatewayRegistrationAttention(stale, "gateway_registration_rejected"))!;
+    const replacement = await beginGatewayRegistration({
+      gatewayOrigin: GATEWAY,
+      serviceRowId: (await service()).id,
+      serviceId: SERVICE_ID,
+      cardContractHash: bytesHex(pending.card_contract_hash) as `0x${string}`,
+      idempotencyKey: "svc-replacement-intent",
+      intent: pending.canonical_intent,
+      replacing: parked,
+    });
+    const view = pending.prepared_response!;
+
+    expect(await markGatewayRegistrationAttention(stale, "late_stale_attention")).toBeNull();
+    await expect(resumeGatewayRegistration(stale)).rejects.toThrow(/left ATTENTION/);
+    await expect(savePreparedRegistration(stale, view)).rejects.toThrow(/preparation changed/);
+    await expect(ensureSplitterPreparations(stale, view)).rejects.toThrow(/record changed/);
+    await markRegistrationBroadcast(stale);
+    await expect(saveRegistrationEvidence(stale, pending.canonical_evidence!, null))
+      .rejects.toThrow(/evidence persistence claim was lost/);
+    await expect(markGatewayRegistrationActive(stale, pending.gateway_registration_id!))
+      .rejects.toThrow(/did not activate/);
+    const client = await database.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const listing = (await splitterWrites())[0]!;
+      await client.query("UPDATE provider_gateway_splitter_writes SET provider_write_id=NULL WHERE listing_id=$1", [listing.listing_id]);
+      await expect(claimSplitterProviderWrite(stale, listing.listing_id, {
+        id: randomUUID(),
+        hash: `0x${"ab".repeat(32)}`,
+      } as never, client)).resolves.toBe(false);
+      await client.query("ROLLBACK");
+    } finally {
+      client.release();
+    }
+    expect(await localRow()).toEqual(replacement);
+  });
+
+  it("store the preparation and its splitter rows in one transaction", async () => {
+    const begun = await beginGatewayRegistration({
+      gatewayOrigin: GATEWAY,
+      serviceRowId: (await service()).id,
+      serviceId: SERVICE_ID,
+      cardContractHash: `0x${"12".repeat(32)}`,
+      idempotencyKey: "svc-atomic-preparation",
+      intent: { payload: {} } as never,
+      replacing: null,
+    });
+    const listing = (splitterAddress: string) => ({
+      listingId: randomUUID(),
+      deploymentRequired: true,
+      splitterAddress,
+      transaction: { kind: "splitter-deployment" },
+    });
+    const view = {
+      registrationId: randomUUID(),
+      prepared: { listings: [listing(`0x${"ab".repeat(20)}`), listing("0xnot-an-address")] },
+    } as unknown as GatewayRegistrationView;
+
+    await expect(savePreparedRegistration(begun, view)).rejects.toThrow();
+    expect(await localRow()).toMatchObject({
+      state: "INTENT_READY",
+      gateway_registration_id: null,
+      prepared_response: null,
+    });
+    expect(await splitterWrites()).toEqual([]);
+  });
+
+  it("restore splitter rows a persisted preparation lacks before deploying", async () => {
+    vi.spyOn(h.coordinator!, "prepareAndBroadcastProviderWrite")
+      .mockRejectedValueOnce(new Error("provider wallet RPC unavailable"));
+    await expect(registerServiceWithGateway(GATEWAY, await service(), 1, "broadcast"))
+      .rejects.toThrow(/RPC unavailable/);
+    expect((await localRow()).state).toBe("PREPARED");
+    // A record saved before preparation and splitter rows were one
+    // transaction, interrupted between the two.
+    await database.pool.query("DELETE FROM provider_gateway_splitter_writes");
+
+    await expect(register()).resolves.toMatchObject({ state: "ACTIVE" });
+    const rows = await splitterWrites();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ state: "CONFIRMED", provider_write_id: expect.any(String) });
   });
 });

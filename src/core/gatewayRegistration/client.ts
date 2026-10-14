@@ -86,7 +86,7 @@ async function execute(
       };
     case "blocked":
       if (plan.attention && local) {
-        await markGatewayRegistrationAttention(local.id, plan.attention);
+        await markGatewayRegistrationAttention(local, plan.attention);
       }
       throw new Error(`${service.slug} registration ${plan.code}: ${plan.detail}`);
     case "promote":
@@ -99,7 +99,7 @@ async function execute(
       // persisted intent; ATTENTION is left only once it verifies.
       await verifyRegistrationView(context, plan.view, local!.canonical_intent);
       const resumed = local!.state === "ATTENTION"
-        ? await resumeGatewayRegistration(local!.id)
+        ? await resumeGatewayRegistration(local!)
         : local!;
       return continueRegistration(context, service, resumed, plan.view, phase);
     }
@@ -108,8 +108,12 @@ async function execute(
     case "sign-intent": {
       let replacing = local;
       if (plan.attention && local) {
-        await markGatewayRegistrationAttention(local.id, plan.attention);
-        replacing = await getGatewayRegistration(context.gatewayOrigin, context.record.serviceId);
+        // Fenced on the intent this plan was made for: a record another run
+        // replaced meanwhile is never parked or wiped from a stale plan.
+        replacing = await markGatewayRegistrationAttention(local, plan.attention);
+        if (!replacing) {
+          throw new Error(`${service.slug}: another registration run replaced the gateway record during recovery`);
+        }
       }
       if (plan.reason !== "first-admission" && plan.reason !== "card-changed") {
         logInfo("Gateway registration restarts with a new intent", {

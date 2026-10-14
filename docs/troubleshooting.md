@@ -276,6 +276,14 @@ or an intent the gateway never prepared. While the gateway holds a
 registration as pending or active, its persisted intent, preparation,
 splitter writes and accepted evidence are kept.
 
+Concurrent runs for one service are safe. Every write to the local record, and
+every splitter deployment claim, is fenced on the intent the run planned
+under; a run whose intent another run replaced writes and broadcasts nothing
+and stops with `another registration run replaced the gateway record`. A
+preparation and its splitter rows are stored in one transaction, and a
+continued registration restores any splitter row an older record lacks before
+it deploys or confirms splitters.
+
 ### Forecast a run first
 
 ```bash

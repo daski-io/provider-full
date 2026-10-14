@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { Hex } from "viem";
 import { pool } from "../db/pool.js";
-import type { Queryable } from "../db/queryable.js";
-import type { PreparedProviderWrite } from "../chain/providerWriteCoordinator.js";
+import { inTransaction } from "../db/queryable.js";
+import { recordSplitterPreparations } from "./splitterRows.js";
 import type {
   GatewayRegistrationView,
   ProviderServiceRegistrationEvidenceEnvelope,
@@ -34,18 +34,13 @@ export interface GatewayRegistrationRow {
   updated_at: Date;
 }
 
-export interface GatewaySplitterWriteRow {
-  listing_id: string;
-  gateway_registration_local_id: string;
-  expected_splitter_address: string;
-  canonical_transaction: Record<string, unknown>;
-  provider_write_id: string | null;
-  transaction_hash: Hex | null;
-  state: "PREPARED" | "BROADCAST" | "CONFIRMED" | "REVERTED" | "ATTENTION";
-  last_error_code: string | null;
-  created_at: Date;
-  updated_at: Date;
-}
+/**
+ * The local record a run acts on, fenced by the intent it holds. A record
+ * keeps its id when a new intent replaces the old one, so every write after
+ * beginGatewayRegistration also names the idempotency key it was planned
+ * under: a run still working on a replaced intent writes nothing.
+ */
+export type RegistrationRef = Pick<GatewayRegistrationRow, "id" | "idempotency_key">;
 
 const bytes = (hex: string): Buffer => Buffer.from(hex.slice(2), "hex");
 
@@ -111,13 +106,13 @@ export async function beginGatewayRegistration(args: {
        prepared_response=NULL,canonical_evidence=NULL,last_error_code=NULL,
        updated_at=now()
      WHERE id=$7 AND gateway_origin=$1 AND service_id=$3
-       AND state=$8 AND canonical_intent=$9::jsonb
+       AND state=$8 AND idempotency_key=$9
      RETURNING *`,
     [
       ...values,
       args.replacing.id,
       args.replacing.state,
-      args.replacing.canonical_intent,
+      args.replacing.idempotency_key,
     ],
   );
   if (!replaced.rows[0]) {
@@ -131,116 +126,65 @@ export async function beginGatewayRegistration(args: {
  * intent, preparation, splitter writes and evidence untouched.
  */
 export async function resumeGatewayRegistration(
-  localId: string,
+  ref: RegistrationRef,
 ): Promise<GatewayRegistrationRow> {
   const result = await pool.query<GatewayRegistrationRow>(
     `UPDATE provider_gateway_registrations
         SET state=CASE WHEN canonical_evidence IS NULL THEN 'PREPARED'
                        ELSE 'EVIDENCE_SUBMITTED' END,
             last_error_code=NULL,updated_at=now()
-      WHERE id=$1 AND state='ATTENTION'
+      WHERE id=$1 AND idempotency_key=$2 AND state='ATTENTION'
       RETURNING *`,
-    [localId],
+    [ref.id, ref.idempotency_key],
   );
   if (!result.rows[0]) throw new Error("the gateway registration left ATTENTION concurrently");
   return result.rows[0];
 }
 
+/**
+ * Persist the gateway's preparation and every splitter row it requires in
+ * one transaction, so no record is ever PREPARED without them.
+ */
 export async function savePreparedRegistration(
-  localId: string,
+  ref: RegistrationRef,
   view: GatewayRegistrationView,
-): Promise<void> {
-  const result = await pool.query(
-    `UPDATE provider_gateway_registrations
-        SET state='PREPARED',gateway_registration_id=$2,
-            prepared_response=$3,last_error_code=NULL,updated_at=now()
-      WHERE id=$1 AND state IN ('INTENT_READY','PREPARED')
-        AND (prepared_response IS NULL OR prepared_response=$3::jsonb)`,
-    [localId, view.registrationId, view],
-  );
-  if (result.rowCount !== 1) {
-    throw new Error("gateway preparation changed after local persistence");
-  }
-  for (const listing of view.prepared.listings) {
-    if (!listing.deploymentRequired || !listing.transaction || !listing.splitterAddress) {
-      continue;
-    }
-    await pool.query(
-      `INSERT INTO provider_gateway_splitter_writes
-        (listing_id,gateway_registration_local_id,expected_splitter_address,
-         canonical_transaction,state)
-       VALUES ($1,$2,$3,$4,'PREPARED')
-       ON CONFLICT (listing_id) DO UPDATE SET
-         expected_splitter_address=EXCLUDED.expected_splitter_address,
-         canonical_transaction=EXCLUDED.canonical_transaction,
-         updated_at=now()
-       WHERE provider_gateway_splitter_writes.gateway_registration_local_id=$2
-         AND provider_gateway_splitter_writes.provider_write_id IS NULL`,
-      [
-        listing.listingId,
-        localId,
-        listing.splitterAddress.toLowerCase(),
-        listing.transaction,
-      ],
+): Promise<GatewayRegistrationRow> {
+  return inTransaction(pool, async (db) => {
+    const result = await db.query<GatewayRegistrationRow>(
+      `UPDATE provider_gateway_registrations
+          SET state='PREPARED',gateway_registration_id=$2,
+              prepared_response=$3,last_error_code=NULL,updated_at=now()
+        WHERE id=$1 AND idempotency_key=$4
+          AND state IN ('INTENT_READY','PREPARED')
+          AND (prepared_response IS NULL OR prepared_response=$3::jsonb)
+        RETURNING *`,
+      [ref.id, view.registrationId, view, ref.idempotency_key],
     );
-  }
+    if (!result.rows[0]) {
+      throw new Error("gateway preparation changed after local persistence");
+    }
+    await recordSplitterPreparations(db, ref.id, view);
+    return result.rows[0];
+  });
 }
 
-export async function listGatewaySplitterWrites(
-  localId: string,
-): Promise<GatewaySplitterWriteRow[]> {
-  const result = await pool.query<GatewaySplitterWriteRow>(
-    `SELECT * FROM provider_gateway_splitter_writes
-      WHERE gateway_registration_local_id=$1 ORDER BY listing_id`,
-    [localId],
-  );
-  return result.rows;
-}
-
-export async function claimSplitterProviderWrite(
-  listingId: string,
-  prepared: PreparedProviderWrite,
-  db: Queryable,
-): Promise<boolean> {
-  const result = await db.query(
-    `UPDATE provider_gateway_splitter_writes
-        SET provider_write_id=$2,transaction_hash=$3,state='BROADCAST',
-            last_error_code=NULL,updated_at=now()
-      WHERE listing_id=$1 AND provider_write_id IS NULL`,
-    [listingId, prepared.id, prepared.hash.toLowerCase()],
-  );
-  return result.rowCount === 1;
-}
-
-export async function confirmSplitterWrite(
-  listingId: string,
-  providerWriteId: string,
-): Promise<void> {
-  const result = await pool.query(
-    `UPDATE provider_gateway_splitter_writes
-        SET state='CONFIRMED',last_error_code=NULL,updated_at=now()
-      WHERE listing_id=$1 AND provider_write_id=$2`,
-    [listingId, providerWriteId],
-  );
-  if (result.rowCount !== 1) throw new Error("splitter write persistence claim was lost");
-}
-
-export async function markRegistrationBroadcast(localId: string): Promise<void> {
+export async function markRegistrationBroadcast(ref: RegistrationRef): Promise<void> {
   await pool.query(
     `UPDATE provider_gateway_registrations
         SET state='BROADCAST',updated_at=now()
-      WHERE id=$1 AND state IN ('PREPARED','BROADCAST')`,
-    [localId],
+      WHERE id=$1 AND idempotency_key=$2 AND state IN ('PREPARED','BROADCAST')`,
+    [ref.id, ref.idempotency_key],
   );
 }
 
 /**
  * Persist signed evidence before it is posted. A compare-and-set on the
  * envelope it replaces (null for the first one) keeps a concurrent run from
- * overwriting evidence the gateway may already have accepted.
+ * overwriting evidence the gateway may already have accepted, and evidence
+ * is only ever stored on the registration it binds.
  */
 export async function saveRegistrationEvidence(
-  localId: string,
+  ref: RegistrationRef,
   evidence: ProviderServiceRegistrationEvidenceEnvelope,
   replacing: ProviderServiceRegistrationEvidenceEnvelope | null,
 ): Promise<void> {
@@ -248,31 +192,42 @@ export async function saveRegistrationEvidence(
     `UPDATE provider_gateway_registrations
         SET state='EVIDENCE_SUBMITTED',canonical_evidence=$2,
             last_error_code=NULL,updated_at=now()
-      WHERE id=$1 AND state IN ('PREPARED','BROADCAST','EVIDENCE_SUBMITTED')
+      WHERE id=$1 AND idempotency_key=$4 AND gateway_registration_id=$5
+        AND state IN ('PREPARED','BROADCAST','EVIDENCE_SUBMITTED')
         AND canonical_evidence IS NOT DISTINCT FROM $3::jsonb`,
-    [localId, evidence, replacing],
+    [ref.id, evidence, replacing, ref.idempotency_key, evidence.payload.registrationId],
   );
   if (result.rowCount !== 1) throw new Error("registration evidence persistence claim was lost");
 }
 
-export async function markGatewayRegistrationActive(localId: string): Promise<void> {
+export async function markGatewayRegistrationActive(
+  ref: RegistrationRef,
+  registrationId: string,
+): Promise<void> {
   const result = await pool.query(
     `UPDATE provider_gateway_registrations
         SET state='ACTIVE',last_error_code=NULL,updated_at=now()
-      WHERE id=$1`,
-    [localId],
+      WHERE id=$1 AND idempotency_key=$2 AND gateway_registration_id=$3`,
+    [ref.id, ref.idempotency_key, registrationId],
   );
   if (result.rowCount !== 1) throw new Error("gateway registration did not activate");
 }
 
+/**
+ * Park the record for an operator. Returns the updated row, or null when
+ * another run replaced the intent this one was acting on, in which case
+ * nothing is written.
+ */
 export async function markGatewayRegistrationAttention(
-  localId: string,
+  ref: RegistrationRef,
   errorCode: string,
-): Promise<void> {
-  await pool.query(
+): Promise<GatewayRegistrationRow | null> {
+  const result = await pool.query<GatewayRegistrationRow>(
     `UPDATE provider_gateway_registrations
-        SET state='ATTENTION',last_error_code=$2,updated_at=now()
-      WHERE id=$1`,
-    [localId, errorCode.slice(0, 128)],
+        SET state='ATTENTION',last_error_code=$3,updated_at=now()
+      WHERE id=$1 AND idempotency_key=$2
+      RETURNING *`,
+    [ref.id, ref.idempotency_key, errorCode.slice(0, 128)],
   );
+  return result.rows[0] ?? null;
 }

@@ -12,9 +12,10 @@ import { canonicalHash } from "../standardRail/canonical.js";
 import {
   claimSplitterProviderWrite,
   confirmSplitterWrite,
+  ensureSplitterPreparations,
   listGatewaySplitterWrites,
-  markRegistrationBroadcast,
-} from "./store.js";
+} from "./splitterRows.js";
+import { markRegistrationBroadcast, type RegistrationRef } from "./store.js";
 import { factoryAbi } from "./prepared.js";
 import type { GatewayRegistrationView } from "./types.js";
 
@@ -22,8 +23,9 @@ type PreparedListing = GatewayRegistrationView["prepared"]["listings"][number];
 
 // Broadcast one listing's splitter deployment (no confirmation wait). The
 // chain-write journal persists the signed transaction and the listing's
-// claim in one transaction before anything is sent.
-async function deployListingSplitter(listing: PreparedListing) {
+// claim in one transaction before anything is sent, and the claim holds only
+// while the registration still carries the intent this run acts on.
+async function deployListingSplitter(registration: RegistrationRef, listing: PreparedListing) {
   const preparation = listing.preparation!;
   const transaction = listing.transaction!;
   const payload = preparation.payload;
@@ -46,7 +48,7 @@ async function deployListingSplitter(listing: PreparedListing) {
       BigInt(payload.listingEpoch),
     ],
     persist: (prepared, db) =>
-      claimSplitterProviderWrite(listing.listingId, prepared, db),
+      claimSplitterProviderWrite(registration, listing.listingId, prepared, db),
   });
 }
 
@@ -56,11 +58,12 @@ async function deployListingSplitter(listing: PreparedListing) {
  * finality window before the activation phase confirms them.
  */
 export async function ensureSplitterBroadcasts(
-  localId: string,
+  registration: RegistrationRef,
   view: GatewayRegistrationView,
 ): Promise<number> {
+  await ensureSplitterPreparations(registration, view);
   const rows = new Map(
-    (await listGatewaySplitterWrites(localId)).map((row) => [row.listing_id, row]),
+    (await listGatewaySplitterWrites(registration.id)).map((row) => [row.listing_id, row]),
   );
   let broadcast = 0;
   for (const listing of view.prepared.listings.filter((item) =>
@@ -80,10 +83,10 @@ export async function ensureSplitterBroadcasts(
       }
       continue;
     }
-    await deployListingSplitter(listing);
+    await deployListingSplitter(registration, listing);
     broadcast += 1;
   }
-  await markRegistrationBroadcast(localId);
+  await markRegistrationBroadcast(registration);
   return broadcast;
 }
 
@@ -112,11 +115,12 @@ async function confirmExistingWrite(
  * hashes the activation evidence binds, sorted by listing id.
  */
 export async function confirmSplitterDeployments(
-  localId: string,
+  registration: RegistrationRef,
   view: GatewayRegistrationView,
 ): Promise<Array<{ listingId: string; transactionHash: Hex }>> {
+  await ensureSplitterPreparations(registration, view);
   const rows = new Map(
-    (await listGatewaySplitterWrites(localId)).map((row) => [row.listing_id, row]),
+    (await listGatewaySplitterWrites(registration.id)).map((row) => [row.listing_id, row]),
   );
   const hashes: Array<{ listingId: string; transactionHash: Hex }> = [];
   for (const listing of view.prepared.listings.filter((item) =>
@@ -136,7 +140,7 @@ export async function confirmSplitterDeployments(
       });
       continue;
     }
-    const write = await deployListingSplitter(listing);
+    const write = await deployListingSplitter(registration, listing);
     hashes.push({
       listingId: listing.listingId,
       transactionHash: await confirmExistingWrite(
@@ -146,6 +150,6 @@ export async function confirmSplitterDeployments(
       ),
     });
   }
-  await markRegistrationBroadcast(localId);
+  await markRegistrationBroadcast(registration);
   return hashes.sort((left, right) => left.listingId.localeCompare(right.listingId));
 }
