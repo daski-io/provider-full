@@ -8,10 +8,10 @@ import { postJson, startRailServer, statusQuery } from "./dispatchHttpHarness.js
 import { acceptDispatchResponse, readGatewayJson } from "./gatewayConsumer.js";
 import { createMigratedDatabase, DATABASE_HOOK_TIMEOUT_MS, type DisposableDatabase } from "./postgresHarness.js";
 import {
-  fixtureModule, paidOrder, publishedContract, railConfig, retainedWallet, seedService, statusCall,
-  versionHead, versionOutcome,
+  fixtureModule, paidOrder, publishedContract, railConfig, railEnvironment, retainedWallet, seedService, SKILL,
+  statusCall, versionHead, versionOutcome,
 } from "./retainedVersionFixture.js";
-import { GATEWAY_AUDIENCE, provider } from "./standardRailFixture.js";
+import { GATEWAY_AUDIENCE, provider, SERVICE_SLUG } from "./standardRailFixture.js";
 
 // F-T05, F-T15, C-T06: a timely-paid order of a superseded listing version
 // keeps the definition, price, handler and signing key it was sold under,
@@ -51,6 +51,7 @@ vi.mock("../src/core/engine/preExecuteRunner.js", () => ({
 const { ProviderEvidenceVerifier } = await import("../src/core/standardRail/evidence.js");
 const { promoteRuntimeListingVersions } = await import("../src/core/gatewayRegistration/runtimeCatalog.js");
 const { registerRetainedContracts } = await import("../src/core/serviceRegistry/retainedHandlers.js");
+const { refreshCatalogHeads } = await import("../src/core/standardRail/config.js");
 
 const v1 = versionHead(1);
 const v2 = versionHead(2);
@@ -162,6 +163,29 @@ describe("retained listing versions (F-T05, F-T15, C-T06)", () => {
     expect([answer.status, answer.body]).toEqual([503, { error: "dispatch_rejected", reason: "service_unavailable" }]);
     expect(await claims()).toBe(before);
     expect(h.current + h.retained).toBe(0);
+  });
+
+  it("follows a promotion for new sales without a restart while the old head's orders keep their version", async () => {
+    // Paid under version 2 while it was the head.
+    const order = await paidOrder(versionOutcome(v2), { item: "before" }, Math.floor(Date.now() / 1_000) - 60);
+    const v3 = versionHead(3);
+    await promoteRuntimeListingVersions(GATEWAY_AUDIENCE, v3.serviceId, [asVersion(v3)]);
+    // A process booted while version 2 was the head.
+    const live = await railConfig();
+    const server = await startRailServer(live);
+    try {
+      expect([...live.outcomes.values()].map((outcome) => outcome.fixedGrossAmount)).toEqual(["250000"]);
+      await expect(refreshCatalogHeads(live, { paidSkills: [{ serviceSlug: SERVICE_SLUG, skillId: SKILL }] }, railEnvironment()))
+        .resolves.toBe(true);
+      expect([...live.outcomes.values()].map((outcome) => outcome.fixedGrossAmount)).toEqual(["300000"]);
+      // Only the price changed, so the current handler serves version 2 too.
+      const answer = await dispatch(order, server.base);
+      expect(answer.status).toBe(200);
+      expect(answer.body.state).toBe("completed");
+      expect([h.retained, h.current]).toEqual([0, 1]);
+    } finally {
+      await server.close();
+    }
   });
 
   it("never signs an earlier version's answers with the current key", async () => {

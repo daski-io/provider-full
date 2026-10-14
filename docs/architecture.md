@@ -90,11 +90,41 @@ proven. In broad order it:
    asset-action catalog;
 9. verifies reviewed contracts, runtime commitments, identity, wallet, and
    catalog;
-10. starts required workers and readiness monitors; and
-11. starts the HTTP listener.
+10. checks its compiled capability manifest and provider keys against every
+    listing version and asset action the database still owes;
+11. starts required workers and readiness monitors; and
+12. starts the HTTP listener.
 
 `/health/live` reports process life. `/health/ready` reports whether the
-dependencies and workers required to serve admitted traffic remain healthy.
+dependencies and workers required to serve admitted traffic remain healthy,
+including whether this build serves every retained obligation. `/health`
+names the build's embedded source digest and commit.
+
+## Capabilities and compatibility
+
+Each build describes itself without any external release coordinator: its
+compiled capability manifest (`compatibility/capabilityManifest.ts`) lists
+the executable contracts it runs, current and retained, the core migrations
+it applies and the durable queues it consumes, together with the source
+digest (and commit, when the image build was given one) that
+`scripts/copy-assets.mjs` embeds in `dist/build-identity.json`. Hosting
+metadata only supplements that identity.
+
+The compatibility report (`compatibility/compatibilityReport.ts`) compares
+the manifest and the deployment's provider keys with durable state alone. A
+listing version needs its handler while it is sold, while it is unretired
+with a provider quote that may already have been paid, or while it has
+pending orders, jobs, supplier operations, reviews or lifecycle actions; it
+needs its signing key while any order of it can be read. An open asset
+action needs its admitted definition and that definition's handler. Boot
+runs the check, and the servicing monitor reruns it when the catalog's
+activation revision moves or every ten minutes, re-reading the heads so new
+sales follow a promotion without a restart; a gap fails readiness. A
+registration run refuses to start while the registering build has a gap,
+and its `--check-only` forecast prints the same verdict. `npm run
+compatibility:check` (`node dist/checkCompatibility.js` in the image) prints
+the full report from read-only database sessions and needs only the
+database, the gateway origin and the provider keys.
 
 ## Discovery and free A2A
 

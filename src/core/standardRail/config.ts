@@ -128,32 +128,15 @@ export async function loadProviderStandardRailConfig(
   }
   const retainedSigningKeys = parseRetainedSigningKeys(env.PROVIDER_RETAINED_WALLET_PRIVATE_KEYS, providerAuthorityKey);
   const heads = options.headsOverride ?? await loadRuntimeListingHeads(gatewayOriginEarly);
-  const outcomes = materializeCatalogOutcomes({
-    heads,
+  const { outcomes, headVersions } = admitCatalogHeads(heads, {
     globalPolicy,
     chainId,
     providerControlProfileHash,
     installedPaidSkills: new Set(reviewedPaidSkills.keys()),
+    terminalAttestationKey,
+    canonicalToken,
     warn: options.warn,
   });
-  for (const outcome of outcomes.values()) {
-    validateOutcome(outcome, chainId);
-    if (!Number.isSafeInteger(outcome.maxOpenOrders) || outcome.maxOpenOrders <= 0) {
-      throw new Error(`Outcome ${outcome.outcomeId} requires a positive maxOpenOrders`);
-    }
-    if (getAddress(outcome.providerTerminalAttestationKey) !== terminalAttestationKey) {
-      throw new Error(`Outcome ${outcome.outcomeId} terminal attestation key mismatch`);
-    }
-    if (getAddress(outcome.token) !== canonicalToken) {
-      throw new Error(`Outcome ${outcome.outcomeId} token does not match the reviewed canonical token`);
-    }
-  }
-  const headVersions = new Map<string, ListingVersion>();
-  for (const head of heads) {
-    if (!head.paymentRequired) continue;
-    const version = bundleListingVersion(head.runtimeCommitmentHash, head.skillId, head.bundle);
-    headVersions.set(version.listingManifestHash, version);
-  }
   const finalityConfirmations = Number(env.STANDARD_RAIL_FINALITY_CONFIRMATIONS ?? 12);
   if (!Number.isSafeInteger(finalityConfirmations) || finalityConfirmations <= 0) {
     throw new Error("STANDARD_RAIL_FINALITY_CONFIRMATIONS must be a positive integer");
@@ -199,3 +182,69 @@ export async function loadProviderStandardRailConfig(
     reputationRetryDelaysSeconds,
   };
 }
+
+interface HeadAdmission {
+  globalPolicy: StandardRailGlobalPolicy;
+  chainId: number;
+  providerControlProfileHash: Hex;
+  installedPaidSkills: ReadonlySet<string>;
+  terminalAttestationKey: Address;
+  canonicalToken: Address;
+  warn?: (message: string) => void;
+}
+
+/** Materialize and validate the promoted heads: what this provider sells. */
+function admitCatalogHeads(
+  heads: readonly import("../gatewayRegistration/runtimeCatalog.js").RuntimeListingHead[],
+  context: HeadAdmission,
+): { outcomes: Map<string, ProviderOutcomeConfig>; headVersions: Map<string, ListingVersion> } {
+  const outcomes = materializeCatalogOutcomes({ ...context, heads });
+  for (const outcome of outcomes.values()) {
+    validateOutcome(outcome, context.chainId);
+    if (!Number.isSafeInteger(outcome.maxOpenOrders) || outcome.maxOpenOrders <= 0) {
+      throw new Error(`Outcome ${outcome.outcomeId} requires a positive maxOpenOrders`);
+    }
+    // A head is sold now, so it is signed with the current wallet's key.
+    if (getAddress(outcome.providerTerminalAttestationKey) !== context.terminalAttestationKey) {
+      throw new Error(`Outcome ${outcome.outcomeId} terminal attestation key mismatch`);
+    }
+    if (getAddress(outcome.token) !== context.canonicalToken) {
+      throw new Error(`Outcome ${outcome.outcomeId} token does not match the reviewed canonical token`);
+    }
+  }
+  const headVersions = new Map<string, ListingVersion>();
+  for (const head of heads) {
+    if (!head.paymentRequired) continue;
+    const version = bundleListingVersion(head.runtimeCommitmentHash, head.skillId, head.bundle);
+    headVersions.set(version.listingManifestHash, version);
+  }
+  return { outcomes, headVersions };
+}
+
+/**
+ * Re-read the promoted heads after the activation revision moved, so new
+ * sales use the current heads without a restart. The heads pass exactly the
+ * boot validation; on any failure the previous heads stay and the error
+ * propagates. Returns whether the sold heads changed.
+ */
+export async function refreshCatalogHeads(
+  config: ProviderStandardRailConfig,
+  launchPolicy: ProviderOutcomeLaunchPolicy,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<boolean> {
+  if (!config.providerControlProfileHash) throw new Error("rail configuration has no catalog to refresh");
+  const { outcomes, headVersions } = admitCatalogHeads(await loadRuntimeListingHeads(config.gatewayOrigin), {
+    globalPolicy: config.globalPolicy,
+    chainId: config.chainId,
+    providerControlProfileHash: config.providerControlProfileHash,
+    installedPaidSkills: new Set(launchPolicy.paidSkills.map((entry) => `${entry.serviceSlug}:${entry.skillId}`)),
+    terminalAttestationKey: config.terminalAttestationKey,
+    canonicalToken: getAddress(need(env, "USDC_ADDRESS")),
+  });
+  const before = [...config.outcomes.values()].map((outcome) => outcome.listingManifestHash).sort().join();
+  const after = [...outcomes.values()].map((outcome) => outcome.listingManifestHash).sort().join();
+  config.outcomes = outcomes;
+  config.headVersions = headVersions;
+  return before !== after;
+}
+

@@ -391,6 +391,8 @@ const pending = [
   join(root, "src/bootstrap.ts"),
   join(root, "src/rotateProtectedData.ts"),
   join(root, "src/registerGatewayServices.ts"),
+  // The read-only compatibility check (npm run compatibility:check).
+  join(root, "src/checkCompatibility.ts"),
   join(root, "src/core/standardRail/offerCli.ts"),
   ...reusableCoreEntrypoints.map((path) => join(root, path)),
 ];

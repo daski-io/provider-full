@@ -6,6 +6,11 @@ All notable changes to this project will be documented here.
 
 ### Added
 
+- `npm run compatibility:check` (`node dist/checkCompatibility.js` in the
+  image), a read-only report comparing the build's compiled capability
+  manifest and provider keys with every listing version and asset action the
+  database still owes; it needs only the database, the gateway origin and the
+  provider keys.
 - Generic Daski provider starter based on the production provider architecture.
 - Dummy reference service with free and paid paths, asset provisioning, docs,
   and co-located tests.
@@ -25,6 +30,14 @@ All notable changes to this project will be documented here.
 
 ### Changed
 
+- Each build embeds its source digest (and the commit given in the
+  `SOURCE_COMMIT` build argument) in `dist/build-identity.json`; `/health`
+  names it instead of depending on a hosting platform's commit variable, and
+  its capability manifest describes the same artifact. Boot, a registration
+  run and its forecast check that manifest and the provider keys against
+  durable obligations; a servicing monitor rechecks when the catalog's
+  activation revision moves, refreshes the sold heads without a restart, and
+  fails readiness on any gap.
 - The task watchdog no longer uses the boot catalog's 300-second dispatch
   deadline as a stall threshold, nor sets `standard_reconciliation_required`
   on stalls. It reads persisted per-order state for orders of any listing

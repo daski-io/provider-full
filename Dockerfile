@@ -10,7 +10,10 @@ RUN npm ci --ignore-scripts --no-fund \
 COPY tsconfig.json tsconfig.test.json ./
 COPY scripts/copy-assets.mjs ./scripts/copy-assets.mjs
 COPY src ./src
-RUN npm run build
+# The build embeds its source digest; pass the commit it was built from with
+# --build-arg SOURCE_COMMIT=<sha> to embed that too.
+ARG SOURCE_COMMIT=""
+RUN SOURCE_COMMIT="${SOURCE_COMMIT}" npm run build
 
 RUN npm prune --omit=dev
 

@@ -33,6 +33,11 @@ import {
   normalizedGatewayOrigin,
 } from "./core/gatewayRegistration/wire.js";
 import { redactSensitiveText } from "./core/security/redaction.js";
+import { privateKeyToAccount } from "viem/accounts";
+import { buildIdentity } from "./core/buildIdentity.js";
+import { compatibilityReport, describeGap } from "./core/compatibility/compatibilityReport.js";
+import { parseRetainedSigningKeys } from "./core/standardRail/signingKeys.js";
+import { providerServices } from "./providerServices.js";
 
 const SERVICE_ID = /^0x[0-9a-fA-F]{64}$/;
 const MAX_RECEIPT_FILE_BYTES = 1_048_576;
@@ -104,6 +109,22 @@ function selectServices(active: ServiceRow[]): ServiceRow[] {
   return services;
 }
 
+/**
+ * This build, with this deployment's keys, against everything the database
+ * still owes: a registration never activates contracts on a build that
+ * cannot serve the versions and actions it already sold.
+ */
+async function compatibility(gateway: string) {
+  const current = privateKeyToAccount(config.PROVIDER_WALLET_PRIVATE_KEY as `0x${string}`).address;
+  const retained = parseRetainedSigningKeys(process.env.PROVIDER_RETAINED_WALLET_PRIVATE_KEYS, current);
+  return compatibilityReport(pool, {
+    gatewayOrigin: normalizedGatewayOrigin(gateway),
+    modules: providerServices,
+    signingKeys: new Set([current, ...retained.keys()]),
+    build: buildIdentity(),
+  });
+}
+
 // Read-only forecast of what a registration run would do per service. No
 // migration, identity script, ServiceRegistry bootstrap, signature,
 // broadcast, gateway mutation or database write: every database session is
@@ -120,6 +141,12 @@ async function forecast(gateway: string): Promise<void> {
   }
   await assertReadOnlySessions(pool);
   let failing = 0;
+  const report = await compatibility(gateway);
+  process.stdout.write(`${JSON.stringify({
+    compatibility: report.ok ? "ok" : "gaps", activationRevision: report.activationRevision,
+    capabilityHash: report.capabilityHash, gaps: report.gaps.map(describeGap),
+  })}\n`);
+
   for (const service of selectServices(await listActiveServices())) {
     let line;
     try {
@@ -135,6 +162,7 @@ async function forecast(gateway: string): Promise<void> {
     process.stdout.write(`${JSON.stringify(line)}\n`);
     if (forecastFails(line)) failing += 1;
   }
+  if (!report.ok) throw new Error("this build cannot serve what the database still owes; the run would refuse");
   if (failing > 0) throw new Error(`${failing} service(s) would not complete registration`);
 }
 
@@ -196,6 +224,10 @@ async function main(): Promise<void> {
     return;
   }
 
+  const report = await compatibility(gateway);
+  if (!report.ok) {
+    throw new Error(`this build cannot serve what the database still owes: ${report.gaps.map(describeGap).join(", ")}`);
+  }
   const failures = await registerSelectedServices({
     gateway,
     select: selectServices,

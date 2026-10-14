@@ -81,7 +81,7 @@ jobs:
           detect --source=/repo --no-git --redact
           --config=/repo/.gitleaks.toml --exit-code=1
       - name: Build production image
-        run: docker build -t daski-provider-full:ci .
+        run: docker build --build-arg SOURCE_COMMIT=${{ github.sha }} -t daski-provider-full:ci .
       - name: Verify production image boundary
         run: |
           test "$(docker image inspect -f '{{.Config.User}}' daski-provider-full:ci)" = "node"

@@ -123,3 +123,53 @@ export function assertRetainedContracts(module: Pick<ServiceModule, "manifest" |
     }
   }
 }
+
+/** The entry of `skillId` that executes `contract`, or null when none does. */
+export function matchContract(
+  entries: readonly ExecutableContractEntry[],
+  serviceSlug: string,
+  skillId: string,
+  contract: unknown,
+): ExecutableContractEntry | null {
+  let hash: Hex;
+  try {
+    hash = executableDefinitionHash(serviceSlug, skillId, contract);
+  } catch {
+    return null;
+  }
+  return entries.find((entry) => entry.skillId === skillId && entry.executableDefinitionHash === hash) ?? null;
+}
+
+/** What a signed asset-action definition commits its handler to. */
+export interface AdmittedActionContract {
+  serviceSlug: string;
+  actionId: string;
+  assetType: string;
+  destructive: boolean;
+  replayPolicy: string;
+  retentionSeconds: number;
+  requestSchema: Record<string, unknown>;
+  responseSchema: Record<string, unknown>;
+}
+
+/** The entry whose asset action and schemas a signed definition names; the current one first. */
+export function matchAssetAction(
+  entries: readonly ExecutableContractEntry[],
+  definition: AdmittedActionContract,
+): ExecutableContractEntry | null {
+  const request = canonicalHash(definition.requestSchema);
+  const response = canonicalHash(definition.responseSchema);
+  const matches = entries.filter((entry) => {
+    const action = entry.execution.assetAction as
+      { effect?: string; replayPolicy?: string; retentionSeconds?: number } | null;
+    return entry.serviceSlug === definition.serviceSlug && entry.skillId === definition.actionId && !!action &&
+      entry.execution.assetType === definition.assetType &&
+      (action.effect === "destructive") === definition.destructive &&
+      action.replayPolicy === definition.replayPolicy &&
+      action.retentionSeconds === definition.retentionSeconds &&
+      canonicalHash(entry.execution.inputSchema) === request &&
+      canonicalHash(entry.execution.resultSchema) === response;
+  });
+  return matches.find((candidate) => !candidate.retained) ?? matches[0] ?? null;
+}
+

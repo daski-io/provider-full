@@ -29,7 +29,39 @@ npm run doctor
 
 Run PostgreSQL migration/concurrency/security checks only against the explicit
 disposable databases described by CI. Verify the image's non-root user and
-excluded test/docs/scripts boundary.
+excluded test/docs/scripts boundary. Build the image with
+`--build-arg SOURCE_COMMIT=<commit>` so `/health` and the capability manifest
+name the exact source; the embedded source digest is reproducible from the
+same checkout.
+
+## Upgrading a deployment that holds orders
+
+A new build must serve every listing version and asset action its database
+still owes before it takes traffic:
+
+1. Run `npm run compatibility:check` (or `node dist/checkCompatibility.js`
+   inside the candidate image) against the production database. It is
+   read-only and exits non-zero on any gap: a sold or possibly paid listing
+   version whose contract the build no longer executes (declare it in the
+   skill's `previousContracts`), an earlier agent wallet whose key is not in
+   `PROVIDER_RETAINED_WALLET_PRIVATE_KEYS`, or an open asset action whose
+   definition or handler is missing.
+2. Deploy only a candidate with no gap; a candidate with one also fails
+   `/health/ready`, refuses those versions' dispatches before admission and
+   never claims their fulfillment jobs.
+3. Register a changed contract only after the build that serves both the
+   old and new contract is live; the registration run refuses otherwise.
+4. Remove a retained contract or key only after every listing version that
+   needs it is retired with the gateway's receipt
+   (`npm run daski:register -- --retire-listing`), and keep every key for as
+   long as that version's orders can be read.
+
+The first upgrade from a release before migration 009 is a stop-and-drain
+cutover: pause sales, let synchronous dispatches finish, stop every old
+process, then deploy. Earlier images ignore migrations they do not know and
+cannot be made safe by a check they do not contain; they are not rollback
+targets on the migrated schema. Roll back only to an image that passes the
+compatibility check on the migrated database.
 
 The deployed Testnet candidate must pass `npm run doctor -- --stage=testnet
 --live` and the service's applicable discovery, quote, dispatch, lifecycle,

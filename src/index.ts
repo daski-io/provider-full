@@ -26,7 +26,9 @@ import {
   installProviderScreening,
   startProviderScreeningWorkers,
 } from "./providerScreening.js";
-import { logInfo, logError, errorExtra } from "./core/logger.js";
+import { logInfo, logError, logWarn, errorExtra } from "./core/logger.js";
+import { activationRevision } from "./core/compatibility/compatibilityReport.js";
+import { checkRetainedServicing, startServicingMonitor } from "./core/compatibility/servicingMonitor.js";
 import {
   startProviderIdentityMonitor,
   stopProviderIdentityMonitor,
@@ -60,6 +62,7 @@ let stopStandardTaskWatchdog: (() => void) | null = null;
 let stopReputationOutcomeWorker: (() => void) | null = null;
 let stopStandardReviewResolutionWorker: (() => Promise<void>) | null = null;
 let stopPaidFulfillmentWorker: (() => Promise<void>) | null = null;
+let stopServicingMonitor: (() => void) | null = null;
 
 async function main(): Promise<void> {
   logInfo("Config loaded", {
@@ -83,6 +86,8 @@ async function main(): Promise<void> {
   validateOperatorAgentTools();
 
   const providerLaunchPolicy = deriveProviderLaunchPolicy(providerServices);
+  // Read before the heads, so a promotion committed meanwhile still moves it.
+  const bootRevision = await activationRevision(pool);
   const standardRailConfig = await loadProviderStandardRailConfig(
     providerLaunchPolicy,
     process.env,
@@ -95,6 +100,13 @@ async function main(): Promise<void> {
   // Executions admitted under this catalog stay executable under it after
   // the catalog moves to a new epoch.
   await retainAdmittedActionDefinitions(walletConfig);
+  // Validate this build against durable state before serving: every listing
+  // version and admitted action it still owes needs a handler and a key.
+  const servicing = await checkRetainedServicing(standardRailConfig);
+  if (!servicing.ok) {
+    logWarn("Retained servicing gaps at boot", { gaps: servicing.gaps.length, capabilityHash: servicing.capabilityHash });
+  }
+  stopServicingMonitor = startServicingMonitor(standardRailConfig, providerLaunchPolicy, bootRevision);
   // Non-fatal by design: a drifted build must boot so its new card can be
   // re-registered; the sweep's job is the loud error, not a refusal.
   void logListingCommitmentDrift(standardRailConfig.gatewayOrigin);
@@ -159,6 +171,8 @@ async function shutdown(reason: string, exitCode: number): Promise<void> {
     stopStandardRailReadiness = null;
     stopStandardTaskWatchdog?.();
     stopStandardTaskWatchdog = null;
+    stopServicingMonitor?.();
+    stopServicingMonitor = null;
     stopReputationOutcomeWorker?.();
     stopReputationOutcomeWorker = null;
     await stopStandardReviewResolutionWorker?.();

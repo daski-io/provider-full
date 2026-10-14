@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { buildIdentity, publicRevision } from "./buildIdentity.js";
 import { checkDatabase } from "./db/pool.js";
 import { CHAIN_MODE_MOCK, publicClient } from "./chain/client.js";
 import { config } from "./config.js";
@@ -46,6 +47,8 @@ const CORE_REQUIRED_WORKERS = [
   "standard-paid-fulfillment",
   "operator-escalation",
 ] as const;
+/** Whether this build serves every retained obligation; null until first checked. */
+let retainedServicing: { ok: boolean; gaps: string[] } | null = null;
 let readinessCache: { expiresAt: number; result: ReadinessResult } | null = null;
 let readinessInFlight: Promise<ReadinessResult> | null = null;
 let lastReportedReady: boolean | null = null;
@@ -65,6 +68,9 @@ export interface ReadinessGateSnapshot {
   /** Per-service fail-closed invariants (ServiceModule.operations.readiness). */
   serviceInvariants: boolean;
   serviceInvariantFailures: Record<string, string[]>;
+  /** This build serves every retained listing version and admitted action. */
+  retainedServicing?: boolean;
+  retainedServicingGaps?: string[];
 }
 
 /// Compact one-line summary of the failing readiness gates, for the
@@ -84,6 +90,7 @@ export function readinessFailureSummary(
     ...(snapshot.workers ? [] : ["workers"]),
     ...(snapshot.liveModeInvariants ? [] : ["liveModeInvariants"]),
     ...(snapshot.serviceInvariants ? [] : ["serviceInvariants"]),
+    ...(snapshot.retainedServicing === false ? ["retainedServicing"] : []),
   ];
   const summary: Record<string, string> = { failing: failing.join(",") };
   if (!snapshot.serviceRegistration && snapshot.registrationError) {
@@ -91,6 +98,9 @@ export function readinessFailureSummary(
   }
   if (!snapshot.workers && snapshot.staleWorkers.length > 0) {
     summary.staleWorkers = snapshot.staleWorkers.join(",");
+  }
+  if (snapshot.retainedServicing === false && snapshot.retainedServicingGaps?.length) {
+    summary.retainedServicingGaps = snapshot.retainedServicingGaps.join(",");
   }
   if (!snapshot.serviceInvariants) {
     summary.serviceInvariantFailures = Object.entries(snapshot.serviceInvariantFailures)
@@ -102,6 +112,12 @@ export function readinessFailureSummary(
 
 export function setServiceStatuses(statuses: Record<string, ServiceHealthStatus>): void {
   serviceStatuses = statuses;
+  readinessCache = null;
+}
+
+/** Publish the latest retained-servicing compatibility check (compatibility/servicingMonitor.ts). */
+export function setRetainedServicing(state: { ok: boolean; gaps: string[] }): void {
+  retainedServicing = { ok: state.ok, gaps: [...state.gaps] };
   readinessCache = null;
 }
 
@@ -173,16 +189,19 @@ interface ReadinessResult {
   serviceInvariants: boolean;
   serviceInvariantFailures: Record<string, string[]>;
   serviceRegistration: boolean;
+  retainedServicing: boolean;
 }
 
 export const healthRouter = Router();
 
 // Liveness is deliberately dependency-free so probes cannot amplify DB/RPC load.
 healthRouter.get("/", (_req, res) => {
+  // The artifact's own embedded identity; hosting metadata only supplements.
   res.status(200).json({
     status: "alive",
     timestamp: new Date().toISOString(),
-    commit: process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 12) ?? "unknown",
+    commit: publicRevision(),
+    sourceDigest: buildIdentity().sourceDigest,
   });
 });
 
@@ -266,6 +285,7 @@ async function computeReadiness(now: number): Promise<ReadinessResult> {
     (config.NODE_ENV === "production" || config.CHAIN_ID === 8453)
     && config.CHAIN_MODE === "mock"
   );
+  const servicing = retainedServicing?.ok === true;
   const result: ReadinessResult = {
     ready: database
       && serviceCatalog.healthy
@@ -276,7 +296,8 @@ async function computeReadiness(now: number): Promise<ReadinessResult> {
       && serviceRegistration
       && workersReady
       && liveModeInvariants
-      && serviceInvariants,
+      && serviceInvariants
+      && servicing,
     checkedAt: new Date().toISOString(),
     database,
     serviceCatalog: serviceCatalog.healthy,
@@ -297,6 +318,7 @@ async function computeReadiness(now: number): Promise<ReadinessResult> {
     serviceInvariants,
     serviceInvariantFailures,
     serviceRegistration,
+    retainedServicing: servicing,
   };
   if (result.ready !== lastReportedReady) {
     if (result.ready) {
@@ -320,6 +342,8 @@ async function computeReadiness(now: number): Promise<ReadinessResult> {
         liveModeInvariants,
         serviceInvariants,
         serviceInvariantFailures,
+        retainedServicing: servicing,
+        retainedServicingGaps: retainedServicing?.gaps ?? ["unchecked"],
       }));
     }
     lastReportedReady = result.ready;

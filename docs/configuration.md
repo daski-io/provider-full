@@ -37,7 +37,7 @@ requirements.
 | --- | --- |
 | `NODE_ENV` | `development`, `test`, or `production`. Mainnet requires `production`. |
 | `PORT` | HTTP listen port; defaults to 4000. The container exposes the platform-supplied port. |
-| `DEPLOYMENT_REVISION` | Optional public commit, tag, or build id shown in health output; maximum 128 characters. |
+| `DEPLOYMENT_REVISION` | Optional public commit, tag, or build id shown in health output when the image embeds no source commit; maximum 128 characters. The image always embeds its source digest; build it with `--build-arg SOURCE_COMMIT=<commit>` to embed the commit too. |
 | `BASE_URL` | Stable public origin of this provider. Production and signed audiences require credential-free HTTPS. Mock mode requires loopback. |
 | `GATEWAY_BASE_URL` | Public Daski gateway origin used by standard-rail/admin enrichment. It must agree with the signed gateway origin. |
 | `CHAIN_MODE` | `live` for Testnet/Mainnet. `mock` is loopback-only provider testing and never a paid gateway topology. |

@@ -429,6 +429,19 @@ backup or pointing two deployments at different databases); `price` means a
 persisted quote does not bind this order. Compare the gateway order with the
 `standard_provider_quotes` row instead of loosening the check.
 
+### Readiness fails with `retainedServicing`
+
+The running build cannot serve something the database still owes. Run
+`npm run compatibility:check` (`node dist/checkCompatibility.js` in the image)
+for the full read-only report; each gap names its kind and target:
+`handler` (declare the earlier contract in the skill's `previousContracts`),
+`signing_key` (add the earlier wallet's key to
+`PROVIDER_RETAINED_WALLET_PRIVATE_KEYS`), `unreadable_contract`,
+`action_definition` or `action_handler`. A version stops needing its handler
+only once it is retired with the gateway's receipt; it needs its key for as
+long as its orders can be read. The servicing monitor rechecks every minute
+after a catalog write and every ten minutes otherwise.
+
 ### A delayed dispatch of an earlier listing version is refused
 
 An order is dispatched under the listing version it was sold under, even

@@ -5,7 +5,9 @@ import type { FulfillmentAdapter } from "./adapterTypes.js";
 import {
   assertRetainedContracts,
   executableContracts,
-  executableDefinitionHash,
+  matchAssetAction,
+  matchContract,
+  type AdmittedActionContract,
   type ExecutableContractEntry,
 } from "./executableContracts.js";
 import type { ServiceModule } from "./serviceModule.js";
@@ -31,13 +33,11 @@ export class RetainedHandlerUnavailableError extends Error {
 }
 
 interface ModuleContracts {
-  entries: Map<string, ExecutableContractEntry>;
   retainedSkills: Set<string>;
   all: ExecutableContractEntry[];
 }
 
 const MODULES = new Map<string, ModuleContracts>();
-const key = (skillId: string, hash: string) => `${skillId}\n${hash.toLowerCase()}`;
 
 /** Called by service registration once the module validated. */
 export function registerRetainedContracts(module: Pick<ServiceModule, "manifest" | "skills">): void {
@@ -45,7 +45,6 @@ export function registerRetainedContracts(module: Pick<ServiceModule, "manifest"
   const all = executableContracts(module);
   MODULES.set(module.manifest.slug, {
     all,
-    entries: new Map(all.map((entry) => [key(entry.skillId, entry.executableDefinitionHash), entry])),
     retainedSkills: new Set(all.filter((entry) => entry.retained).map((entry) => entry.skillId)),
   });
 }
@@ -71,46 +70,14 @@ const choice = (entry: ExecutableContractEntry): HandlerChoice =>
 export function contractHandler(serviceSlug: string, skillId: string, contract: unknown): HandlerChoice | null {
   if (contract === null) return { kind: "current" };
   const module = MODULES.get(serviceSlug);
-  if (!module) return null;
-  let hash: Hex;
-  try {
-    hash = executableDefinitionHash(serviceSlug, skillId, contract);
-  } catch {
-    return null;
-  }
-  const entry = module.entries.get(key(skillId, hash));
+  const entry = module ? matchContract(module.all, serviceSlug, skillId, contract) : null;
   return entry ? choice(entry) : null;
-}
-
-export interface AdmittedActionContract {
-  serviceSlug: string;
-  actionId: string;
-  assetType: string;
-  destructive: boolean;
-  replayPolicy: string;
-  retentionSeconds: number;
-  requestSchema: Record<string, unknown>;
-  responseSchema: Record<string, unknown>;
 }
 
 /** The handler for a signed asset-action definition: the skill contract whose action and schemas it names. */
 export function assetActionHandler(definition: AdmittedActionContract): HandlerChoice | null {
   const module = MODULES.get(definition.serviceSlug);
-  if (!module) return null;
-  const request = canonicalHash(definition.requestSchema);
-  const response = canonicalHash(definition.responseSchema);
-  const matches = module.all.filter((entry) => {
-    const action = entry.execution.assetAction as
-      { effect?: string; replayPolicy?: string; retentionSeconds?: number } | null;
-    return entry.skillId === definition.actionId && !!action &&
-      entry.execution.assetType === definition.assetType &&
-      (action.effect === "destructive") === definition.destructive &&
-      action.replayPolicy === definition.replayPolicy &&
-      action.retentionSeconds === definition.retentionSeconds &&
-      canonicalHash(entry.execution.inputSchema) === request &&
-      canonicalHash(entry.execution.resultSchema) === response;
-  });
-  const entry = matches.find((candidate) => !candidate.retained) ?? matches[0];
+  const entry = module ? matchAssetAction(module.all, definition) : null;
   return entry ? choice(entry) : null;
 }
 

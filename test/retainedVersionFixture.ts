@@ -43,8 +43,11 @@ export const globalPolicy = await buildGlobalPolicyFixture({ gatewayAudience: GA
 
 const item = { type: "string", minLength: 1, maxLength: 40 };
 
-/** The skill contract each version's agent card published. */
-export function publishedContract(version: 1 | 2): Record<string, unknown> {
+/**
+ * The skill contract each version's agent card published: version 2 changed
+ * the input contract; version 3 changed only the price.
+ */
+export function publishedContract(version: 1 | 2 | 3): Record<string, unknown> {
   return {
     inputSchema: version === 1
       ? { type: "object", properties: { item }, required: ["item"], additionalProperties: false }
@@ -60,7 +63,7 @@ export function publishedContract(version: 1 | 2): Record<string, unknown> {
       required: ["note"],
       additionalProperties: false,
     },
-    pricing: { USDC: { type: "one-time", fixed_amount: "250000" } },
+    pricing: { USDC: { type: "one-time", fixed_amount: version === 3 ? "300000" : "250000" } },
     paymentRequired: true,
     requiresAssetOwnership: false,
     assetType: null,
@@ -75,7 +78,7 @@ export function publishedContract(version: 1 | 2): Record<string, unknown> {
 const heads = new Map<number, RuntimeListingHead>();
 
 /** Each version's promoted head; built once, as its signed envelopes carry their issue time. */
-export function versionHead(version: 1 | 2): RuntimeListingHead {
+export function versionHead(version: 1 | 2 | 3): RuntimeListingHead {
   const built = heads.get(version);
   if (built) return built;
   const head = buildRuntimeHeadFixture({

@@ -118,6 +118,22 @@ describe("readiness failure summary", () => {
     });
   });
 
+  it("names retained-servicing gaps, the build's missing handlers and keys (F-T05)", () => {
+    expect(readinessFailureSummary({
+      ...allPassing,
+      retainedServicing: false,
+      retainedServicingGaps: ["handler:notes/write:0xabc", "signing_key:notes/write:0xabc"],
+    })).toEqual({
+      failing: "retainedServicing",
+      retainedServicingGaps: "handler:notes/write:0xabc,signing_key:notes/write:0xabc",
+    });
+    expect(readinessFailureSummary({ ...allPassing, retainedServicing: true })).toEqual({ failing: "" });
+  });
+
+  it("requires the paid-fulfillment worker that resumes admitted orders", () => {
+    expect(requiredWorkerNames([]).has("standard-paid-fulfillment")).toBe(true);
+  });
+
   it("omits detail fields for gates that pass", () => {
     expect(readinessFailureSummary({ ...allPassing, database: false })).toEqual({
       failing: "database",
