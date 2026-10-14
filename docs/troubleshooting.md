@@ -472,8 +472,12 @@ different message is refused as `action_conflict`: the buyer needs a new
 
 ### A terminal order answers `dispatch_status_unavailable` or `lifecycle_unavailable`
 
-The order became terminal before frozen terminal results existed, or recorded
-evidence contradicts its identity. List these rows with
+The order became terminal before frozen terminal results existed, recorded
+evidence contradicts its identity, or its deliverables have no canonical JSON
+form (a `noncanonical_terminal_result` security incident: an artifact key such
+as `constructor` or `prototype`, a broken surrogate pair in a message, or
+nesting deeper than 64 levels). The order still reached its terminal state;
+fix the service so it never emits such deliverables. List these rows with
 `GET /admin/standard-rail/terminal-results/unresolved` (bearer `ADMIN_TOKEN`);
 each carries a stable diagnostic. Obtain the terminal attestation the gateway
 retained for the order (or its statement that it retained none) through the

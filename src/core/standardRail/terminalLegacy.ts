@@ -8,6 +8,7 @@ import { canonicalHash } from "./canonical.js";
 import type { ProviderStandardRailConfig } from "./config.js";
 import {
   insertFrozenTerminalResult,
+  projectionHash,
   protectedArtifactReferences,
   TERMINAL_STATES,
   type TerminalIdentity,
@@ -32,7 +33,8 @@ import {
 export type LegacyDiagnostic =
   | "legacy_identity_unverified"
   | "legacy_evidence_conflict"
-  | "legacy_evidence_mismatch";
+  | "legacy_evidence_mismatch"
+  | "legacy_projection_noncanonical";
 
 export type ReconcileOutcome =
   | { status: "frozen"; provenance: "verified-attestation" | "unobserved-reconstruction"; bytes: boolean }
@@ -176,8 +178,11 @@ export async function reconcileLegacyTerminalResult(db: Queryable, transactionId
   const references = await protectedArtifactReferences(db, task.id);
   const current = await buildStandardTaskProjection({ id: task.id, status: state }, { db });
   if (classified.kind === "unobserved") {
+    const resultHash = projectionHash(current);
+    // Deliverables without a canonical form have no identity to freeze.
+    if (!resultHash) return { status: "unresolved", diagnostic: "legacy_projection_noncanonical" };
     await insertFrozenTerminalResult(db, {
-      transactionId: task.id, state, completedAt: task.completed_at, resultHash: canonicalHash(current),
+      transactionId: task.id, state, completedAt: task.completed_at, resultHash,
       projection: current, references, provenance: "unobserved-reconstruction", evidenceId: classified.evidenceId,
     });
     return { status: "frozen", provenance: "unobserved-reconstruction", bytes: true };
@@ -185,7 +190,7 @@ export async function reconcileLegacyTerminalResult(db: Queryable, transactionId
   // Earlier releases hashed support messages into the projection; either
   // reconstruction may be the one the attestation names.
   const legacy = await buildStandardTaskProjection({ id: task.id, status: state }, { db, includeSupport: true });
-  const matching = [current, legacy].find((candidate) => canonicalHash(candidate) === classified.identity.resultHash) ?? null;
+  const matching = [current, legacy].find((candidate) => projectionHash(candidate) === classified.identity.resultHash) ?? null;
   await insertFrozenTerminalResult(db, {
     transactionId: task.id, state, completedAt: task.completed_at, resultHash: classified.identity.resultHash,
     projection: matching, references: matching ? references : [], provenance: "verified-attestation",

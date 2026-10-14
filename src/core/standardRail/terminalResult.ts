@@ -4,7 +4,9 @@ import type { A2ATask } from "../a2a/responseTypes.js";
 import { buildStandardTaskProjection } from "../a2a/taskHistory.js";
 import { decryptString, encryptString } from "../chain/encryption.js";
 import type { Queryable } from "../db/queryable.js";
+import { logError } from "../logger.js";
 import { canonicalHash } from "./canonical.js";
+import { recordStandardSecurityIncident } from "./incidents.js";
 
 export type TerminalState = "completed" | "failed" | "canceled";
 
@@ -121,9 +123,27 @@ export async function insertFrozenTerminalResult(db: Queryable, args: {
 }
 
 /**
+ * The canonical hash of a projection, or null when its content (an unsafe
+ * key, a lone surrogate, excessive nesting) has no canonical JSON form.
+ */
+export function projectionHash(projection: A2ATask): Hex | null {
+  try {
+    return canonicalHash(projection);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Freeze a standard order's terminal identity inside the transaction that
  * first makes its task terminal, after every artifact and message of that
  * transition is written. Later transitions never replace it.
+ *
+ * Deliverables without a canonical form never block the terminal transition
+ * itself: the order becomes terminal unfrozen, so no answer is signed for it
+ * (it stays unavailable and is listed as unresolved), and an incident records
+ * why. Failing the transition instead would keep a paid order from ever
+ * completing, failing or being canceled.
  */
 export async function freezeTerminalResult(db: Queryable, task: {
   id: string;
@@ -134,11 +154,22 @@ export async function freezeTerminalResult(db: Queryable, task: {
   if (!task.standard_order_id || !TERMINAL_STATES.has(task.status)) return;
   if (!task.completed_at) throw new Error("A terminal standard task has no completion time");
   const projection = await buildStandardTaskProjection({ id: task.id, status: task.status as TerminalState }, { db });
+  const resultHash = projectionHash(projection);
+  if (!resultHash) {
+    logError("Standard terminal result has no canonical form and stays unfrozen", { state: task.status });
+    await recordStandardSecurityIncident({
+      kind: "noncanonical_terminal_result",
+      orderId: task.standard_order_id,
+      identity: { taskId: task.id, orderId: task.standard_order_id },
+      details: { taskId: task.id, state: task.status },
+    }).catch(() => undefined);
+    return;
+  }
   await insertFrozenTerminalResult(db, {
     transactionId: task.id,
     state: task.status as TerminalState,
     completedAt: task.completed_at,
-    resultHash: canonicalHash(projection),
+    resultHash,
     projection,
     references: await protectedArtifactReferences(db, task.id),
     provenance: "terminal-transition",

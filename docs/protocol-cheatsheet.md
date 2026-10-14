@@ -339,6 +339,10 @@ or delete except re-encrypting the projection under a newer key (readers
 re-verify its hash) and a one-way isolation. An authorized artifact read
 returns a separate representation in which the frozen protected references
 carry their current, unexpired values; its plaintext is never the hash input.
+Deliverables without a canonical JSON form (an unsafe key, a broken surrogate
+pair, nesting deeper than 64) never block the terminal transition: the order
+becomes terminal unfrozen, is never answered with a guess, is listed as
+unresolved, and a `noncanonical_terminal_result` incident records it.
 
 ### Legacy terminal rows
 

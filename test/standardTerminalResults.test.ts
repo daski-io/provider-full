@@ -50,6 +50,7 @@ const { encryptString } = await import("../src/core/chain/encryption.js");
 const { buildStandardTaskProjection, ORDER_SUPPORT_CHANNEL } = await import("../src/core/a2a/taskHistory.js");
 const { revealFrozenTaskProjection } = await import("../src/core/a2a/responseBuilder.js");
 const { loadFrozenTerminalProjection, terminalProjectionContext } = await import("../src/core/standardRail/terminalResult.js");
+const { recordLegacyTerminalEvidence } = await import("../src/core/standardRail/terminalLegacy.js");
 
 const config = fixtureConfig();
 const request = { item: "widget" };
@@ -186,6 +187,26 @@ describe("frozen terminal identity (F-T13, C-T14)", () => {
     const after = await statusAnswer(order);
     expect(after.body.state).toBe("failed");
     expect(after.evidence?.payload).toEqual(failed.evidence?.payload);
+  });
+
+  it("lets an order whose deliverables have no canonical form become terminal, unfrozen and unanswered", async () => {
+    h.result = { status: "completed", message: "Report ready.", artifacts: [{ name: "report", data: { prototype: "v2" } }] };
+    const order = await paidOrder();
+    // The supplier's work is persisted and the order completes; only the
+    // signed answer is withheld, never replaced by a guess.
+    await expect(service().accept(order)).rejects.toMatchObject({ name: "DispatchAmbiguousError" });
+    const id = await taskId(order);
+    expect((await database.pool.query("SELECT status FROM transactions WHERE id=$1", [id])).rows[0].status).toBe("completed");
+    expect((await database.pool.query(
+      "SELECT count(*)::int AS n FROM standard_terminal_results WHERE transaction_id=$1", [id])).rows[0].n).toBe(0);
+    expect((await database.pool.query(
+      "SELECT count(*)::int AS n FROM standard_security_incidents WHERE incident_kind='noncanonical_terminal_result' AND order_id=$1",
+      [order.dispatch.payload.orderId])).rows[0].n).toBe(1);
+    await expect(service().status(await statusQuery(order))).rejects.toMatchObject({ status: 503 });
+    // Reconciliation cannot freeze a reconstruction that has no canonical form either.
+    await expect(recordLegacyTerminalEvidence(config, {
+      transactionId: id, kind: "unobserved", reference: "handoff-1", actor: "operator@example.com",
+    })).resolves.toEqual({ status: "unresolved", diagnostic: "legacy_projection_noncanonical" });
   });
 
   it("refuses any change to a frozen identity except re-encryption and a one-way isolation", async () => {
