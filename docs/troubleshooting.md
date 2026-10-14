@@ -344,7 +344,7 @@ body or secret.
 | `gateway_registration_not_found` | The gateway holds no registration under the persisted id; nothing is pending there, so a run starts a new intent and logs the restart. |
 | `intent_expired_before_prepare`, `intent_superseded_before_prepare` | The gateway refused the persisted intent as expired, or as bound to a card, rail policy or payee the provider no longer serves. It checks a replay first, so it never prepared that intent; a run signs a new one, within a bounded attempt budget. |
 | `activated_registration_stale` | The gateway activated the registration, but the rail policy or the provider payee changed before it was promoted, so it can never be promoted. A run signs a new intent; the gateway prepares a superseding registration that reuses no listing, and the restart is logged. |
-| `rail_policy_changed_during_prepare`, `payee_changed_during_registration`, `prepared_registration_changed` | The pending registration no longer matches the gateway's policy, the provider payee or its own persisted preparation. It cannot continue; restore the previous payee, or ask Daski to end it. |
+| `rail_policy_changed_during_prepare`, `payee_changed_during_registration`, `prepared_registration_changed` | The pending registration no longer matches the gateway's policy, the provider payee or the preparation this provider verified and persisted (also when the gateway answers its activation with another preparation, which is never promoted). It cannot continue; restore the previous payee, or ask Daski to end it. |
 
 A signed intent the gateway never answered is posted again under its
 idempotency key before anything replaces it, also after the card, rail policy

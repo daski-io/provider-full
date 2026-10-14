@@ -614,6 +614,20 @@ describe("skill availability", { timeout: 30_000 }, () => {
   });
 });
 
+describe("activation answers", { timeout: 30_000 }, () => {
+  it("promote only the preparation that was verified, never the one an activation reports", async () => {
+    gateway.emptyActivationReports = true;
+    await expect(register()).rejects.toThrow(
+      /answered its activation with a preparation other than the one this provider verified/,
+    );
+    expect(await localRow()).toMatchObject({
+      state: "ATTENTION",
+      last_error_code: "prepared_registration_changed",
+    });
+    expect(await versions()).toEqual([]);
+  });
+});
+
 describe("verification diagnostics", { timeout: 30_000 }, () => {
   it("name the mismatched prepared fields without exposing signed bodies", async () => {
     gateway.payee = "0x9999999999999999999999999999999999999999";

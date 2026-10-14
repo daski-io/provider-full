@@ -167,6 +167,17 @@ export async function continueRegistration(
     }
     throw error;
   }
+  // Promotion rebuilds every expected commitment from the activation it is
+  // given, so it is only ever given the preparation verified above.
+  if (
+    active.registrationId !== view.registrationId ||
+    canonicalHash(active.prepared) !== canonicalHash(view.prepared)
+  ) {
+    await markGatewayRegistrationAttention(local, "prepared_registration_changed");
+    throw new Error(
+      `${service.slug}: gateway registration ${view.registrationId} answered its activation with a preparation other than the one this provider verified`,
+    );
+  }
   return activate(context, service, local, active);
 }
 

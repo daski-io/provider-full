@@ -241,6 +241,8 @@ export class FakeGateway {
   reuseAcrossPayees = false;
   /** Prepare new listings with the opposite of the card's availability. */
   misreportAvailability = false;
+  /** Report an ACTIVE registration with no listings and no commitments. */
+  emptyActivationReports = false;
   /** Called with the posted evidence before the gateway processes it. */
   onEvidence: ((evidence: unknown) => Promise<void>) | null = null;
 
@@ -348,7 +350,10 @@ export class FakeGateway {
       activatedAt: stored.activatedAt,
       updatedAt: new Date().toISOString(),
     };
-    if (stored.state === "ACTIVE") {
+    if (stored.state === "ACTIVE" && this.emptyActivationReports) {
+      view.prepared = { ...stored.prepared, listings: [] };
+      view.runtimeCommitments = [];
+    } else if (stored.state === "ACTIVE") {
       view.runtimeCommitments = stored.prepared.listings.map((listing) => ({
         listingId: listing.listingId,
         runtimeCommitmentHash: listing.listingId === this.corruptCommitmentFor
