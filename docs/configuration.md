@@ -79,6 +79,12 @@ the distinct privileged role, then runtime privileges are reduced and checked.
 Never use a production or shared Testnet URL with disposable migration/security
 smoke scripts.
 
+Every runtime and migration session declares this build's runtime epoch with
+a session-level `SET daski.runtime_epoch` when it connects, and core tables
+refuse writes from sessions without it (core migration 011). Connect directly
+or through a pooler that keeps session state; transaction pooling is not
+supported, as for the session advisory locks the runtime already takes.
+
 ## Base and ERC-8004 coordinates
 
 | Variable | Purpose and rules |

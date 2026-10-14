@@ -107,6 +107,23 @@ the runtime role ownership/superuser privileges to clear the check. Follow the
 database security error and inspect the migration/role posture on a disposable
 candidate first.
 
+### `this process predates the database schema and may not write …`
+
+The database refused a write (SQLSTATE `55000`) from a process built for an
+older schema: an image from before core migration 011, or one below the
+schema's minimum runtime epoch, started or kept running after a newer build
+migrated the database. This is the intended fail-closed overlap behavior.
+Stop that process and run an image that supports the schema; earlier images
+are not rollback targets. A build that stops with `database schema requires
+runtime epoch N` is likewise older than the schema.
+
+From a current image the error means its sessions lost their
+`daski.runtime_epoch` declaration, which each pool session sets once when it
+connects: a pooler must keep session state (a direct connection or session
+pooling; transaction pooling is not supported). Reviewed manual maintenance
+SQL must declare it first in its own session, for example
+`SET daski.runtime_epoch = '1';`.
+
 ## Placeholder and configuration errors
 
 ### Startup prints one structured configuration error and exits

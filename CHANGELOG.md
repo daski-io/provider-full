@@ -27,9 +27,22 @@ All notable changes to this project will be documented here.
 - Documentation, skill, and release-package validation gates.
 - `npm run daski:register -- --check-only`, a read-only registration
   forecast with read-only database sessions and gateway `GET` requests only.
+- `npm run security:prior-runtime`, run in CI, builds the prior release from
+  its own commit and proves on a synthetic previous-version database that
+  this build migrates it, passes its compatibility check, keeps terminal
+  rows, resumes a never-started order without repeating a started one, and
+  that the prior image can no longer write once the schema has moved.
 
 ### Changed
 
+- Processes built for an older schema can no longer write (core migration
+  011): every session declares this build's runtime epoch when it connects,
+  and every core table refuses insert, update, delete and truncate
+  statements from a session below the schema's minimum. An earlier image left
+  running after the upgrade fails before it registers, admits, claims a job
+  or sweeps tasks, and a build refuses to start on a schema whose minimum
+  epoch is above its own. Manual maintenance SQL must declare the epoch, and
+  transaction-mode connection pooling is not supported.
 - Each build embeds its source digest (and the commit given in the
   `SOURCE_COMMIT` build argument) in `dist/build-identity.json`; `/health`
   names it instead of depending on a hosting platform's commit variable, and

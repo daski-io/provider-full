@@ -397,13 +397,19 @@ export const reportBuilderMigrations: ServiceMigration[] = [{
       transaction_id TEXT NOT NULL REFERENCES transactions(id),
       state TEXT NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-    )
+    );
+    CREATE TRIGGER report_builder_reports_runtime_epoch
+      BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON report_builder_reports
+      FOR EACH STATEMENT EXECUTE FUNCTION provider_require_runtime_epoch()
   `,
 }];
 ```
 
 Wire them through `operations.migrations`. Migration names and SQL are
 checksummed after application; never edit an applied migration. Add a new one.
+The trigger joins the table to the core runtime epoch barrier, so a process
+built before a later incompatible schema change cannot write it
+([architecture](architecture.md#capabilities-and-compatibility)).
 
 Use `operations.seed` only for idempotent service-owned initialization.
 

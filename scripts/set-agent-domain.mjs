@@ -14,6 +14,8 @@ if (!DBURL || !SLUG || !DOMAIN) {
 
 const c = new pg.Client({ connectionString: DBURL });
 await c.connect();
+// Declare the runtime epoch this release writes under (core migration 011).
+await c.query("SET daski.runtime_epoch = '1'");
 const r = await c.query(
   "UPDATE services SET agent_domain = $1, updated_at = now() WHERE slug = $2 RETURNING id, slug, agent_domain",
   [DOMAIN, SLUG],

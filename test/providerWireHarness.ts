@@ -134,7 +134,8 @@ export async function startWireHarness(
   const database = await createMigratedDatabase(label);
   await database.pool.query(WIRE_CLOCK_SQL);
   wire.pool = new pg.Pool({
-    connectionString: database.url, max: 10, options: "-c search_path=wire_clock,pg_catalog,public",
+    connectionString: database.url, max: 10,
+    options: "-c search_path=wire_clock,pg_catalog,public -c daski.runtime_epoch=1",
   });
   const serviceId = await seedFixtureService(database.pool, {
     skillIds: [fixedListing.skillId, dynamicListing.skillId],

@@ -73,6 +73,7 @@ jobs:
       - run: node scripts/security/migration-smoke.mjs
       - run: npm run security:postgres
       - run: npm run security:migration-concurrency
+      - run: npm run security:prior-runtime
       - run: npm run security:pii-scan -- dist
       - name: Secret scan
         run: >-

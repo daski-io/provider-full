@@ -28,7 +28,11 @@ npm run doctor
 ```
 
 Run PostgreSQL migration/concurrency/security checks only against the explicit
-disposable databases described by CI. Verify the image's non-root user and
+disposable databases described by CI. After the build, `npm run
+security:prior-runtime` builds the prior release from its own commit and
+proves on its own disposable database that this build migrates, checks and
+resumes what the prior left, and that the prior image can no longer write
+once the schema has moved. Verify the image's non-root user and
 excluded test/docs/scripts boundary. Build the image with
 `--build-arg SOURCE_COMMIT=<commit>` so `/health` and the capability manifest
 name the exact source; the embedded source digest is reproducible from the
@@ -59,9 +63,22 @@ still owes before it takes traffic:
 The first upgrade from a release before migration 009 is a stop-and-drain
 cutover: pause sales, let synchronous dispatches finish, stop every old
 process, then deploy. Earlier images ignore migrations they do not know and
-cannot be made safe by a check they do not contain; they are not rollback
-targets on the migrated schema. Roll back only to an image that passes the
-compatibility check on the migrated database.
+cannot run a check they do not contain. Core migration 011 makes the
+database refuse every write from them instead: an old process left running
+fails with `this process predates the database schema and may not write
+<table>` (SQLSTATE `55000`) before it registers, admits, claims or sweeps
+anything, so it cannot take the new release's jobs. Earlier images are
+therefore not rollback targets on the migrated schema; roll back only to an
+image of this release or later that passes the compatibility check on the
+migrated database.
+
+A later migration that this release's runtimes cannot safely run beside must
+raise the schema's minimum runtime epoch (replace
+`provider_minimum_runtime_epoch()`) and the build's `RUNTIME_SCHEMA_EPOCH`
+together. Builds below that epoch then refuse to start on the migrated
+schema and their running processes can no longer write, which turns the
+upgrade into the same stop-and-drain cutover. Every migration that creates a
+table adds the same `<table>_runtime_epoch` statement trigger.
 
 The deployed Testnet candidate must pass `npm run doctor -- --stage=testnet
 --live` and the service's applicable discovery, quote, dispatch, lifecycle,

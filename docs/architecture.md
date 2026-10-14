@@ -105,10 +105,10 @@ names the build's embedded source digest and commit.
 Each build describes itself without any external release coordinator: its
 compiled capability manifest (`compatibility/capabilityManifest.ts`) lists
 the executable contracts it runs, current and retained, the core migrations
-it applies and the durable queues it consumes, together with the source
-digest (and commit, when the image build was given one) that
-`scripts/copy-assets.mjs` embeds in `dist/build-identity.json`. Hosting
-metadata only supplements that identity.
+it applies, the runtime epoch its sessions declare and the durable queues it
+consumes, together with the source digest (and commit, when the image build
+was given one) that `scripts/copy-assets.mjs` embeds in
+`dist/build-identity.json`. Hosting metadata only supplements that identity.
 
 The compatibility report (`compatibility/compatibilityReport.ts`) compares
 the manifest and the deployment's provider keys with durable state alone. A
@@ -125,6 +125,22 @@ and its `--check-only` forecast prints the same verdict. `npm run
 compatibility:check` (`node dist/checkCompatibility.js` in the image) prints
 the full report from read-only database sessions and needs only the
 database, the gateway origin and the provider keys.
+
+Images built before a schema change cannot run that check, since they apply
+only the migrations they know and ignore the rest. The database therefore
+enforces the runtime epoch (core migration 011): every pool session declares
+`daski.runtime_epoch` (`db/runtimeEpoch.ts`) before its first statement, and
+every core table refuses insert, update, delete and truncate statements from
+a session that declared none or one below `provider_minimum_runtime_epoch()`.
+An earlier image left running after the migration therefore fails on its
+first write, before it can register, admit, transition, claim a job, sweep
+tasks or journal a supplier call; reads keep working and only the migration
+ledgers stay writable. A build also refuses to finish migrating a schema
+whose minimum epoch is above its own. A change that breaks this release's
+runtimes raises both the database minimum and `RUNTIME_SCHEMA_EPOCH`; every
+later migration that creates a table guards it with the same statement
+trigger. `scripts/security/prior-runtime-compatibility.mjs` proves the upgrade
+and overlap against the prior release's own compiled code.
 
 ## Discovery and free A2A
 
@@ -335,7 +351,8 @@ boundaries. Encryption at rest does not authorize disclosure at any of them.
 
 Core migrations live in `src/core/db/migrations`. Service migrations are
 declared by that service and run after core migrations. Published migrations
-are append-only and checksummed.
+are append-only and checksummed. Core tables carry the runtime epoch barrier
+described under [Capabilities and compatibility](#capabilities-and-compatibility).
 
 Financial, replay, lease, and lifecycle transitions are PostgreSQL-backed.
 Process-local state may optimize but must never be the only source of truth for

@@ -6,6 +6,9 @@ import pg from "pg";
 
 const MIGRATIONS = fileURLToPath(new URL("../src/core/db/migrations/", import.meta.url));
 
+/** The startup option that declares this release's runtime epoch for a test session. */
+export const RUNTIME_EPOCH_OPTION = "-c daski.runtime_epoch=1";
+
 /** Creating and migrating a database can take a while on a loaded host. */
 export const DATABASE_HOOK_TIMEOUT_MS = 120_000;
 
@@ -43,7 +46,9 @@ export async function createMigratedDatabase(label: string): Promise<DisposableD
   await admin((client) => client.query(`CREATE DATABASE "${name}"`));
   const url = new URL(testDatabaseUrl());
   url.pathname = `/${name}`;
-  const pool = new pg.Pool({ connectionString: url.toString(), max: 10 });
+  // Sessions declare this release's runtime epoch, as the provider's own
+  // pools do (core migration 011 refuses ledger writes without it).
+  const pool = new pg.Pool({ connectionString: url.toString(), max: 10, options: RUNTIME_EPOCH_OPTION });
   try {
     for (const file of readdirSync(MIGRATIONS).filter((entry) => entry.endsWith(".sql")).sort()) {
       await pool.query(readFileSync(join(MIGRATIONS, file), "utf8"));

@@ -92,6 +92,13 @@ The following are verification internals, not deployment or recovery tools:
   durable-job fencing.
 - `scripts/security/concurrent-migration-smoke.mjs` proves concurrent
   migration runners serialize and preserve checksums.
+- `scripts/security/prior-runtime-compatibility.mjs` (`npm run
+  security:prior-runtime`, after `npm run build`) builds the prior release
+  from its own commit, or takes a built checkout with `--prior <dir>`, and
+  runs it and this build against one disposable database: upgrade,
+  compatibility check, resumption, and refusal of the prior image's writes
+  on the migrated schema. Its step programs live in
+  `scripts/security/prior-runtime-steps.mjs`.
 - `scripts/security/postgres-security-integration.mjs` exercises database
   authorization, retention, replay, supplier-journal, and evidence controls.
 - `scripts/security/postgres-standard-evidence-locator.mjs` and

@@ -2,6 +2,7 @@ import { readdirSync } from "node:fs";
 import type { Hex } from "viem";
 import type { BuildIdentity } from "../buildIdentity.js";
 import { OPERATOR_ESCALATION_QUEUE } from "../db/queries/escalations.js";
+import { RUNTIME_SCHEMA_EPOCH } from "../db/runtimeEpoch.js";
 import { EMAIL_INGRESS_QUEUE } from "../email/inboundWorker.js";
 import { ESCALATION_RESOLUTION_QUEUE } from "../engine/escalationResolutionStore.js";
 import { executableContracts, type ExecutableContractEntry } from "../serviceRegistry/executableContracts.js";
@@ -12,10 +13,11 @@ import { PAID_FULFILLMENT_QUEUE } from "../standardRail/fulfillmentJobs.js";
 /*
  * What this compiled artifact can do, derived only from its own code: the
  * contracts it executes (each skill's current one and the earlier ones it
- * retains), the core migrations it applies and the durable queues it
- * consumes, together with the build's embedded source identity. It replaces
- * any external release coordinator's view of an image: the compatibility
- * check compares it with what durable state still requires.
+ * retains), the core migrations it applies, the runtime epoch its sessions
+ * declare and the durable queues it consumes, together with the build's
+ * embedded source identity. It replaces any external release coordinator's
+ * view of an image: the compatibility check compares it with what durable
+ * state still requires.
  */
 
 export interface ExecutableCapability {
@@ -30,6 +32,8 @@ export interface ProviderCapabilityManifestV1 {
   artifactType: "ProviderCapabilityManifestV1";
   schemaVersion: 1;
   build: BuildIdentity;
+  /** The schema runtime epoch every session of this build declares (core migration 011). */
+  runtimeEpoch: number;
   coreMigrations: string[];
   workerQueues: string[];
   executableContracts: ExecutableCapability[];
@@ -61,6 +65,7 @@ export function capabilityManifest(
     artifactType: "ProviderCapabilityManifestV1",
     schemaVersion: 1,
     build,
+    runtimeEpoch: RUNTIME_SCHEMA_EPOCH,
     coreMigrations: coreMigrationNames(),
     workerQueues: [...WORKER_QUEUES],
     executableContracts: moduleContracts(modules)

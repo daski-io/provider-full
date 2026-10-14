@@ -40,6 +40,7 @@
     "security:pii-scan": "node scripts/security/pii-scan.mjs",
     "security:postgres": "node scripts/security/postgres-security-integration.mjs",
     "security:migration-concurrency": "node scripts/security/concurrent-migration-smoke.mjs",
+    "security:prior-runtime": "node scripts/security/prior-runtime-compatibility.mjs",
     "security:rotate": "node dist/rotateProtectedData.js"
   },
   "dependencies": {

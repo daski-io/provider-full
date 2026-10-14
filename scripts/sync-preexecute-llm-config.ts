@@ -7,6 +7,7 @@ import {
   databaseTlsConfig,
   parseDatabaseSslMode,
 } from "../src/core/db/tls.js";
+import { RUNTIME_EPOCH_STATEMENT } from "../src/core/db/runtimeEpoch.js";
 
 const preExecuteAgent: Record<string, PreExecuteAgentConfig> = {};
 for (const service of providerServices) {
@@ -43,6 +44,7 @@ async function main(): Promise<void> {
   });
   await client.connect();
   try {
+    await client.query(RUNTIME_EPOCH_STATEMENT);
     const promptSql = `jsonb_set(
       jsonb_set(COALESCE(config, '{}'::jsonb),
         '{llm,default_system_prompt}', to_jsonb($2::text), true),

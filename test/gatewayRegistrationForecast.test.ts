@@ -117,7 +117,7 @@ const STATE_TABLES = [
 
 beforeAll(async () => {
   database = await createMigratedTestDatabase("daski_registration_forecast");
-  readOnly = new pg.Pool({ connectionString: database.connectionString, max: 2 });
+  readOnly = new pg.Pool({ connectionString: database.connectionString, max: 2, options: "-c daski.runtime_epoch=1" });
   enforceReadOnlySessions(readOnly);
 }, 120_000);
 

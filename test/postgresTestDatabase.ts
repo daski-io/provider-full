@@ -56,7 +56,7 @@ export async function createMigratedTestDatabase(
   };
   if (migrate) {
     try {
-      const migrator = new pg.Client({ connectionString });
+      const migrator = new pg.Client({ connectionString, options: "-c daski.runtime_epoch=1" });
       await migrator.connect();
       try {
         for (const file of readdirSync(migrationsDir).filter((entry) => entry.endsWith(".sql")).sort()) {
@@ -71,7 +71,8 @@ export async function createMigratedTestDatabase(
       throw error;
     }
   }
-  const pool = new pg.Pool({ connectionString, max: 4 });
+  // Sessions declare this release's runtime epoch (core migration 011).
+  const pool = new pg.Pool({ connectionString, max: 4, options: "-c daski.runtime_epoch=1" });
   return {
     pool,
     connectionString,

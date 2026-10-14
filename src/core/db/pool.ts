@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { config } from "../config.js";
 import { logError, logInfo } from "../logger.js";
 import { databaseTlsConfig } from "./tls.js";
+import { assertRuntimeSchemaEpoch, declareRuntimeEpoch } from "./runtimeEpoch.js";
 import { withSessionAdvisoryLock } from "./sessionAdvisoryLock.js";
 import {
   applyStandardRuntimePrivileges,
@@ -20,6 +21,8 @@ function poolConfig(connectionString: string, applicationName: string): pg.PoolC
   query_timeout: config.DATABASE_STATEMENT_TIMEOUT_MS,
   idle_in_transaction_session_timeout: config.DATABASE_IDLE_TX_TIMEOUT_MS,
   application_name: applicationName,
+  // Every session declares this build's runtime epoch (core migration 011).
+  onConnect: declareRuntimeEpoch,
   };
 }
 
@@ -232,6 +235,8 @@ export async function runMigrations(): Promise<void> {
         }
       }
       await client.query(`ALTER TABLE _migrations ALTER COLUMN checksum SET NOT NULL`);
+      const known = new Set(files);
+      await assertRuntimeSchemaEpoch(client, [...appliedMap.keys()].filter((name) => !known.has(name)));
     },
   });
   if (result.status === "busy") {

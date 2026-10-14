@@ -86,7 +86,10 @@ describe("compiled capability manifest", () => {
       expect.objectContaining({ serviceSlug: "fixture", skillId: SKILL }),
     ]);
     expect(manifest.executableContracts.map((entry) => entry.retained).sort()).toEqual([false, true]);
-    expect(manifest.coreMigrations).toEqual(expect.arrayContaining(["009_retained_listing_versions.sql"]));
+    expect(manifest.coreMigrations).toEqual(expect.arrayContaining([
+      "009_retained_listing_versions.sql", "011_runtime_epoch_barrier.sql",
+    ]));
+    expect(manifest.runtimeEpoch).toBe(1);
     expect(manifest.workerQueues).toContain("standard-paid-fulfillment");
     expect(capabilityHash(manifest)).toBe(capabilityHash(capabilityManifest([retainedModule()], {
       sourceDigest: null, sourceCommit: "abcdef1",
