@@ -25,6 +25,9 @@ All notable changes to this project will be documented here.
 
 ### Changed
 
+- Refreshed dependencies past current advisories: fast-uri 3.1.8, qs 6.16.0,
+  js-yaml 4.3.2 (override), proxy-addr 2.0.8, source-map-js 1.2.2 and
+  Vitest 4.1.11; `npm audit` reports no moderate or higher findings.
 - Made the skill validator and doctor tooling portable across LF and CRLF
   checkouts, and added a focused Windows tooling CI gate.
 - Clarified Provider versus upstream Supplier terminology and linked the
