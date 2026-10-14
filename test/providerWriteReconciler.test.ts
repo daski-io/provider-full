@@ -97,6 +97,37 @@ describe("provider write reconciler readiness", () => {
     },
   );
 
+  it("keeps its own nonce-gap verdict while another replica holds the lease", async () => {
+    h.reconcileProviderNonceGap.mockResolvedValue("attention");
+    await runProviderWriteReconciliation();
+    expect(h.failWorker).toHaveBeenCalledWith(WORKER);
+
+    // The peer's busy lease says nothing about the gap this replica saw.
+    h.withCycleLease.mockResolvedValue(null);
+    await runProviderWriteReconciliation();
+    await runProviderWriteReconciliation();
+    expect(h.heartbeatWorker).not.toHaveBeenCalled();
+
+    // Only this replica's own clear cycle restores it.
+    h.withCycleLease.mockImplementation(
+      async (_name: string, work: () => Promise<unknown>) => work(),
+    );
+    h.reconcileProviderNonceGap.mockResolvedValue("clear");
+    await runProviderWriteReconciliation();
+    expect(h.heartbeatWorker).toHaveBeenCalledTimes(1);
+    h.withCycleLease.mockResolvedValue(null);
+    await runProviderWriteReconciliation();
+    expect(h.heartbeatWorker).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a failed own cycle not ready while another replica holds the lease", async () => {
+    h.withCycleLease.mockRejectedValueOnce(new Error("lease connection reset"));
+    await expect(runProviderWriteReconciliation()).rejects.toThrow("lease connection reset");
+    h.withCycleLease.mockResolvedValue(null);
+    await runProviderWriteReconciliation();
+    expect(h.heartbeatWorker).not.toHaveBeenCalled();
+  });
+
   it("stops vouching for a lease that another session never frees", async () => {
     h.withCycleLease.mockResolvedValue(null);
     await runProviderWriteReconciliation();

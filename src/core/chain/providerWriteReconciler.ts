@@ -19,17 +19,36 @@ let timer: NodeJS.Timeout | null = null;
 let inFlight: Promise<void> | null = null;
 let leaseBusySince: number | null = null;
 let stalePeerReported = false;
+// The outcome of this replica's own last cycle; null until it ran one.
+let ownCycleHealthy: boolean | null = null;
+
+function resetLeaseObservation(): void {
+  leaseBusySince = null;
+  stalePeerReported = false;
+}
 
 export async function runProviderWriteReconciliation(): Promise<void> {
-  const result = await withCycleLease("daski:provider-write-reconcile:v1", async () =>
-    reconcileProviderNonceGap());
+  let result: Awaited<ReturnType<typeof reconcileProviderNonceGap>> | null;
+  try {
+    result = await withCycleLease("daski:provider-write-reconcile:v1", async () =>
+      reconcileProviderNonceGap());
+  } catch (error) {
+    // A failed cycle is this replica's own verdict; a busy lease seen later
+    // must not paper over it.
+    ownCycleHealthy = false;
+    resetLeaseObservation();
+    throw error;
+  }
   if (result === null) {
     // Another replica holds the lease and is doing this cycle's work. The
     // lease is a session advisory lock, released when its holder's session
     // ends, so a busy lease is a live peer reconciling: this replica is
-    // healthy, for as long as the peer keeps completing cycles.
+    // healthy, for as long as the peer keeps completing cycles. It is no
+    // evidence that a nonce gap or failure this replica observed itself has
+    // cleared, so that verdict stands until its own next cycle.
     const now = Date.now();
     leaseBusySince ??= now;
+    if (ownCycleHealthy === false) return;
     if (now - leaseBusySince <= PEER_LEASE_TRUST_MS) {
       heartbeatWorker(WORKER);
       return;
@@ -43,8 +62,8 @@ export async function runProviderWriteReconciliation(): Promise<void> {
     }
     return;
   }
-  leaseBusySince = null;
-  stalePeerReported = false;
+  resetLeaseObservation();
+  ownCycleHealthy = result === "clear";
   if (result === "clear") {
     heartbeatWorker(WORKER);
     return;
@@ -88,6 +107,6 @@ export async function stopProviderWriteReconciler(): Promise<void> {
   if (timer) clearTimeout(timer);
   timer = null;
   if (inFlight) await inFlight.catch(() => undefined);
-  leaseBusySince = null;
-  stalePeerReported = false;
+  resetLeaseObservation();
+  ownCycleHealthy = null;
 }

@@ -376,7 +376,8 @@ lease held by another replica's live session counts as a healthy cycle, so a
 rolling deploy stays ready, and ticks are jittered so replicas cannot
 phase-lock. A lease observed busy for more than five minutes is treated as a
 stuck peer and reported not ready, as are a failed cycle and active nonce-gap
-recovery.
+recovery. A busy lease never clears a failure or nonce gap this replica saw in
+its own last cycle; only its own next clear cycle does.
 
 ## HTTP, proxy, and health behavior
 
