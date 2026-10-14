@@ -9,8 +9,10 @@ import { markEscalated } from "../engine/escalation.js";
 import { consultPreExecuteAgent } from "../engine/preExecuteRunner.js";
 import { processAdapterResult } from "../engine/taskFinalization.js";
 import { getAdapter, getService } from "../serviceRegistry/registry.js";
-import type { SupplierCostCeiling } from "../serviceRegistry/types.js";
+import type { AdapterResult, SupplierCostCeiling } from "../serviceRegistry/types.js";
+import { classifySupplierError } from "../suppliers/errorClassifier.js";
 import { canonicalHash } from "./canonical.js";
+import { recordStandardSecurityIncident } from "./incidents.js";
 import type { StandardRailDispatchV2 } from "./types.js";
 
 const bytes = (value: Hex): Buffer => Buffer.from(value.slice(2), "hex");
@@ -45,10 +47,52 @@ async function resolveAsset(args: {
   return { asset: owned.asset, linkOwnership: shouldLinkAssetOwnership(policy) };
 }
 
+async function failAdmittedTask(taskId: string, serviceId: string, claimKey: string[], error: unknown) {
+  await processAdapterResult(taskId, {
+    status: "failed", failureClass: "terminal", error: "standard_fulfillment_failed",
+  }, serviceId);
+  await pool.query(
+    "UPDATE transactions SET metadata=metadata || $2::jsonb WHERE id=$1",
+    [taskId, JSON.stringify({ standardFailureClass: error instanceof Error ? error.name : "UnknownError" })],
+  );
+  await pool.query(
+    `UPDATE standard_dispatch_claims SET state='failed',resolved_at=now()
+     WHERE gateway_audience=$1 AND order_id=$2`,
+    claimKey,
+  );
+}
+
 /**
- * Fulfil an admitted paid order synchronously. Every service failure becomes
- * a recorded terminal state on the task; only an infrastructure failure while
- * recording that state escapes, and the caller then answers ambiguously.
+ * The supplier may have acted: never guess a terminal failure. The task stays
+ * nonterminal and is flagged for reconciliation from supplier truth.
+ */
+async function parkForReconciliation(taskId: string, orderId: string, claimKey: string[]) {
+  await pool.query(
+    `UPDATE transactions SET updated_at=now(),
+        metadata=metadata || '{"standard_reconciliation_required":true}'::jsonb
+      WHERE id=$1 AND standard_order_id=$2`,
+    [taskId, orderId],
+  );
+  await pool.query(
+    "UPDATE standard_dispatch_claims SET state='working' WHERE gateway_audience=$1 AND order_id=$2",
+    claimKey,
+  );
+  await recordStandardSecurityIncident({
+    kind: "ambiguous_supplier_outcome",
+    gatewayAudience: claimKey[0],
+    orderId,
+    identity: { taskId, orderId },
+    details: { taskId },
+  });
+}
+
+/**
+ * Fulfil an admitted paid order synchronously. A definite service failure
+ * before or during execution becomes a recorded terminal failure; an
+ * ambiguous supplier outcome stays nonterminal for reconciliation. Once the
+ * service has answered, its answer is persisted as given: an infrastructure
+ * failure while persisting escapes (the caller answers ambiguously) and is
+ * never rewritten into a failure.
  */
 export async function fulfillAdmittedDispatch(args: {
   taskId: string;
@@ -61,6 +105,7 @@ export async function fulfillAdmittedDispatch(args: {
 }): Promise<void> {
   const { dispatch, service, skill, taskId } = args;
   const claimKey = [dispatch.gatewayAudience, dispatch.orderId];
+  let result: AdapterResult;
   try {
     const { asset, linkOwnership } = await resolveAsset({
       service, skillId: args.skillId, payer: dispatch.payer, request: args.request,
@@ -97,7 +142,7 @@ export async function fulfillAdmittedDispatch(args: {
       [taskId, dispatch.orderId],
     );
     if (started.rowCount !== 1) throw new Error("Standard fulfillment claim was lost");
-    const result = await getAdapter(service.adapter_name).execute(
+    result = await getAdapter(service.adapter_name).execute(
       args.skillId,
       {
         id: taskId,
@@ -110,24 +155,18 @@ export async function fulfillAdmittedDispatch(args: {
       args.request,
       asset ?? undefined,
     );
-    const processed = await processAdapterResult(taskId, result, service.id);
-    await pool.query(
-      `UPDATE standard_dispatch_claims SET state=$3,resolved_at=now(),response_hash=$4
-       WHERE gateway_audience=$1 AND order_id=$2`,
-      [...claimKey, processed.status, bytes(canonicalHash(result))],
-    );
   } catch (error) {
-    await processAdapterResult(taskId, {
-      status: "failed", failureClass: "terminal", error: "standard_fulfillment_failed",
-    }, service.id);
-    await pool.query(
-      "UPDATE transactions SET metadata=metadata || $2::jsonb WHERE id=$1",
-      [taskId, JSON.stringify({ standardFailureClass: error instanceof Error ? error.name : "UnknownError" })],
-    );
-    await pool.query(
-      `UPDATE standard_dispatch_claims SET state='failed',resolved_at=now()
-       WHERE gateway_audience=$1 AND order_id=$2`,
-      claimKey,
-    );
+    if (classifySupplierError(error)?.kind === "ambiguous") {
+      await parkForReconciliation(taskId, dispatch.orderId, claimKey);
+    } else {
+      await failAdmittedTask(taskId, service.id, claimKey, error);
+    }
+    return;
   }
+  const processed = await processAdapterResult(taskId, result, service.id);
+  await pool.query(
+    `UPDATE standard_dispatch_claims SET state=$3,resolved_at=now(),response_hash=$4
+     WHERE gateway_audience=$1 AND order_id=$2`,
+    [...claimKey, processed.status, bytes(canonicalHash(result))],
+  );
 }

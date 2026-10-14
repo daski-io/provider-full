@@ -7,7 +7,7 @@ import { GatewayEnvelopeError } from "./gatewayEnvelope.js";
  */
 export const DISPATCH_REJECTION_REASONS = [
   "quote_window", "envelope_lifetime", "signature", "outcome_policy",
-  "self_purchase", "price", "validator", "evidence",
+  "self_purchase", "price", "validator", "evidence", "service_unavailable",
 ] as const;
 
 export type DispatchRejectionReason = typeof DISPATCH_REJECTION_REASONS[number];

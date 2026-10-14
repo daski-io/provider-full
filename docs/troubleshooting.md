@@ -437,6 +437,14 @@ exists for a different dispatch hash: reconcile the gateway order with the
 claim the provider holds rather than re-dispatching. `503 ...
 "admission_in_progress"` and `"unavailable"` clear on retry.
 
+### A paid task stays `working` with `standard_reconciliation_required`
+
+The service's supplier call ended ambiguously, or the task was admitted but
+never started and the task watchdog flagged it. The provider deliberately did
+not sign a failure: the supplier may have acted. Reconcile authoritative
+supplier state through the service's journal (`supplier_operations`) before
+completing or failing the task; never repeat the purchase blindly.
+
 ### Quote succeeds but execute rejects input
 
 Quote and execute must call the same deterministic validation. Keep validation

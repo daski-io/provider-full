@@ -42,14 +42,16 @@ async function loadCurrentContext(
   if (!task || !service || !skill || Boolean(asset) !== Boolean(snapshot.asset)) {
     throw new Error("reviewed execution context no longer exists");
   }
+  // Paused sales do not cancel an admitted paid order, so a reviewed order is
+  // resolved whether or not the service still accepts new orders; any change
+  // to the executed configuration itself still invalidates the snapshot.
   if (
     task.id !== snapshot.transactionId || task.status !== "working" ||
     task.service_id !== snapshot.service.id || task.skill_id !== snapshot.skill.skillId ||
     service.slug !== snapshot.service.slug || service.version !== snapshot.service.version ||
     service.adapter_name !== snapshot.service.adapterName ||
-    service.config_revision !== snapshot.service.configRevision || !service.is_active ||
+    service.config_revision !== snapshot.service.configRevision ||
     skill.id !== snapshot.skill.id || skill.updated_at.toISOString() !== snapshot.skill.updatedAt ||
-    !skill.is_active ||
     (asset && snapshot.asset && (
       asset.service_id !== snapshot.asset.serviceId || asset.identifier !== snapshot.asset.identifier ||
       asset.status !== snapshot.asset.status ||

@@ -148,8 +148,9 @@ outcomes:
 | Admission exists for another envelope, the commit outcome is unknown, or admitted work cannot be rendered | empty `503` (no body, `Retry-After`); the gateway reconciles by status with the original hash |
 
 Refusal reasons are `validator`, `envelope_lifetime`, `signature`,
-`outcome_policy`, `self_purchase`, `quote_window`, `price` and `evidence`.
-No route or middleware turns a possibly-admitted dispatch into a JSON error.
+`outcome_policy`, `self_purchase`, `quote_window`, `price`, `evidence` and
+`service_unavailable`. No route or middleware turns a possibly-admitted
+dispatch into a JSON error.
 
 - Admission runs under a per-order transaction advisory lock. As its last
   statement before commit it rechecks `validBefore` against the database
@@ -162,6 +163,16 @@ No route or middleware turns a possibly-admitted dispatch into a JSON error.
   is inactive, or open work exceeds the listing's capacity: the gateway
   reserves capacity per listing version from payment, and new readiness
   quotes stop instead.
+- Fulfilment in this starter is synchronous, so while a service's declared
+  readiness invariants fail a fresh dispatch is refused before admission with
+  `service_unavailable`; the gateway retries it with a new envelope rather
+  than the provider signing a failure during the outage.
+- Once admitted, a definite service failure becomes a signed terminal
+  failure, but an ambiguous supplier outcome leaves the task `working` and
+  flagged `standard_reconciliation_required` (with an
+  `ambiguous_supplier_outcome` incident). If persisting the service's own
+  answer fails, the answer is never rewritten as a failure; the dispatch is
+  answered ambiguously and status reports the persisted state.
 
 ## Status outcomes
 

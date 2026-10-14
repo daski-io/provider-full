@@ -75,7 +75,14 @@ All notable changes to this project will be documented here.
   `404 {"error":"dispatch_status_unavailable","reason":"outcome_policy"}` only
   for proven absence of any claim and uses distinct bodies for every other
   failure; status reads are exempt from per-client and purchase rate limits.
-- Funded dispatches are no longer refused for paused sales or local capacity.
+- Funded dispatches are no longer refused for paused sales or local capacity;
+  a declared service readiness outage refuses them before admission with
+  `service_unavailable` instead of executing and signing a failure. Reviewed
+  paid orders resolve while sales are paused.
+- An ambiguous supplier outcome during dispatch fulfilment keeps the task
+  nonterminal and flagged for reconciliation, a failure to persist the
+  service's own answer is never rewritten as a failure, and the task
+  watchdog also flags admitted tasks that never started.
 - Dispatch now verifies the persisted, nonzero provider quote for both
   pricing modes, including payer, request, listing, price and window
   coverage, and no longer caps how long after its quote a timely-paid order

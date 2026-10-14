@@ -1,10 +1,9 @@
 import type { ValidateFunction } from "ajv";
 import type { Chain, Hex } from "viem";
-import { getServiceBySlug } from "../db/queries/services.js";
-import { getSkillByServiceAndSkillId } from "../db/queries/skills.js";
 import { logError } from "../logger.js";
 import { canonicalHash } from "./canonical.js";
 import type { ProviderStandardRailConfig } from "./config.js";
+import { prepareDispatchAdmission, type DispatchRequest } from "./dispatchAdmission.js";
 import {
   admitDispatchClaim,
   findDispatchClaim,
@@ -17,40 +16,22 @@ import {
   DispatchCommitUncertainError,
   DispatchRejectedError,
   DispatchStatusError,
-  withDispatchRejection,
 } from "./dispatchErrors.js";
 import { fulfillAdmittedDispatch } from "./dispatchExecution.js";
-import { loadAdmittedProviderQuote, verifyGatewayQuote } from "./dispatchQuoteBinding.js";
 import { signedDispatchSnapshot, type DispatchSnapshotV1 } from "./dispatchResponse.js";
-import {
-  assertFreshClaimEnvelope,
-  assertNotSelfPurchase,
-  findDispatchOutcome,
-  ORDER_ID,
-  verifyDispatchEnvelope,
-} from "./dispatchVerification.js";
+import { ORDER_ID, verifyDispatchEnvelope } from "./dispatchVerification.js";
 import { ProviderEvidenceVerifier } from "./evidence.js";
-import { admitStandardEvidence } from "./evidenceAdmissions.js";
 import { verifyGatewayEnvelope } from "./gatewayEnvelope.js";
 import { recordStandardSecurityIncident } from "./incidents.js";
-import { compileProviderSchema, validateProviderRequest } from "./schema.js";
-import type {
-  DispatchStatusQueryV1,
-  QuoteV1,
-  SignedEnvelope,
-  StandardEvidenceBundleV2,
-} from "./types.js";
+import { compileProviderSchema } from "./schema.js";
+import type { DispatchStatusQueryV1 } from "./types.js";
 
 export { shouldLinkAssetOwnership } from "./dispatchExecution.js";
+export type { DispatchRequest } from "./dispatchAdmission.js";
 
 const HASH = /^0x[0-9a-f]{64}$/;
-
-export interface DispatchRequest {
-  dispatch: unknown;
-  quote: SignedEnvelope<QuoteV1>;
-  request: Record<string, unknown>;
-  evidenceBundle: StandardEvidenceBundleV2;
-}
+const UNCERTAIN_COMMIT_PROBES = 10;
+const UNCERTAIN_COMMIT_PROBE_DELAY_MS = 100;
 
 /**
  * Standard dispatch admission and reconciliation status. A dispatch ends in
@@ -134,9 +115,12 @@ export class StandardDispatchService {
       throw new DispatchAmbiguousError("Dispatch claim lookup failed", { cause: error });
     });
     if (existing) return this.answerExisting(existing, key, dispatchHash);
-    let admission: Awaited<ReturnType<StandardDispatchService["prepareAdmission"]>>;
+    let admission: Awaited<ReturnType<typeof prepareDispatchAdmission>>;
     try {
-      admission = await this.prepareAdmission(args, envelope, dispatchHash);
+      admission = await prepareDispatchAdmission({
+        config: this.config, chainId: this.chainId, evidence: this.evidence,
+        validate: this.requestValidators, args, envelope, dispatchHash,
+      });
     } catch (error) {
       if (error instanceof DispatchRejectedError) return this.confirmRefusal(error, key, dispatchHash);
       throw error;
@@ -164,50 +148,6 @@ export class StandardDispatchService {
     } catch (error) {
       throw new DispatchAmbiguousError("Admitted dispatch cannot be answered", { cause: error });
     }
-  }
-
-  /** Every check that must pass before a claim may be committed. */
-  private async prepareAdmission(
-    args: DispatchRequest,
-    envelope: Awaited<ReturnType<typeof verifyDispatchEnvelope>>,
-    dispatchHash: Hex,
-  ) {
-    const dispatch = envelope.payload;
-    const outcome = findDispatchOutcome(this.config, dispatch);
-    assertFreshClaimEnvelope(envelope, outcome);
-    assertNotSelfPurchase(this.config, dispatch, outcome);
-    await verifyGatewayQuote({ config: this.config, chainId: this.chainId, envelope: args.quote, dispatch, outcome });
-    if (outcome.pricingMode === "fixed" && dispatch.grossAmount !== outcome.fixedGrossAmount) {
-      throw new DispatchRejectedError("price", "Dispatch price is not the admitted fixed price");
-    }
-    const providerQuote = await loadAdmittedProviderQuote({ quote: args.quote, dispatch, outcome });
-    const validate = this.requestValidators.get(outcome.outcomeId);
-    if (!validate) throw new DispatchRejectedError("validator", "Provider outcome validator is unavailable");
-    await withDispatchRejection("validator", () => validateProviderRequest(validate, args.request));
-    const verified = await withDispatchRejection("evidence", () => this.evidence.verify({
-      dispatch, quote: args.quote, outcome, bundle: args.evidenceBundle,
-    }));
-    for (const participant of [
-      dispatch.payer, this.config.providerAuthorityKey, this.config.terminalAttestationKey,
-      outcome.providerPayee, outcome.daskiCommissionReceiver, ...outcome.providerControlledWallets,
-    ]) await withDispatchRejection("evidence", () => this.evidence.assertNotSanctioned(participant));
-    await withDispatchRejection("evidence", () => admitStandardEvidence(
-      dispatch.orderId, args.evidenceBundle, verified.authorizationKey,
-    ));
-    // A funded order is an obligation: paused sales or an inactive skill row
-    // never refuse it. Only a service or skill the provider no longer has
-    // installed is a definite pre-admission refusal.
-    const service = await getServiceBySlug(outcome.serviceSlug);
-    const skill = service ? await getSkillByServiceAndSkillId(service.id, outcome.skillId) : null;
-    if (!service || !skill) throw new DispatchRejectedError("outcome_policy", "Outcome service is not installed");
-    return {
-      skill,
-      claim: {
-        dispatch, dispatchHash, request: args.request, outcome, service,
-        supplierCostCeiling: providerQuote.supplierCostCeiling,
-        providerQuoteHash: providerQuote.quoteHash,
-      },
-    };
   }
 
   /**
@@ -247,7 +187,13 @@ export class StandardDispatchService {
     key: ClaimKey,
     dispatchHash: Hex,
   ): Promise<{ kind: "admitted"; taskId: string } | { kind: "existing"; claim: DispatchClaim }> {
-    const probe = await probeDispatchClaim(key).catch(() => null);
+    // The committing backend may still hold the order lock for a moment.
+    let probe: Awaited<ReturnType<typeof probeDispatchClaim>> | null = null;
+    for (let attempt = 0; attempt < UNCERTAIN_COMMIT_PROBES; attempt += 1) {
+      probe = await probeDispatchClaim(key).catch(() => null);
+      if (probe?.kind !== "busy") break;
+      await new Promise((resolve) => setTimeout(resolve, UNCERTAIN_COMMIT_PROBE_DELAY_MS));
+    }
     if (probe?.kind !== "claim") throw uncertain;
     if (probe.claim.dispatchHash === dispatchHash && probe.claim.transactionId === uncertain.taskId) {
       return { kind: "admitted", taskId: uncertain.taskId };

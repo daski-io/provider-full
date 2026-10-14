@@ -29,7 +29,10 @@ const h = vi.hoisted(() => ({
   snapshotFailures: 0,
   evidenceDelayMs: 0,
   failClaimLookup: false,
+  failClaimStateUpdate: false,
   result: { status: "completed" } as AdapterResult,
+  executeError: null as Error | null,
+  module: null as unknown,
   executions: 0,
 }));
 vi.mock("../src/core/db/pool.js", () => ({
@@ -39,6 +42,11 @@ vi.mock("../src/core/db/pool.js", () => ({
           args[0].startsWith("SELECT dispatch_hash,transaction_id FROM standard_dispatch_claims")) {
         return Promise.reject(new Error("database unavailable"));
       }
+      if (h.failClaimStateUpdate && typeof args[0] === "string" &&
+          args[0].includes("SET state=$3,resolved_at=now(),response_hash=$4")) {
+        h.failClaimStateUpdate = false;
+        return Promise.reject(new Error("statement timeout"));
+      }
       return (h.pool!.query as (...a: unknown[]) => unknown)(...args);
     },
     connect: async () => faultyClient(await h.pool!.connect(), h.fault),
@@ -46,12 +54,16 @@ vi.mock("../src/core/db/pool.js", () => ({
 }));
 vi.mock("../src/core/serviceRegistry/registry.js", () => ({
   getAdapter: () => ({
-    execute: async () => { h.executions += 1; return h.result; },
+    execute: async () => {
+      h.executions += 1;
+      if (h.executeError) throw h.executeError;
+      return h.result;
+    },
     handleInput: vi.fn(),
     cancel: vi.fn(),
     quote: async () => ({ ok: true, amount: 250_000n, currency: "USDC" }),
   }),
-  getService: () => null,
+  getService: () => h.module,
   getAllServices: () => [],
 }));
 vi.mock("../src/core/engine/preExecuteRunner.js", () => ({
@@ -74,6 +86,7 @@ vi.mock("../src/core/standardRail/dispatchResponse.js", async (importOriginal) =
 const { StandardQuoteService } = await import("../src/core/standardRail/quote.js");
 const { ProviderEvidenceVerifier } = await import("../src/core/standardRail/evidence.js");
 const { mountProtocolRoutes } = await import("../src/core/standardRail/protocolRoutes.js");
+const { SupplierOutcomeAmbiguousError } = await import("../src/core/suppliers/errorClassifier.js");
 
 const config = fixtureConfig();
 const request = { item: "widget" };
@@ -105,7 +118,10 @@ beforeEach(() => {
   h.snapshotFailures = 0;
   h.evidenceDelayMs = 0;
   h.failClaimLookup = false;
+  h.failClaimStateUpdate = false;
   h.result = { status: "completed" };
+  h.executeError = null;
+  h.module = null;
   h.executions = 0;
   vi.spyOn(ProviderEvidenceVerifier.prototype, "verify").mockImplementation(async () => {
     if (h.evidenceDelayMs) await new Promise((resolve) => setTimeout(resolve, h.evidenceDelayMs));
@@ -295,5 +311,53 @@ describe("dispatch recovery outcomes (C-T11)", () => {
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
+  });
+});
+
+describe("admitted paid work is never answered with a guessed failure", () => {
+  it("keeps an ambiguous supplier outcome nonterminal and flags it for reconciliation", async () => {
+    const order = await paidOrder();
+    h.executeError = new SupplierOutcomeAmbiguousError("Supplier operation outcome is unknown.");
+    const response = await dispatchOrder(order);
+    const accepted = await acceptDispatchResponse(await readGatewayJson(response), expectation(canonicalHash(order.dispatch)));
+    expect(accepted.body.state).toBe("working");
+    expect(accepted.evidence).toBeNull();
+    const task = await database.pool.query(
+      "SELECT status,metadata FROM transactions WHERE standard_order_id=$1", [order.dispatch.payload.orderId],
+    );
+    expect(task.rows[0]).toMatchObject({ status: "working", metadata: expect.objectContaining({ standard_reconciliation_required: true }) });
+    const incidents = await database.pool.query(
+      "SELECT count(*)::int AS n FROM standard_security_incidents WHERE incident_kind='ambiguous_supplier_outcome' AND order_id=$1",
+      [order.dispatch.payload.orderId],
+    );
+    expect(incidents.rows[0].n).toBe(1);
+  });
+
+  it("does not rewrite the service's answer when persisting it fails", async () => {
+    const order = await paidOrder();
+    h.result = { status: "input-required", message: "Which variant?" };
+    h.failClaimStateUpdate = true;
+    await expectEmpty503(await dispatchOrder(order));
+    const task = await database.pool.query(
+      "SELECT status FROM transactions WHERE standard_order_id=$1", [order.dispatch.payload.orderId],
+    );
+    expect(task.rows[0].status).toBe("input-required");
+    const status = await acceptDispatchResponse(await readGatewayJson(await queryStatus(order)), expectation(canonicalHash(order.dispatch)));
+    expect(status.body.state).toBe("input-required");
+  });
+
+  it("refuses before admission while the service declares a readiness outage", async () => {
+    const order = await paidOrder();
+    let failing = true;
+    h.module = { operations: { readiness: { checkInvariants: () => failing ? ["supplier unreachable"] : [] } } };
+    const refused = await dispatchOrder(order);
+    expect(refused.status).toBe(409);
+    await expect(refused.json()).resolves.toEqual({ error: "dispatch_rejected", reason: "service_unavailable" });
+    expect(h.executions).toBe(0);
+    expect(await tasksFor(order.dispatch.payload.orderId)).toBe(0);
+    failing = false;
+    const retried = await redispatch(order);
+    expect(await classifyDispatchAnswer(await dispatchOrder(retried))).toBe("accepted");
+    expect(h.executions).toBe(1);
   });
 });

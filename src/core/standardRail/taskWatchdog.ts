@@ -21,7 +21,7 @@ export async function reconcileStuckStandardTasks(
     `SELECT id,standard_order_id,standard_listing_manifest_hash,status,updated_at
        FROM transactions
       WHERE standard_order_id IS NOT NULL
-        AND status IN ('dispatching','working')`,
+        AND status IN ('submitted','dispatching','working')`,
   );
   const deadlines = new Map([...config.outcomes.values()].map((outcome) => [
     outcome.listingManifestHash.toLowerCase(), outcome.dispatchDeadlineSeconds,
