@@ -12,6 +12,7 @@ import {
   verifyRegistrationView,
   type RegistrationOutcome,
   type RegistrationPhase,
+  type StaleIntentReason,
 } from "./progress.js";
 import {
   needsLiveRegistrationView,
@@ -68,10 +69,10 @@ async function execute(
   attempt: number,
   phase: RegistrationPhase,
 ): Promise<RegistrationOutcome> {
-  const onExpiredIntent = async () => {
+  const onStaleIntent = async (reason: StaleIntentReason) => {
     if (attempt >= MAX_REGISTRATION_INTENT_ATTEMPTS) {
       throw new Error(
-        `${service.slug} registration intent expired ${attempt} times before the gateway accepted it`,
+        `${service.slug} registration intent was abandoned ${attempt} times before the gateway prepared one (last: ${reason})`,
       );
     }
     await registrationRetryDelay(attempt);
@@ -104,7 +105,7 @@ async function execute(
       return continueRegistration(context, service, resumed, plan.view, phase);
     }
     case "post-intent":
-      return prepareRegistration(context, service, local!, phase, onExpiredIntent);
+      return prepareRegistration(context, service, local!, phase, onStaleIntent);
     case "sign-intent": {
       let replacing = local;
       if (plan.attention && local) {
@@ -133,7 +134,7 @@ async function execute(
         intent,
         replacing,
       });
-      return prepareRegistration(context, service, begun, phase, onExpiredIntent);
+      return prepareRegistration(context, service, begun, phase, onStaleIntent);
     }
   }
 }

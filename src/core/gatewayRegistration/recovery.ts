@@ -81,15 +81,14 @@ export function planRegistration(args: {
   const railPolicyChanged =
     local.canonical_intent.payload.railPolicyHash !== args.railPolicyHash;
   if (!needsLiveRegistrationView(local)) {
-    if (local.state !== "INTENT_READY") return { kind: "sign-intent", reason: "never-prepared" };
-    return railPolicyChanged
-      ? {
-        kind: "blocked",
-        code: "rail_policy_changed_during_prepare",
-        attention: "rail_policy_changed_during_prepare",
-        detail: "the gateway rail policy changed before the persisted intent was prepared",
-      }
-      : { kind: "post-intent" };
+    // A signed intent the gateway never answered may still have been
+    // prepared, and posting it under its idempotency key is the only way to
+    // find out, also after the card, rail policy or payee changed: the
+    // gateway's answer settles it. Every ATTENTION record without a gateway
+    // id was parked because the gateway proved it never prepared the intent.
+    return local.state === "INTENT_READY"
+      ? { kind: "post-intent" }
+      : { kind: "sign-intent", reason: "never-prepared" };
   }
   if (!live) throw new Error("registration recovery requires the gateway's live view");
   if (live === "unknown") {

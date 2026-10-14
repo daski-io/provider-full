@@ -219,10 +219,16 @@ export class FakeGateway {
   private sequence = 0;
   skills: SkillDefinition[] = defaultSkills();
   payee: Address = providerAccount.address;
+  /** The rail policy hash the gateway serves, prepares and activates under. */
+  railPolicyHash: Hex = registrationPolicy.railPolicyHash;
   /** "on-evidence" activates as soon as evidence is accepted. */
   activation: "on-evidence" | "manual" = "on-evidence";
   /** Next evidence posts answered with a bare 503 before any processing. */
   unavailableEvidencePosts = 0;
+  /** Next registration posts answered with a bare 503 before any processing. */
+  unavailableRegistrationPosts = 0;
+  /** Next registration posts processed, then answered with a bare 503 (a lost response). */
+  lostRegistrationResponses = 0;
   /** Next reads of a registration awaiting verification answered with a bare 503. */
   unavailablePendingReads = 0;
   /** Next exact replays wrongly refused as unauthenticated. */
@@ -243,10 +249,21 @@ export class FakeGateway {
       return json(200, serviceCard(this.skills));
     }
     if (url.origin !== GATEWAY) return json(404, { error: { code: "NOT_FOUND" } });
-    if (url.pathname === "/public/v3/registration-policy") return json(200, registrationPolicy);
+    if (url.pathname === "/public/v3/registration-policy") {
+      return json(200, { ...registrationPolicy, railPolicyHash: this.railPolicyHash });
+    }
     if (url.pathname === "/v1/service-registrations" && method === "POST") {
+      if (this.unavailableRegistrationPosts > 0) {
+        this.unavailableRegistrationPosts -= 1;
+        return new Response(null, { status: 503 });
+      }
       const key = new Headers(init.headers).get("idempotency-key") ?? "";
-      return this.register(body as StoredRegistration["intent"], key);
+      const answer = await this.register(body as StoredRegistration["intent"], key);
+      if (this.lostRegistrationResponses > 0) {
+        this.lostRegistrationResponses -= 1;
+        return new Response(null, { status: 503 });
+      }
+      return answer;
     }
     const evidenceMatch = /^\/v1\/service-registrations\/([^/]+)\/evidence$/.exec(url.pathname);
     if (evidenceMatch && method === "POST") {
@@ -281,7 +298,7 @@ export class FakeGateway {
           canonicalToken: USDC,
           daskiCommissionReceiver: COMMISSION_RECEIVER,
           commissionBps: registrationPolicy.commissionBps,
-          policyVersionHash: registrationPolicy.railPolicyHash,
+          policyVersionHash: this.railPolicyHash,
           splitterFactory: SPLITTER_FACTORY,
         },
         listing: {
@@ -364,6 +381,13 @@ export class FakeGateway {
       item.state === "PREPARED" || item.state === "EVIDENCE_PENDING")) {
       return refusal(409, "REGISTRATION_REVISION_PENDING");
     }
+    // Validated against the card it serves now and its current policy;
+    // nothing is stored for a refused intent.
+    if (
+      intent.payload.skillContractSetHash !==
+        serviceCard(this.skills).extensions["https://daski.io/a2a/v2"].skillContractSetHash ||
+      intent.payload.railPolicyHash !== this.railPolicyHash
+    ) return refusal(409, "REGISTRATION_CONTRACT_MISMATCH");
     const active = this.activeRegistrationId
       ? this.registrations.get(this.activeRegistrationId)!
       : null;
@@ -410,7 +434,7 @@ export class FakeGateway {
         serviceWallet: ZERO,
         providerPayee: this.payee,
         providerIntentHash,
-        railPolicyHash: registrationPolicy.railPolicyHash,
+        railPolicyHash: this.railPolicyHash,
         marketplaceEnabled: true,
         listings,
       },
@@ -455,7 +479,7 @@ export class FakeGateway {
         serviceSlug: SERVICE_SLUG,
         skillId: args.skill.skillId,
         skillContractHash: args.skill.skillContractHash,
-        policyVersionHash: registrationPolicy.railPolicyHash,
+        policyVersionHash: this.railPolicyHash,
         providerEndpoint: `${PROVIDER_ORIGIN}/standard-rail/assets/action`,
         ownershipPolicy: action.ownershipPolicy,
         effect: action.effect,
@@ -511,12 +535,12 @@ export class FakeGateway {
       commissionBps: registrationPolicy.commissionBps,
       splitterFactory: SPLITTER_FACTORY,
       splitterDeploymentSalt: salt,
-      policyVersionHash: registrationPolicy.railPolicyHash,
+      policyVersionHash: this.railPolicyHash,
       listingEpoch: listingEpoch.toString(),
     });
     const callArgs = [
       salt, BigInt(CHAIN_ID), USDC, this.payee, COMMISSION_RECEIVER,
-      registrationPolicy.commissionBps, registrationPolicy.railPolicyHash,
+      registrationPolicy.commissionBps, this.railPolicyHash,
       listingKey, canonicalHash(preparation), listingEpoch,
     ] as const;
     return {

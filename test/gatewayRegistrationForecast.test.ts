@@ -255,6 +255,24 @@ describe("read-only registration forecast", { timeout: 30_000 }, () => {
     expect(forecastFails(blocked)).toBe(true);
   });
 
+  it("forecasts the probe of an unanswered intent bound to a card no longer served", async () => {
+    gateway.unavailableRegistrationPosts = 1;
+    await expect(registerServiceWithGateway(GATEWAY, await service(), 1, "broadcast"))
+      .rejects.toThrow(/did not return JSON/);
+    expect(await forecastWithoutEffects()).toMatchObject({
+      state: "IN_PROGRESS",
+      action: "post-persisted-intent",
+      detail: expect.stringMatching(/^a signed intent awaits gateway preparation/),
+    });
+
+    changePaidSkill();
+    const probe = await forecastWithoutEffects();
+    expect(probe).toMatchObject({ state: "IN_PROGRESS", action: "post-persisted-intent" });
+    expect(probe.detail).toMatch(/binds the previous card; .*signs a fresh intent/);
+    expect(forecastFails(probe)).toBe(false);
+    await expect(register()).resolves.toMatchObject({ state: "ACTIVE" });
+  });
+
   it("forecasts first admission, an unchanged registration and a changed card", async () => {
     expect(await forecastWithoutEffects()).toMatchObject({
       state: "RE-REGISTER",

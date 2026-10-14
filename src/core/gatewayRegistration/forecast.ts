@@ -3,7 +3,7 @@ import { redactSensitiveText } from "../security/redaction.js";
 import { ReusedListingDriftError, describeCrossCheck } from "./activationIdentity.js";
 import { loadRegistrationContext } from "./chainContext.js";
 import { planServiceRegistration } from "./client.js";
-import { verifyRegistrationView } from "./progress.js";
+import { staleIntentBindings, verifyRegistrationView } from "./progress.js";
 import { crossCheckActivation, priorHeadsFor } from "./promotion.js";
 import type { EvidenceStep, RegistrationPlan } from "./recovery.js";
 import { listGatewaySplitterWrites } from "./splitterRows.js";
@@ -113,13 +113,17 @@ export async function checkServiceRegistration(
         changedSkills,
         registrationId,
       };
-    case "post-intent":
+    case "post-intent": {
+      const stale = staleIntentBindings(local!, context);
       return {
         ...base,
         state: "IN_PROGRESS",
         action: "post-persisted-intent",
-        detail: "a signed intent awaits gateway preparation; a run would post it under its idempotency key",
+        detail: stale.length === 0
+          ? "a signed intent awaits gateway preparation; a run would post it under its idempotency key"
+          : `the persisted intent binds the previous ${stale.join(", ")}; a run posts it once under its idempotency key to learn whether the gateway prepared it: if not, the gateway refuses it and the run signs a fresh intent; if so, the run stops and names that registration`,
       };
+    }
     case "promote":
     case "continue": {
       const gatewayState = plan.view.state;

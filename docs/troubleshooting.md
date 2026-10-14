@@ -302,7 +302,7 @@ non-zero when any service is `BLOCKED` or a promotion would fail.
 | --- | --- |
 | `ACTIVE` | Registered and unchanged; a run does nothing. |
 | `RESUME` | The gateway activated the registration; a run promotes it. `crossCheck` says whether the exact-set check passes. |
-| `IN_PROGRESS` | A pending registration continues under its persisted intent; `action` names the evidence step (`replay-accepted-evidence`, `refresh-unaccepted-evidence`, `resubmit-unaccepted-evidence`, `confirm-splitters-and-submit-evidence`, `post-persisted-intent`). |
+| `IN_PROGRESS` | A pending registration continues under its persisted intent; `action` names the evidence step (`replay-accepted-evidence`, `refresh-unaccepted-evidence`, `resubmit-unaccepted-evidence`, `confirm-splitters-and-submit-evidence`), or `post-persisted-intent` for a signed intent the gateway never answered; its `detail` says when that intent binds a previous card, rail policy or payee. |
 | `RE-REGISTER` | A run signs a new intent; `changedSkills` lists skills whose contract differs from their promoted head. |
 | `BLOCKED` | A run would refuse; `action` and `detail` name the reason. |
 
@@ -334,8 +334,16 @@ body or secret.
 | `reused_listing_drift` | A listing the gateway reused no longer reproduces its admitted commitment (the error names the differing fields), or it is a free listing without a control profile and no promoted head exists for it. This is identity drift and is refused; do not edit catalog rows. |
 | `prepared_registration_drift`, `gateway_registration_rejected`, `gateway_registration_superseded` | The gateway ended the registration; a run starts a new intent and logs the restart. |
 | `gateway_registration_not_found` | The gateway holds no registration under the persisted id; nothing is pending there, so a run starts a new intent and logs the restart. |
-| `intent_expired_before_prepare` | The gateway never accepted the intent; a run signs a new one, within a bounded attempt budget. |
+| `intent_expired_before_prepare`, `intent_superseded_before_prepare` | The gateway refused the persisted intent as expired, or as bound to a card, rail policy or payee the provider no longer serves. It checks a replay first, so it never prepared that intent; a run signs a new one, within a bounded attempt budget. |
 | `rail_policy_changed_during_prepare`, `prepared_registration_changed` | The pending registration no longer matches the gateway's policy or its own persisted preparation. It cannot continue; ask Daski to end it. |
+
+A signed intent the gateway never answered is posted again under its
+idempotency key before anything replaces it, also after the card, rail policy
+or payee changed, because only the gateway's answer says whether it prepared
+that intent. If it did, the run keeps the intent and stops with
+`card_changed_during_registration`, `rail_policy_changed_during_prepare` or
+`payee_changed_during_registration`, naming the registration the gateway holds
+and its state.
 
 A run also stops without changing state when the served card changed while a
 registration is pending (`card_changed_during_registration`) or activated but

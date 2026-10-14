@@ -379,6 +379,67 @@ describe("activated registrations left in ATTENTION", { timeout: 30_000 }, () =>
   });
 });
 
+describe("persisted intents the gateway never answered", { timeout: 30_000 }, () => {
+  async function unanswered(lost: boolean) {
+    if (lost) gateway.lostRegistrationResponses = 1;
+    else gateway.unavailableRegistrationPosts = 1;
+    await expect(registerServiceWithGateway(GATEWAY, await service(), 1, "broadcast"))
+      .rejects.toThrow(/did not return JSON/);
+    const pending = await localRow();
+    expect(pending).toMatchObject({ state: "INTENT_READY", gateway_registration_id: null });
+    return pending;
+  }
+
+  it("resume the preparation the gateway replays for a lost answer", async () => {
+    const pending = await unanswered(true);
+    await expect(register()).resolves.toMatchObject({ state: "ACTIVE" });
+    expect((await localRow()).idempotency_key).toBe(pending.idempotency_key);
+  });
+
+  it("are replaced once the gateway refuses one bound to a card it no longer serves", async () => {
+    const pending = await unanswered(false);
+    changePaidSkill();
+
+    await expect(register()).resolves.toMatchObject({ state: "ACTIVE" });
+    const after = await localRow();
+    expect(after.id).toBe(pending.id);
+    expect(after.idempotency_key).not.toBe(pending.idempotency_key);
+    const posted = gateway.requests.filter((request) =>
+      request.method === "POST" && request.path.endsWith("/v1/service-registrations"));
+    expect(posted.map((request) => canonicalHash(request.body))).toContain(
+      canonicalHash(pending.canonical_intent),
+    );
+    expect(h.logs).toContainEqual(expect.objectContaining({
+      message: "Gateway registration restarts with a new intent",
+      extra: expect.objectContaining({
+        reason: "never-prepared",
+        priorErrorCode: "intent_superseded_before_prepare",
+      }),
+    }));
+  });
+
+  it("keep and name a registration the gateway prepared when the rail policy changed", async () => {
+    const pending = await unanswered(true);
+    const [orphan] = [...gateway.registrations.values()];
+    expect(orphan!.state).toBe("PREPARED");
+    gateway.railPolicyHash = `0x${"9".repeat(64)}`;
+    const signatures = vi.mocked(signProviderEnvelope).mock.calls.length;
+
+    for (let run = 0; run < 2; run += 1) {
+      await expect(register()).rejects.toThrow(new RegExp(
+        `rail_policy_changed_during_prepare: the gateway holds registration ${orphan!.registrationId} \\(PREPARED\\)`,
+      ));
+      // The intent and its idempotency key, the only handle on that
+      // registration, are kept; nothing new is signed.
+      expect(await localRow()).toMatchObject({
+        state: "INTENT_READY",
+        idempotency_key: pending.idempotency_key,
+      });
+    }
+    expect(vi.mocked(signProviderEnvelope).mock.calls.length).toBe(signatures);
+  });
+});
+
 describe("registrations the gateway no longer knows", { timeout: 30_000 }, () => {
   it("restart with a fresh intent instead of failing every run", async () => {
     gateway.activation = "manual";

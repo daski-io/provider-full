@@ -56,14 +56,15 @@ describe("registration recovery plan", () => {
     expect(plan(row({ state: "INTENT_READY", ...unprepared }), null)).toEqual({ kind: "post-intent" });
     expect(plan(row({ state: "ATTENTION", ...unprepared }), null))
       .toEqual({ kind: "sign-intent", reason: "never-prepared" });
+    // Only the gateway's answer to the post says whether it prepared an
+    // intent bound to a previous card or policy.
     expect(plan(row({
       state: "INTENT_READY",
       ...unprepared,
       canonical_intent: { payload: { railPolicyHash: `0x${"7".repeat(64)}` } } as GatewayRegistrationRow["canonical_intent"],
-    }), null)).toMatchObject({
-      kind: "blocked",
-      attention: "rail_policy_changed_during_prepare",
-    });
+    }), null)).toEqual({ kind: "post-intent" });
+    expect(plan(row({ state: "INTENT_READY", ...unprepared }), null, false))
+      .toEqual({ kind: "post-intent" });
   });
 
   it("resumes promotion from ATTENTION when the gateway reports the registration ACTIVE", () => {
