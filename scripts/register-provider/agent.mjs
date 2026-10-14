@@ -123,8 +123,12 @@ export function agentSteps({
     // signed at exactly that nonce: a registration this wallet already sent
     // either shows in that balance or occupies that nonce, so at most one of
     // them can ever be mined.
+    // The reads pinned to `head` go through the lag retry: a load-balanced
+    // RPC can answer the head from a node one block ahead of the one that
+    // serves the pinned read, which then errors instead of answering.
     const head = await pub.getBlockNumber();
-    const balance = await readIdentity("balanceOf", [account.address], { blockNumber: head });
+    const balance = await retryOnLag("identity.balance", () =>
+      readIdentity("balanceOf", [account.address], { blockNumber: head }));
     if (balance > 0n) {
       const { minted, transferredIn } = await heldAgents(balance, head);
       if (minted.length === 1) {
@@ -156,7 +160,8 @@ export function agentSteps({
     }
 
     const [confirmedNonce, pendingNonce] = await Promise.all([
-      pub.getTransactionCount({ address: account.address, blockNumber: head }),
+      retryOnLag("wallet.nonce", () =>
+        pub.getTransactionCount({ address: account.address, blockNumber: head })),
       pub.getTransactionCount({ address: account.address, blockTag: "pending" }),
     ]);
     if (pendingNonce > confirmedNonce) {

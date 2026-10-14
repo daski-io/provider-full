@@ -40,6 +40,7 @@ function chainStub(overrides: Partial<{
   nonces: { confirmed: number; pending: number };
   tokenUri: string;
   lostSends: number;
+  laggingBalanceReads: number;
 }> = {}) {
   const state = {
     head: HEAD,
@@ -56,6 +57,8 @@ function chainStub(overrides: Partial<{
     tokenUri: AGENT_URI,
     // Sends the node accepts but whose answer is lost.
     lostSends: 0,
+    // Pinned balanceOf reads served by a node that has not seen the head yet.
+    laggingBalanceReads: 0,
     reads: [] as Array<{ functionName: string; args?: readonly unknown[]; blockNumber?: bigint }>,
     nonceReads: [] as Array<{ blockNumber?: bigint; blockTag?: string }>,
     logQueries: [] as Array<{ fromBlock: bigint; toBlock: bigint }>,
@@ -70,7 +73,12 @@ function chainStub(overrides: Partial<{
       state.reads.push({ functionName, args, blockNumber });
       switch (functionName) {
         case "resolve": return state.indexResolve;
-        case "balanceOf": return state.balance;
+        case "balanceOf":
+          if (blockNumber !== undefined && state.laggingBalanceReads > 0) {
+            state.laggingBalanceReads -= 1;
+            throw new Error("header not found");
+          }
+          return state.balance;
         case "ownerOf": {
           const owner = state.owners.get(args![0] as bigint);
           if (!owner) throw new Error("ERC721NonexistentToken");
@@ -246,6 +254,15 @@ describe("existing provider identity on the canonical registry", () => {
     expect(stub.state.writes[0]!.nonce).toBe(5);
     expect(stub.state.reads.find((read) => read.functionName === "balanceOf")?.blockNumber).toBe(HEAD);
     expect(stub.state.nonceReads).toContainEqual({ address: WALLET, blockNumber: HEAD });
+  });
+
+  it("retries the reads pinned to the head that a lagging node cannot serve yet", async () => {
+    const stub = chainStub({ laggingBalanceReads: 2 });
+    const { steps, logs } = stepsFor(stub);
+    await expect(steps.ensureAgent()).resolves.toEqual({ agentId: AGENT_ID });
+    expect(logs.filter((entry) => entry.step === "retry" && entry.label === "identity.balance"))
+      .toHaveLength(2);
+    expect(stub.state.writes).toEqual([]);
   });
 
   it("refuses to mint while a transaction from the wallet is not yet mined", async () => {
