@@ -35,7 +35,9 @@ addresses, signer, and funded wallet before use:
   pending. Every transaction is signed at one nonce, so a send whose answer
   was lost is never signed a second time. It sends transactions and may
   spend ETH and USDC. `--update-uri` also changes the on-chain agent URI.
-  `npm run daski:register` runs it pinned to `PROVIDER_AGENT_ID`.
+  `npm run daski:register` runs it pinned to `PROVIDER_AGENT_ID`. Its agent
+  discovery, transaction sending and contract interfaces live in
+  `scripts/register-provider/`.
 - `npm run daski:register -- --gateway <origin>` registers every active
   service contract with the gateway, persists splitter writes before
   broadcast, submits activation evidence, and promotes runtime-catalog heads.
