@@ -5,13 +5,11 @@ import { baseSepolia } from "viem/chains";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { canonicalHash } from "../src/core/standardRail/canonical.js";
 import type { FulfillmentAdapter, TaskContext } from "../src/core/serviceRegistry/types.js";
-import type { ProviderOutcomeConfig } from "../src/core/standardRail/types.js";
-import { gatewayDispatch, gatewayQuoteV1, type DispatchArgs } from "./dispatchWire.js";
-import { acceptProviderQuote, signGatewayEnvelope } from "./gatewayConsumer.js";
+import { gatewayDispatch, gatewayQuoteV1 } from "./dispatchWire.js";
+import { paidOrderHarness } from "./paidOrderHarness.js";
 import { createMigratedDatabase, type DisposableDatabase } from "./postgresHarness.js";
 import {
-  CHAIN_ID, dynamicOutcome, ENVIRONMENT, fixedOutcome, fixtureConfig, gatewayKey, hash, payerA, payerB,
-  provider, PROVIDER_AUDIENCE, seedFixtureService,
+  CHAIN_ID, dynamicOutcome, fixedOutcome, fixtureConfig, hash, payerA, payerB, seedFixtureService,
 } from "./standardRailFixture.js";
 
 const h = vi.hoisted(() => ({
@@ -87,56 +85,9 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-/** Obtain a real provider readiness quote, as the gateway does, optionally in the past. */
-async function readinessQuote(outcome: ProviderOutcomeConfig, payer: Hex | null, at?: number) {
-  if (at !== undefined) {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(at * 1_000);
-  }
-  try {
-    const issuedAt = Math.floor(Date.now() / 1_000);
-    const envelope = await signGatewayEnvelope({
-      artifactType: "ProviderQuoteRequestV1", environment: ENVIRONMENT, chainId: CHAIN_ID,
-      audience: PROVIDER_AUDIENCE, signerKeyId: "gateway-dispatch", privateKey: gatewayKey,
-      issuedAt, validBefore: issuedAt + 60,
-      payload: {
-        outcomeId: outcome.outcomeId, listingManifestHash: outcome.listingManifestHash,
-        requestHash: canonicalHash(request), request, payer,
-      },
-    });
-    const response = await new StandardQuoteService(config, CHAIN_ID).handle(envelope);
-    return acceptProviderQuote(response, {
-      outcomeId: outcome.outcomeId, listingManifestHash: outcome.listingManifestHash,
-      requestHash: canonicalHash(request), payer, fixed: outcome.pricingMode === "fixed",
-      fixedGrossAmount: outcome.fixedGrossAmount, providerAuthorityKey: provider.address,
-      minimumPaymentWindowSeconds: 30, maximumLifetimeSeconds: outcome.pricingMode === "dynamic" ? 180 : null,
-      commissionBps: outcome.commissionBps, receivedAt: issuedAt,
-    });
-  } finally {
-    vi.useRealTimers();
-  }
-}
-
-async function paidOrder(args: {
-  outcome?: ProviderOutcomeConfig;
-  quotePayer?: Hex | null;
-  dispatchPayer?: Hex;
-  quotedAt?: number;
-  gatewayValidBefore?: (validBefore: number) => number;
-} = {}): Promise<DispatchArgs> {
-  const outcome = args.outcome ?? fixedOutcome;
-  const providerQuote = await readinessQuote(
-    outcome, args.quotePayer === undefined ? payerA.toLowerCase() as Hex : args.quotePayer, args.quotedAt,
-  );
-  const quote = await gatewayQuoteV1({
-    outcome, request, providerQuote,
-    validBefore: args.gatewayValidBefore?.(providerQuote.validBefore) ?? providerQuote.validBefore - 20,
-  });
-  return gatewayDispatch({
-    outcome, quote, request, payer: args.dispatchPayer ?? payerA,
-    reputationContract: config.reputationContract, outcomeSchemaUid: config.reputationOutcomeSchemaUid,
-  });
-}
+const { paidOrder } = paidOrderHarness({
+  config, request, quoteService: () => new StandardQuoteService(config, CHAIN_ID),
+});
 
 const service = () => new StandardDispatchService(config, baseSepolia, CHAIN_ID);
 

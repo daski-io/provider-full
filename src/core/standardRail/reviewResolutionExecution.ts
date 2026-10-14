@@ -19,7 +19,7 @@ import {
 } from "../engine/escalationSnapshot.js";
 import { processAdapterResult } from "../engine/taskFinalization.js";
 import { claimSupplierMutation } from "../engine/taskTransitions.js";
-import type { SupplierCostCeiling } from "../serviceRegistry/types.js";
+import { admittedSupplierCostCeiling } from "../serviceRegistry/supplierCostCeiling.js";
 import { canonicalHash } from "./canonical.js";
 
 interface CurrentContext {
@@ -113,6 +113,9 @@ export async function resolveReviewedPaidOrder(args: {
     return;
   }
   let task = context.task;
+  // Parsed before the mutation claim: a reviewed re-execution spends under
+  // the same admitted ceiling as the original attempt, never a new one.
+  const supplierCostCeiling = admittedSupplierCostCeiling(task.metadata);
   if (args.row.source === "pre_execute") {
     const claimed = await claimSupplierMutation({
       taskId: task.id,
@@ -133,7 +136,7 @@ export async function resolveReviewedPaidOrder(args: {
         skill_id: task.skill_id,
         status: task.status,
         supplierMutationStarted: true,
-        supplierCostCeiling: task.metadata.supplier_cost_ceiling as SupplierCostCeiling | undefined,
+        supplierCostCeiling,
       },
       args.input,
       context.asset ?? undefined,

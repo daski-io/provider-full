@@ -282,6 +282,38 @@ purchase, provisioning request, filing, or other non-idempotent action.
 Implement bounded classification, retry, circuit-breaker, cancellation, and
 recovery tests alongside the service.
 
+### Supplier-cost ceilings
+
+A quote that admits external spend returns `supplierCostCeiling`. Core
+validates it, persists it with the quote, and at dispatch admission binds the
+same value immutably to the task (`TaskContext.supplierCostCeiling`; a
+database trigger refuses any later change). Compare every planned supplier
+operation with it before spending:
+
+```typescript
+await runSupplierOperation({
+  serviceId: task.service_id,
+  transactionId: task.id,
+  opKey: `purchase:${task.id}`,
+  kind: "report-supplier.purchase",
+  request: purchase,
+  spend: {
+    ceiling: task.supplierCostCeiling,
+    planned: { supplier: "report-supplier", currency: "USD", amount: purchase.cost },
+  },
+  execute: () => supplier.purchase(purchase),
+  reconcile: () => supplier.findPurchase(purchase.reference),
+});
+```
+
+The check runs after any earlier attempt was reconciled and immediately
+before `execute`. A missing ceiling, another supplier or currency, or an
+amount above `maximumAmount` throws `SupplierCostCeilingError` without calling
+the supplier. Retries, buyer input and reviewed re-execution reuse the
+admitted ceiling; read it with `admittedSupplierCostCeiling(task.metadata)`
+in a worker. A changed supplier price never authorizes another buyer charge.
+No-spend services return no ceiling.
+
 ## 6. Add service configuration
 
 Parse service variables in `src/services/report-builder/config.ts`. Reject

@@ -48,6 +48,12 @@ export interface TaskContext {
   skill_id: string;
   status: string;
   supplierMutationStarted?: boolean;
+  /**
+   * The order's admitted, immutable supplier-spend ceiling (absent for a
+   * no-spend quote). Compare every planned supplier operation with it before
+   * spending: pass it as `spend.ceiling` to `runSupplierOperation`, or call
+   * `assertSupplierSpendWithinCeiling`. Retries reuse this same value.
+   */
   supplierCostCeiling?: SupplierCostCeiling;
 }
 

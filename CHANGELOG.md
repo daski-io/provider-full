@@ -56,6 +56,10 @@ All notable changes to this project will be documented here.
 - Added the optional read-only `requestReadiness` and `intake` adapter hooks,
   quote-time capacity per listing version, and strict supplier-cost ceiling
   validation.
+- Core binds a quoted supplier-cost ceiling immutably to the admitted task
+  (core migration 003) and `runSupplierOperation({ spend })` refuses a
+  planned supplier operation above it, for another supplier or currency, or
+  without an admitted ceiling before the supplier is called.
 - Dispatch now verifies the persisted, nonzero provider quote for both
   pricing modes, including payer, request, listing, price and window
   coverage, and no longer caps how long after its quote a timely-paid order

@@ -3,6 +3,11 @@ import { pool } from "../db/pool.js";
 import type { Queryable } from "../db/queryable.js";
 import { withSessionAdvisoryLock } from "../db/sessionAdvisoryLock.js";
 import { redactSensitiveValue } from "../security/redaction.js";
+import {
+  assertSupplierSpendWithinCeiling,
+  type PlannedSupplierSpend,
+} from "../serviceRegistry/supplierCostCeiling.js";
+import type { SupplierCostCeiling } from "../serviceRegistry/adapterTypes.js";
 import { SupplierOutcomeAmbiguousError } from "./errorClassifier.js";
 
 export { SupplierOutcomeAmbiguousError } from "./errorClassifier.js";
@@ -247,6 +252,15 @@ export interface SupplierOperationArgs<T extends Record<string, unknown>> {
    * marking the operation ambiguous.
    */
   authorizeMutation?: () => Promise<void>;
+  /**
+   * The paid order's admitted supplier-cost ceiling and the spend this
+   * mutation plans. Checked immediately before execute, after any earlier
+   * attempt has been reconciled; a refusal proves execute was not called.
+   */
+  spend?: {
+    ceiling: SupplierCostCeiling | null | undefined;
+    planned: PlannedSupplierSpend;
+  };
   /** Perform the supplier mutation; return what a resume needs. */
   execute: () => Promise<T>;
   /**
@@ -383,6 +397,7 @@ async function runSupplierOperationLocked<T extends Record<string, unknown>>(
 
   let result: T;
   await args.authorizeMutation?.();
+  if (args.spend) assertSupplierSpendWithinCeiling(args.spend.ceiling, args.spend.planned);
   try {
     result = await args.execute();
   } catch (err) {

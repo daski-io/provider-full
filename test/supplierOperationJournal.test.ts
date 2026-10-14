@@ -145,6 +145,7 @@ import {
   fingerprintRequest,
 } from "../src/core/suppliers/operationJournal.js";
 import { SupplierMutationAuthorizationError } from "../src/core/suppliers/errorClassifier.js";
+import { SupplierCostCeilingError } from "../src/core/serviceRegistry/supplierCostCeiling.js";
 
 function opArgs(overrides: Partial<Parameters<typeof runSupplierOperation>[0]> = {}) {
   return {
@@ -211,6 +212,35 @@ describe("runSupplierOperation", () => {
     expect(retry.reconcile).toHaveBeenCalledOnce();
     expect(retry.authorizeMutation).toHaveBeenCalledOnce();
     expect(retry.execute).toHaveBeenCalledOnce();
+  });
+
+  it("refuses a planned spend above the admitted ceiling before the supplier call", async () => {
+    const ceiling = {
+      kind: "supplier-cost-ceiling-v1" as const,
+      supplier: "sample-supplier",
+      currency: "USD",
+      maximumAmount: "4.25",
+    };
+    const over = opArgs({ spend: { ceiling, planned: { supplier: "sample-supplier", currency: "USD", amount: "4.2501" } } });
+    const refusal = await runSupplierOperation(over).catch((error: unknown) => error);
+    expect(refusal).toBeInstanceOf(SupplierCostCeilingError);
+    expect(refusal).toBeInstanceOf(SupplierMutationAuthorizationError);
+    expect(refusal).toMatchObject({ refusal: "ceiling_exceeded", supplier: "sample-supplier" });
+    expect(over.execute).not.toHaveBeenCalled();
+    expect([...h.rows.values()][0]).toMatchObject({ state: "intent", error_code: null });
+
+    // A later attempt reconciles the dangling intent first and spends only
+    // within the same admitted ceiling.
+    const within = opArgs({ spend: { ceiling, planned: { supplier: "sample-supplier", currency: "USD", amount: "4.250" } } });
+    await expect(runSupplierOperation(within)).resolves.toEqual({ orderId: "o-1" });
+    expect(within.reconcile).toHaveBeenCalledOnce();
+    expect(within.execute).toHaveBeenCalledOnce();
+  });
+
+  it("refuses spend when the task has no admitted ceiling", async () => {
+    const args = opArgs({ spend: { ceiling: undefined, planned: { supplier: "sample-supplier", currency: "USD", amount: "0" } } });
+    await expect(runSupplierOperation(args)).rejects.toMatchObject({ refusal: "ceiling_missing" });
+    expect(args.execute).not.toHaveBeenCalled();
   });
 
   it("parks an ambiguous supplier outcome and NEVER blind-retries", async () => {

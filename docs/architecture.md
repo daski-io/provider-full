@@ -189,6 +189,11 @@ logical key and request fingerprint. If the call outcome is ambiguous, the row
 stays ambiguous. A later attempt reconciles authoritative supplier state and
 records a definitive result before continuing. Blind retries are forbidden.
 
+A paid task that may spend externally carries the supplier-cost ceiling its
+quote admitted. Core binds it immutably at admission; the journal compares the
+planned spend with it immediately before every mutation and refuses an
+over-ceiling operation without calling the supplier.
+
 Workers declare heartbeat ids and service invariants through
 `operations.readiness`. Dead letters surface as human reviews rather than
 silently stopping.

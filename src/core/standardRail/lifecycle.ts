@@ -9,6 +9,7 @@ import {
 import { privateKeyToAccount } from "viem/accounts";
 import { pool } from "../db/pool.js";
 import { getAdapter } from "../serviceRegistry/registry.js";
+import { admittedSupplierCostCeiling } from "../serviceRegistry/supplierCostCeiling.js";
 import { getServiceById } from "../db/queries/services.js";
 import { processAdapterResult } from "../engine/taskFinalization.js";
 import { validateTransition } from "../engine/stateMachine.js";
@@ -164,7 +165,7 @@ export class StandardLifecycleService {
       await adapter.cancel({
         ...claimed,
         supplierMutationStarted: claimed.metadata.supplier_mutation_started === true,
-        supplierCostCeiling: claimed.metadata.supplier_cost_ceiling as never,
+        supplierCostCeiling: admittedSupplierCostCeiling(claimed.metadata),
       });
       const completedAt = new Date();
       await this.persistTaskState(claimed, "canceled", null, completedAt);
@@ -187,7 +188,7 @@ export class StandardLifecycleService {
         {
           ...claimed,
           supplierMutationStarted: claimed.metadata.supplier_mutation_started === true,
-          supplierCostCeiling: claimed.metadata.supplier_cost_ceiling as never,
+          supplierCostCeiling: admittedSupplierCostCeiling(claimed.metadata),
         },
         inputText,
         data as Record<string, unknown>,
