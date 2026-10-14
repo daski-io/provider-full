@@ -13,15 +13,24 @@ const h = vi.hoisted(() => ({
   setOnChainId: vi.fn(),
   readContract: vi.fn(),
   getBlockNumber: vi.fn(),
+  getReceipt: vi.fn(),
   finalizedBlock: vi.fn(),
   broadcast: vi.fn(),
+  rebroadcast: vi.fn(),
+  confirm: vi.fn(),
+  revert: vi.fn(),
+  openWrites: vi.fn(),
   waitReceipt: vi.fn(),
   logWarn: vi.fn(),
 }));
 
 vi.mock("../src/core/chain/client.js", () => ({
   CHAIN_MODE_MOCK: false,
-  publicClient: { readContract: h.readContract, getBlockNumber: h.getBlockNumber },
+  publicClient: {
+    readContract: h.readContract,
+    getBlockNumber: h.getBlockNumber,
+    getTransactionReceipt: h.getReceipt,
+  },
   walletClient: {},
 }));
 vi.mock("../src/core/config.js", () => ({
@@ -45,10 +54,16 @@ vi.mock("../src/core/logger.js", () => ({
 }));
 vi.mock("../src/core/chain/providerWriteCoordinator.js", () => ({
   prepareAndBroadcastProviderWrite: h.broadcast,
-  confirmProviderWrite: vi.fn(),
-  revertProviderWrite: vi.fn(),
+  rebroadcastProviderWrite: h.rebroadcast,
+  confirmProviderWrite: h.confirm,
+  revertProviderWrite: h.revert,
+  providerWriteScope: { chainId: 84532, walletAddress: "0x2222222222222222222222222222222222222222" },
+}));
+vi.mock("../src/core/db/queries/providerChainWrites.js", () => ({
+  listOpenProviderWrites: h.openWrites,
 }));
 vi.mock("../src/core/chain/finality.js", () => ({
+  BASE_BLOCK_TIME_MS: 2_000,
   finalityWaitBudgetMs: () => 84_000,
   finalizedReadBlockNumber: h.finalizedBlock,
   waitForCanonicalFinalReceipt: h.waitReceipt,
@@ -139,6 +154,7 @@ beforeEach(() => {
   h.setOnChainId.mockResolvedValue(undefined);
   h.finalizedBlock.mockResolvedValue(100n);
   h.getBlockNumber.mockResolvedValue(111n);
+  h.openWrites.mockResolvedValue([]);
   unregisteredChain();
 });
 
@@ -287,8 +303,11 @@ describe("adopting a registration the chain already has", () => {
     h.listServices.mockImplementation(async () => services().slice(0, 1));
   });
 
-  it("adopts an entry visible at the latest block when the broadcast reverts as already registered", async () => {
-    // Mined at 105: invisible at the finalized depth (100), visible at latest (111).
+  /** Registration mined at 105 by a peer; the finalized depth reaches it at `finalAt`. */
+  function peerRegisteredChain(finalAt: number | null) {
+    const startedAt = Date.now();
+    h.finalizedBlock.mockImplementation(async () =>
+      finalAt !== null && Date.now() - startedAt >= finalAt ? 106n : 100n);
     h.readContract.mockImplementation(async ({ functionName, args, blockNumber }: {
       functionName: string; args: unknown[]; blockNumber: bigint;
     }) => {
@@ -302,18 +321,62 @@ describe("adopting a registration the chain already has", () => {
         default: throw new Error(`unexpected read ${functionName}`);
       }
     });
+  }
+
+  function readsAt(blockNumber: bigint): string[] {
+    return h.readContract.mock.calls
+      .map(([args]) => args as { functionName: string; blockNumber: bigint })
+      .filter((args) => args.blockNumber === blockNumber)
+      .map((args) => args.functionName);
+  }
+
+  it("adopts an entry refused as already registered only once it is final", async () => {
+    peerRegisteredChain(6_000);
     h.broadcast.mockRejectedValue(alreadyRegisteredRevert());
 
-    await expect(reconcileServiceRegistrations()).resolves.toMatchObject({ registered: 1 });
+    const cycle = track(reconcileServiceRegistrations());
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(cycle.settled).toBe(false);
+    expect(h.setOnChainId).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(4_000);
+
+    expect(cycle.value).toMatchObject({ registered: 1 });
     expect(h.setOnChainId).toHaveBeenCalledWith(
       "service-0",
       Buffer.from(serviceId("sample-alpha").slice(2), "hex"),
     );
-    const latestReads = h.readContract.mock.calls
-      .map(([args]) => args as { functionName: string; blockNumber: bigint })
-      .filter((args) => args.blockNumber === 111n)
-      .map((args) => args.functionName);
-    expect(latestReads).toEqual(["exists", "getService"]);
+    // The latest block only shows the entry exists; identity is verified at
+    // the finalized depth, as for this provider's own registrations.
+    expect(readsAt(111n)).toEqual(["exists"]);
+    expect(readsAt(106n)).toEqual(["exists", "getService"]);
+    expect(getServiceRegistrationHealth()).toMatchObject({ ok: true, error: null });
+  });
+
+  it("fails explicitly when an adopted entry never reaches finality", async () => {
+    peerRegisteredChain(null);
+    h.broadcast.mockRejectedValue(alreadyRegisteredRevert());
+
+    const cycle = track(reconcileServiceRegistrations());
+    await vi.advanceTimersByTimeAsync(84_000 + 2_000);
+    expect(cycle.error?.message).toMatch(/did not reach finality within 84000ms/);
+    expect(h.setOnChainId).not.toHaveBeenCalled();
+    expect(readsAt(111n)).toEqual(["exists"]);
+    expect(getServiceRegistrationHealth()).toMatchObject({ ok: false });
+  });
+
+  it("adopts a peer's registration after this replica's duplicate reverts on chain", async () => {
+    peerRegisteredChain(0);
+    h.finalizedBlock.mockResolvedValueOnce(100n).mockResolvedValueOnce(100n);
+    h.broadcast.mockImplementation(async (write: { preflight?: () => Promise<void> }) => {
+      await write.preflight?.();
+      return { id: "duplicate-write", hash: `0x${"bb".repeat(32)}` };
+    });
+    h.waitReceipt.mockResolvedValue({ status: "reverted" });
+
+    await expect(reconcileServiceRegistrations()).resolves.toMatchObject({ registered: 1 });
+    expect(h.revert).toHaveBeenCalledWith("duplicate-write", "canonical_receipt_reverted");
+    expect(h.confirm).not.toHaveBeenCalled();
+    expect(readsAt(106n)).toEqual(["exists", "getService"]);
     expect(getServiceRegistrationHealth()).toMatchObject({ ok: true, error: null });
   });
 
@@ -390,5 +453,123 @@ describe("RegistrationCycleBudget", () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(outcome.settled).toBe(false);
     expect(expired()).toBe(0);
+  });
+});
+
+describe("journaled registration writes", () => {
+  const pendingHash = `0x${"cc".repeat(32)}` as const;
+  const journaled = (status: string, id = "journaled-write", hash: string = pendingHash) =>
+    ({ id, status, transaction_hash: hash, nonce: "7" });
+
+  beforeEach(() => {
+    h.listServices.mockImplementation(async () => services().slice(0, 1));
+  });
+
+  it("resumes a pending registration write instead of signing another", async () => {
+    let mined = false;
+    h.readContract.mockImplementation(async ({ functionName, args }: {
+      functionName: string; args: unknown[];
+    }) => {
+      if (functionName === "computeServiceId") return serviceId("sample-alpha");
+      if (functionName === "exists") return mined;
+      if (functionName === "getService") return record(args[0] as string);
+      throw new Error(`unexpected read ${functionName}`);
+    });
+    h.openWrites.mockResolvedValue([journaled("broadcast")]);
+    h.waitReceipt.mockImplementation(async () => {
+      mined = true;
+      return { status: "success" };
+    });
+
+    await expect(reconcileServiceRegistrations()).resolves.toMatchObject({ registered: 1 });
+    expect(h.broadcast).not.toHaveBeenCalled();
+    expect(h.rebroadcast).not.toHaveBeenCalled();
+    expect(h.waitReceipt).toHaveBeenCalledWith(pendingHash, { timeoutMs: 84_000 });
+    expect(h.confirm).toHaveBeenCalledWith("journaled-write");
+    expect(h.openWrites).toHaveBeenCalledWith(
+      expect.anything(),
+      "service_registration",
+      { type: "service", id: "service-0" },
+    );
+  });
+
+  it("resends a write that never reached the network with its original signed bytes", async () => {
+    h.openWrites.mockResolvedValue([journaled("prepared")]);
+    h.waitReceipt.mockResolvedValue({ status: "success" });
+    h.readContract.mockImplementation(async ({ functionName, args }: {
+      functionName: string; args: unknown[];
+    }) => {
+      if (functionName === "computeServiceId") return serviceId("sample-alpha");
+      if (functionName === "exists") return false;
+      if (functionName === "getService") return record(args[0] as string);
+      throw new Error(`unexpected read ${functionName}`);
+    });
+
+    await expect(reconcileServiceRegistrations()).resolves.toMatchObject({ registered: 1 });
+    expect(h.rebroadcast).toHaveBeenCalledWith("journaled-write");
+    expect(h.broadcast).not.toHaveBeenCalled();
+  });
+
+  it("leaves a write under nonce review to its review instead of signing over it", async () => {
+    h.openWrites.mockResolvedValue([journaled("attention")]);
+    await expect(reconcileServiceRegistrations()).rejects.toThrow(/awaits review of its blocked nonce/);
+    expect(h.broadcast).not.toHaveBeenCalled();
+    expect(h.waitReceipt).not.toHaveBeenCalled();
+  });
+
+  it("settles journaled writes whose receipts are final once the service exists", async () => {
+    h.readContract.mockImplementation(async ({ functionName, args }: {
+      functionName: string; args: unknown[];
+    }) => {
+      if (functionName === "computeServiceId") return serviceId("sample-alpha");
+      if (functionName === "exists") return true;
+      if (functionName === "getService") return record(args[0] as string);
+      throw new Error(`unexpected read ${functionName}`);
+    });
+    h.openWrites.mockResolvedValue([
+      journaled("broadcast", "mined-write", `0x${"01".repeat(32)}`),
+      journaled("broadcast", "reverted-duplicate", `0x${"02".repeat(32)}`),
+      journaled("broadcast", "not-final", `0x${"03".repeat(32)}`),
+      journaled("broadcast", "still-pending", `0x${"04".repeat(32)}`),
+    ]);
+    h.getReceipt.mockImplementation(async ({ hash }: { hash: string }) => {
+      if (hash === `0x${"01".repeat(32)}`) return { status: "success", blockNumber: 90n };
+      if (hash === `0x${"02".repeat(32)}`) return { status: "reverted", blockNumber: 95n };
+      if (hash === `0x${"03".repeat(32)}`) return { status: "success", blockNumber: 105n };
+      throw new Error("transaction receipt not found");
+    });
+
+    await expect(reconcileServiceRegistrations()).resolves.toMatchObject({ registered: 1 });
+    expect(h.confirm.mock.calls).toEqual([["mined-write"]]);
+    expect(h.revert.mock.calls).toEqual([["reverted-duplicate", "canonical_receipt_reverted"]]);
+    expect(h.broadcast).not.toHaveBeenCalled();
+  });
+
+  it("never persists or broadcasts a registration signed after its cycle was abandoned", async () => {
+    let releaseSigning!: () => void;
+    const sent: string[] = [];
+    h.broadcast.mockImplementation(async (write: {
+      callArgs: unknown[];
+      preflight?: () => Promise<void>;
+      persist: () => Promise<boolean | void>;
+    }) => {
+      await write.preflight?.();
+      // Nonce reads, gas estimation and signing outlast the budget.
+      await new Promise<void>((resolve) => { releaseSigning = resolve; });
+      if (await write.persist() === false) {
+        throw new Error("Provider write lost its domain-state persistence claim");
+      }
+      sent.push(write.callArgs[1] as string);
+      return { id: "write", hash: `0x${"aa".repeat(32)}` };
+    });
+
+    const abandoned = track(reconcileServiceRegistrations());
+    await vi.advanceTimersByTimeAsync(45_000);
+    expect(abandoned.error?.message).toMatch(/exceeded 45000ms/);
+    releaseSigning();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sent).toEqual([]);
+    expect(h.waitReceipt).not.toHaveBeenCalled();
+    expect(h.setOnChainId).not.toHaveBeenCalled();
   });
 });

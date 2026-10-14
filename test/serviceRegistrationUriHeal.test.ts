@@ -49,6 +49,11 @@ vi.mock("../src/core/chain/providerWriteCoordinator.js", () => ({
     }))),
   confirmProviderWrite: vi.fn(),
   revertProviderWrite: vi.fn(),
+  rebroadcastProviderWrite: vi.fn(),
+  providerWriteScope: { chainId: 84532, walletAddress: "0x2222222222222222222222222222222222222222" },
+}));
+vi.mock("../src/core/db/queries/providerChainWrites.js", () => ({
+  listOpenProviderWrites: vi.fn(async () => []),
 }));
 vi.mock("../src/core/chain/finality.js", () => ({
   finalityWaitBudgetMs: () => 84_000,

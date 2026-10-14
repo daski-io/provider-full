@@ -142,6 +142,27 @@ export async function getProviderWrite(
   return result.rows[0] ?? null;
 }
 
+/**
+ * Journaled writes for one domain target that have not settled yet, oldest
+ * nonce first. A fee replacement keeps its predecessor's purpose and target,
+ * so the current attempt at each nonce is found here.
+ */
+export async function listOpenProviderWrites(
+  scope: ProviderWriteScope,
+  purpose: ProviderWritePurpose,
+  target: { type: string; id: string },
+): Promise<ProviderChainWriteRow[]> {
+  const result = await pool.query<ProviderChainWriteRow>(
+    `SELECT * FROM provider_chain_writes
+      WHERE chain_id = $1 AND wallet_address = $2 AND purpose = $3
+        AND target_type = $4 AND target_id = $5
+        AND status IN ('prepared','broadcast','attention')
+      ORDER BY nonce, created_at`,
+    [scope.chainId, scope.walletAddress.toLowerCase(), purpose, target.type, target.id],
+  );
+  return result.rows;
+}
+
 export async function getCurrentWriteAtNonce(
   scope: ProviderWriteScope,
   nonce: bigint,

@@ -251,10 +251,14 @@ lease and local writes; it pauses while a transaction the cycle broadcast is
 awaited, and each receipt wait is bounded by the configured confirmations at
 Base's block time plus a margin. A first boot that must register several
 services therefore fits, while a hung read or lease still fails boot with an
-explicit `service registration reconcile exceeded 45000ms` error. A broadcast
-refused as `service already registered` is adopted from the latest block
-after its identity is verified. An abandoned cycle can never mark a later,
-failed reconciliation healthy.
+explicit `service registration reconcile exceeded 45000ms` error. A
+registration this provider already journaled is resumed while its transaction
+is pending, never signed a second time, and journaled writes are marked
+settled once their receipts are final. A broadcast refused as `service already
+registered`, or a duplicate that reverted because another replica registered
+first, is adopted only after the entry reaches the finalized depth and its
+identity is verified there. An abandoned cycle persists and broadcasts
+nothing, and can never mark a later, failed reconciliation healthy.
 
 ## Gateway registration recovery
 
