@@ -218,7 +218,11 @@ through the Daski AgentIndex: a run that stopped between `register()` and the
 index claim is found through the wallet's ERC-721 balance and its `Transfer`
 events. Only an agent minted to the provider wallet is adopted; an agent
 someone else transferred to it is never treated as this provider's
-registration. When the wallet holds agents the scan cannot account for within
+registration, and a wallet holding only such agents stops instead of minting
+a second identity beside them. Re-run with `--agent-id <id>` to register with
+one of them deliberately (its `agentWallet` binding must be restored first),
+or with `--mint-new-agent` to register a new agent alongside them. When the
+wallet holds agents the scan cannot account for within
 `--scan-blocks` (default 500,000 blocks), or several minted to it, it stops
 without sending anything. It also refuses to mint while any transaction from
 the wallet is not yet mined, and it signs a mint at the nonce it read with the

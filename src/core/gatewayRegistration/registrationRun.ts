@@ -26,10 +26,12 @@ export function identityHelperArguments(argv: readonly string[], providerAgentId
       `--agent-id ${agentId} differs from PROVIDER_AGENT_ID ${providerAgentId}; services are registered under PROVIDER_AGENT_ID, so set it to the agent this provider registers with`,
     );
   }
-  if (value("--scan-blocks") !== null) {
-    throw new Error(
-      "--scan-blocks applies only to scripts/register-provider.mjs run directly; daski:register verifies PROVIDER_AGENT_ID instead of searching for an agent",
-    );
+  for (const flag of ["--scan-blocks", "--mint-new-agent"]) {
+    if (argv.includes(flag)) {
+      throw new Error(
+        `${flag} applies only to scripts/register-provider.mjs run directly; daski:register verifies PROVIDER_AGENT_ID instead of searching for or minting an agent`,
+      );
+    }
   }
   return [
     ...(argv.includes("--update-uri") ? ["--update-uri"] : []),

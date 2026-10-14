@@ -21,7 +21,7 @@ const LOG_WINDOW_FLOOR = 500n;
  */
 export function agentSteps({
   pub, account, identity, agentIndex, agentUri, updateUri, agentIdArg, scanBlocks, log,
-  retryOnLag, sendTx, sentSummary,
+  mintNewAgent = false, retryOnLag, sendTx, sentSummary,
 }) {
   const sameAddress = (a, b) => a.toLowerCase() === b.toLowerCase();
   const readIdentity = (functionName, args, extra = {}) =>
@@ -141,8 +141,18 @@ export function agentSteps({
         );
       }
       // Every held agent was transferred in by someone else: none is this
-      // wallet's registration, so none is adopted.
-      log({ step: "identity.foreign", agentIds: transferredIn.map(String), note: "transferred-in agents are not this provider's registration; not adopting them" });
+      // wallet's registration, so none is adopted, and a second identity is
+      // minted next to them only when the operator asks for one.
+      const ids = transferredIn.map(String);
+      if (!mintNewAgent) {
+        throw new RegistrationAbort(
+          `the provider wallet holds ${balance} agent(s) that another wallet transferred to it (${ids.join(", ")}); none is adopted as this provider's registration. ` +
+          "Re-run with --agent-id <id> to register with one of them deliberately (its agentWallet binding must be restored first), " +
+          "or with --mint-new-agent to register a new agent alongside them. Refusing to mint a second agent.",
+          1,
+        );
+      }
+      log({ step: "identity.foreign", agentIds: ids, note: "transferred-in agents are not this provider's registration; --mint-new-agent registers a new one" });
     }
 
     const [confirmedNonce, pendingNonce] = await Promise.all([

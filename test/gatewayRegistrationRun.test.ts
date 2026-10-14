@@ -55,6 +55,8 @@ describe("identity helper arguments", () => {
       .toThrow(/--agent-id 12 differs from PROVIDER_AGENT_ID 42/);
     expect(() => identityHelperArguments(["--scan-blocks", "1000"], 42n))
       .toThrow(/--scan-blocks applies only to scripts\/register-provider\.mjs/);
+    expect(() => identityHelperArguments(["--mint-new-agent"], 42n))
+      .toThrow(/--mint-new-agent applies only to scripts\/register-provider\.mjs/);
   });
 });
 

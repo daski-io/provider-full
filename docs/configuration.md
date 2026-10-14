@@ -118,7 +118,7 @@ artifacts and send transactions. `--service <slug>` narrows the run;
 | Option | Effect |
 | --- | --- |
 | `--check-only` | Read-only forecast of what a run would do for each active service. No migration, identity helper, ServiceRegistry write, signature, broadcast, gateway mutation or database write; database sessions are read-only and gateway access is `GET` only. Sessions start with `-c default_transaction_read_only=on` appended to any `options` from `DATABASE_URL` or `PGOPTIONS`, so a connection pooler must pass startup options through. Exits non-zero when a service is blocked or a promotion would fail. Cannot be combined with `--retire`. |
-| `--agent-id <id>` | Optional and must equal `PROVIDER_AGENT_ID`. The run always pins the identity helper to `PROVIDER_AGENT_ID`, the agent every service is registered under: the helper verifies with `ownerOf` that the provider wallet owns it, and never searches for or mints another agent. `--scan-blocks` is refused here; it applies only to `scripts/register-provider.mjs` run directly. |
+| `--agent-id <id>` | Optional and must equal `PROVIDER_AGENT_ID`. The run always pins the identity helper to `PROVIDER_AGENT_ID`, the agent every service is registered under: the helper verifies with `ownerOf` that the provider wallet owns it, and never searches for or mints another agent. `--scan-blocks` and `--mint-new-agent` are refused here; they apply only to `scripts/register-provider.mjs` run directly. |
 | `--update-uri` | Passed to the identity helper: rewrite a drifted on-chain agent URI. |
 | `--skip-provider-identity` | Skip the identity helper for an already reconciled identity. |
 

@@ -16,6 +16,7 @@ export declare class RegistrationAbort extends Error {
 
 export declare function parseAgentIdArg(argv: readonly string[]): bigint | undefined;
 export declare function parseScanBlocksArg(argv: readonly string[]): bigint;
+export declare function parseMintNewAgentArg(argv: readonly string[]): boolean;
 
 export interface RegistrationStepsOptions {
   pub: unknown;
@@ -29,6 +30,7 @@ export interface RegistrationStepsOptions {
   updateUri?: boolean;
   agentIdArg?: bigint;
   scanBlocks?: bigint;
+  mintNewAgent?: boolean;
   log?: (entry: Record<string, unknown>) => void;
   sleep?: (ms: number) => Promise<void>;
 }

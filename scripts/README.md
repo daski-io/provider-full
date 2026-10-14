@@ -31,8 +31,9 @@ addresses, signer, and funded wallet before use:
   listing, and verifies the wallet binding `register()` made. It finds an
   agent minted to the wallet on the canonical registry (`--agent-id <id>`
   pins one, `--scan-blocks <n>` bounds the event scan), never adopts one
-  transferred in, and never mints while a transaction from the wallet is
-  pending. Every transaction is signed at one nonce, so a send whose answer
+  transferred in, stops rather than minting beside one unless
+  `--mint-new-agent` asks for it, and never mints while a transaction from
+  the wallet is pending. Every transaction is signed at one nonce, so a send whose answer
   was lost is never signed a second time. It sends transactions and may
   spend ETH and USDC. `--update-uri` also changes the on-chain agent URI.
   `npm run daski:register` runs it pinned to `PROVIDER_AGENT_ID`. Its agent

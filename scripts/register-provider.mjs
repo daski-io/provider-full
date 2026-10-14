@@ -11,8 +11,10 @@
 // lookup is only a fast path: it knows a wallet after claim(), a later step,
 // so a run that crashed between register() and claim() must not mint again.
 // Only an agent minted to the wallet is adopted; agents transferred in by
-// someone else are never this provider's registration. A balance the scan
-// cannot account for aborts and asks for --agent-id. A mint is refused while
+// someone else are never this provider's registration, and a wallet holding
+// only such agents stops instead of minting a second identity beside them
+// unless --mint-new-agent asks for one. A balance the scan cannot account
+// for aborts and asks for --agent-id. A mint is refused while
 // the wallet has a transaction not yet mined, and it is signed at the nonce
 // read with the zero balance, so a registration already sent and a new one
 // can never both be mined.
@@ -33,7 +35,7 @@
 // clobbering the live agent's URI.
 //
 // Usage: node scripts/register-provider.mjs [--update-uri] [--agent-id <id>]
-//        [--scan-blocks <n>]
+//        [--scan-blocks <n>] [--mint-new-agent]
 // Reads PROVIDER_WALLET_PRIVATE_KEY + contract addresses from env. The step
 // functions are exported for test/registerProviderIdentity.test.ts, which
 // runs them against a stubbed chain; main() runs only when invoked directly.
@@ -66,6 +68,14 @@ export function parseAgentIdArg(argv) {
   return BigInt(value);
 }
 
+export function parseMintNewAgentArg(argv) {
+  const mint = argv.includes("--mint-new-agent");
+  if (mint && argv.includes("--agent-id")) {
+    throw new RegistrationAbort("--mint-new-agent cannot be combined with --agent-id", 1);
+  }
+  return mint;
+}
+
 export function parseScanBlocksArg(argv) {
   const value = argValue(argv, "--scan-blocks");
   if (value === undefined) return DEFAULT_SCAN_BLOCKS;
@@ -83,7 +93,7 @@ export function parseScanBlocksArg(argv) {
  */
 export function registrationSteps({
   pub, wallet, account, identity, agentIndex, providerRegistry, usdc, agentUri,
-  updateUri = false, agentIdArg, scanBlocks = DEFAULT_SCAN_BLOCKS,
+  updateUri = false, agentIdArg, scanBlocks = DEFAULT_SCAN_BLOCKS, mintNewAgent = false,
   log = (entry) => console.log(JSON.stringify(entry)),
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 }) {
@@ -93,7 +103,7 @@ export function registrationSteps({
   const { retryOnLag, sendTx, sentSummary } = createTransactions({ pub, wallet, account, log, sleep });
   const { heldAgents, ensureAgent, ensureAgentWallet, reconcileUri } = agentSteps({
     pub, account, identity, agentIndex, agentUri, updateUri, agentIdArg, scanBlocks, log,
-    retryOnLag, sendTx, sentSummary,
+    mintNewAgent, retryOnLag, sendTx, sentSummary,
   });
 
   // Bind the provider wallet in Daski's AgentIndex. Optional for settlement
@@ -217,6 +227,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const agentUri = `${providerOrigin.origin}/.well-known/agent.json`;
   const agentIdArg = parseAgentIdArg(argv);
   const scanBlocks = parseScanBlocksArg(argv);
+  const mintNewAgent = parseMintNewAgentArg(argv);
 
   console.error(`[chain] ${CHAIN.name} (${CHAIN.id}) - RPC: ${RPC}`);
 
@@ -230,7 +241,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const steps = registrationSteps({
     pub, wallet, account,
     identity: IDENTITY, agentIndex: AGENT_INDEX, providerRegistry: PROVIDER_REGISTRY, usdc: USDC,
-    agentUri, updateUri: argv.includes("--update-uri"), agentIdArg, scanBlocks,
+    agentUri, updateUri: argv.includes("--update-uri"), agentIdArg, scanBlocks, mintNewAgent,
   });
   return steps.run();
 }

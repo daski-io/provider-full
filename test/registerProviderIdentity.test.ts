@@ -6,6 +6,7 @@ import {
   agentIndexAbi,
   identityAbi,
   parseAgentIdArg,
+  parseMintNewAgentArg,
   parseScanBlocksArg,
   registrationSteps,
 } from "../scripts/register-provider.mjs";
@@ -257,7 +258,22 @@ describe("existing provider identity on the canonical registry", () => {
     expect(stub.state.writes).toEqual([]);
   });
 
-  it("never adopts an agent transferred in by someone else and mints its own", async () => {
+  it("neither adopts an agent transferred in by someone else nor mints a second one beside it", async () => {
+    const stub = chainStub({
+      owners: new Map([[9_000n, WALLET]]),
+      transfers: [{ blockNumber: MINT_BLOCK, tokenId: 9_000n, to: WALLET, from: OTHER }],
+      tokenUri: "https://elsewhere.example/agent.json",
+      receipt: { status: "success", blockNumber: HEAD, logs: [] },
+    });
+    const attempt = stepsFor(stub, { updateUri: true }).steps.ensureAgent();
+    await expect(attempt).rejects.toThrow(
+      /holds 1 agent\(s\) that another wallet transferred to it \(9000\)[\s\S]*--mint-new-agent[\s\S]*Refusing to mint a second agent/,
+    );
+    await expect(attempt).rejects.toMatchObject({ exitCode: 1 });
+    expect(stub.state.writes).toEqual([]);
+  });
+
+  it("mints beside transferred-in agents only when --mint-new-agent asks for it", async () => {
     const topics = encodeEventTopics({
       abi: identityAbi,
       eventName: "Registered",
@@ -270,7 +286,7 @@ describe("existing provider identity on the canonical registry", () => {
       tokenUri: "https://elsewhere.example/agent.json",
       receipt: { status: "success", blockNumber: HEAD, logs: [{ address: IDENTITY, data, topics }] },
     });
-    const { steps, logs } = stepsFor(stub, { updateUri: true });
+    const { steps, logs } = stepsFor(stub, { updateUri: true, mintNewAgent: true });
     await expect(steps.ensureAgent()).resolves.toEqual({ agentId: 5_000n, registeredAt: HEAD });
     // The foreign agent's URI is never rewritten and it is never adopted.
     expect(stub.state.writes.map((write) => write.functionName)).toEqual(["register"]);
@@ -398,5 +414,8 @@ describe("arguments", () => {
     expect(parseScanBlocksArg([])).toBe(DEFAULT_SCAN_BLOCKS);
     expect(parseScanBlocksArg(["--scan-blocks", "4000"])).toBe(4000n);
     expect(() => parseScanBlocksArg(["--scan-blocks", "0"])).toThrow(RegistrationAbort);
+    expect(parseMintNewAgentArg([])).toBe(false);
+    expect(parseMintNewAgentArg(["--mint-new-agent"])).toBe(true);
+    expect(() => parseMintNewAgentArg(["--mint-new-agent", "--agent-id", "7"])).toThrow(RegistrationAbort);
   });
 });
