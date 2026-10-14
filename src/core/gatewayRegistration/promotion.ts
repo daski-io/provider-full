@@ -131,9 +131,7 @@ export async function promoteActiveRuntimeListings(args: {
       logError("activation refused: a reused listing does not reproduce its promoted commitment", {
         serviceSlug: prepared.serviceSlug,
         registrationId: args.view.registrationId,
-        skillId: error.skillId,
-        listingId: error.listingId,
-        fields: error.fields,
+        drifts: error.drifts,
       });
       await markGatewayRegistrationAttention(args.registration, "reused_listing_drift");
     }

@@ -251,7 +251,7 @@ describe("crossCheckActivationCommitments", () => {
       priorHeads,
     });
     expect(check.ok).toBe(false);
-    expect(check.duplicates).toBe(true);
+    expect(check.duplicated).toEqual([FREE_LISTING]);
     expect(check.extra).toEqual(["77777777-7777-4777-8777-777777777777"]);
     const detail = describeCrossCheck(check);
     expect(detail).toContain(
@@ -260,8 +260,37 @@ describe("crossCheckActivationCommitments", () => {
     expect(detail).toContain(`get-quote (${NEW_LISTING}): expected`);
     expect(detail).toContain("reported nothing");
     expect(detail).toContain("reported but not in the view: 77777777-7777-4777-8777-777777777777");
-    expect(detail).toContain("duplicate listing ids");
+    expect(detail).toContain(`reported more than once: ${FREE_LISTING}`);
     expect(detail).not.toMatch(/signature|0x(?:ab){65}/);
+  });
+
+  it("names every drifting reused listing, not only the first", () => {
+    const paidAdmission = paid(INTENT_A);
+    const heads = new Map([
+      ...priorHeads,
+      [paidAdmission.listing.skillId, headFrom(paidAdmission)],
+    ]);
+    let failure: ReusedListingDriftError | null = null;
+    try {
+      crossCheckActivationCommitments({
+        inputs: [
+          { ...inputs(INTENT_B, { skillContractHash: hash("ff") }), gatewayReused: true },
+          {
+            ...paid(INTENT_B),
+            listing: { ...paid(INTENT_B).listing, splitterAddress: address("1e") },
+            gatewayReused: true,
+          },
+        ],
+        reported: [],
+        priorHeads: heads,
+      });
+    } catch (error) {
+      failure = error as ReusedListingDriftError;
+    }
+    expect(failure).toBeInstanceOf(ReusedListingDriftError);
+    expect(failure!.drifts.map((drift) => drift.skillId)).toEqual(["check-availability", "reserve-orbit"]);
+    expect(failure!.message).toContain(`check-availability was reused under listing ${FREE_LISTING}`);
+    expect(failure!.message).toContain(`reserve-orbit was reused under listing ${PAID_LISTING}`);
   });
 
   it("refuses, rather than reports, a reused listing that no longer reproduces its head", () => {

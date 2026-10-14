@@ -14,23 +14,42 @@ export interface ResolvedActivationCommitment {
   reused: boolean;
 }
 
+/** One reused listing that drifted from its admitted commitment. */
+export interface ListingDrift {
+  skillId: string;
+  listingId: string;
+  /** Differing commitment fields; null when no admitted head exists. */
+  fields: readonly string[] | null;
+}
+
+function describeDrift(drift: ListingDrift): string {
+  return drift.fields
+    ? `${drift.skillId} was reused under listing ${drift.listingId} but no longer reproduces its promoted commitment (differs in: ${drift.fields.join(", ")})`
+    : `${drift.skillId} is reported as reused under listing ${drift.listingId}, but no promoted commitment for that listing heads the local runtime catalog`;
+}
+
 /**
  * A reused listing that no longer reproduces its admitted commitment, or a
  * listing the gateway calls reused that this catalog never admitted. Either
- * is identity drift: refused, never adopted. The message names listing ids,
- * skill ids and commitment field names only.
+ * is identity drift: refused, never adopted. `drifts` names every drifting
+ * listing of the activation, the first one also in skillId, listingId and
+ * fields. The message names listing ids, skill ids and commitment field
+ * names only.
  */
 export class ReusedListingDriftError extends Error {
+  readonly drifts: readonly ListingDrift[];
+
   constructor(
     readonly skillId: string,
     readonly listingId: string,
     /** Differing commitment fields; null when no admitted head exists. */
     readonly fields: readonly string[] | null,
+    drifts?: readonly ListingDrift[],
   ) {
-    super(fields
-      ? `${skillId} was reused under listing ${listingId} but no longer reproduces its promoted commitment (differs in: ${fields.join(", ")})`
-      : `${skillId} is reported as reused under listing ${listingId}, but no promoted commitment for that listing heads the local runtime catalog`);
+    const all = drifts ?? [{ skillId, listingId, fields }];
+    super(all.map(describeDrift).join("; "));
     this.name = "ReusedListingDriftError";
+    this.drifts = all;
   }
 }
 
@@ -114,8 +133,8 @@ export interface ActivationCrossCheck {
   verdicts: ActivationCommitmentVerdict[];
   /** Listing ids the gateway reported that the view does not list. */
   extra: string[];
-  /** The gateway reported one listing id more than once. */
-  duplicates: boolean;
+  /** Listing ids the gateway reported more than once. */
+  duplicated: string[];
   ok: boolean;
 }
 
@@ -123,8 +142,9 @@ export interface ActivationCrossCheck {
  * The exact-set cross-check of an activation: one expected commitment per
  * listing in the view, every reported hash equal to it, nothing missing,
  * nothing extra, nothing duplicated. Pure; `priorHeads` is keyed by skill id.
- * Throws ReusedListingDriftError when a reused listing cannot reproduce its
- * admitted commitment: that is a refusal, not a mismatch to report.
+ * Throws ReusedListingDriftError, naming every drifting listing, when a
+ * reused listing cannot reproduce its admitted commitment: that is a
+ * refusal, not a mismatch to report.
  */
 export function crossCheckActivationCommitments(args: {
   inputs: ReadonlyArray<RuntimeCommitmentInputs & { gatewayReused: boolean }>;
@@ -132,16 +152,34 @@ export function crossCheckActivationCommitments(args: {
   priorHeads: ReadonlyMap<string, RuntimeListingHead>;
 }): ActivationCrossCheck {
   const reported = new Map<string, string>();
+  const duplicated = new Set<string>();
   for (const item of args.reported) {
+    if (reported.has(item.listingId)) duplicated.add(item.listingId);
     reported.set(item.listingId, item.runtimeCommitmentHash.toLowerCase());
   }
-  const duplicates = reported.size !== args.reported.length;
-  const verdicts = args.inputs.map(({ gatewayReused, ...inputs }) => {
-    const resolved = resolveActivationCommitment({
-      inputs,
-      priorHead: args.priorHeads.get(inputs.listing.skillId),
-      gatewayReused,
-    });
+  const drifts: ListingDrift[] = [];
+  const resolutions = args.inputs.map(({ gatewayReused, ...inputs }) => {
+    try {
+      return {
+        inputs,
+        resolved: resolveActivationCommitment({
+          inputs,
+          priorHead: args.priorHeads.get(inputs.listing.skillId),
+          gatewayReused,
+        }),
+      };
+    } catch (error) {
+      if (!(error instanceof ReusedListingDriftError)) throw error;
+      drifts.push(...error.drifts);
+      return null;
+    }
+  });
+  if (drifts.length > 0) {
+    const [first] = drifts;
+    throw new ReusedListingDriftError(first!.skillId, first!.listingId, first!.fields, drifts);
+  }
+  const verdicts = resolutions.map((resolution) => {
+    const { inputs, resolved } = resolution!;
     const got = reported.get(inputs.listing.listingId) ?? null;
     return {
       listingId: inputs.listing.listingId,
@@ -158,8 +196,8 @@ export function crossCheckActivationCommitments(args: {
   return {
     verdicts,
     extra,
-    duplicates,
-    ok: !duplicates && extra.length === 0 && verdicts.every((verdict) => verdict.match),
+    duplicated: [...duplicated],
+    ok: duplicated.size === 0 && extra.length === 0 && verdicts.every((verdict) => verdict.match),
   };
 }
 
@@ -174,6 +212,8 @@ export function describeCrossCheck(check: ActivationCrossCheck): string {
     .map((verdict) =>
       `${verdict.skillId} (${verdict.listingId}${verdict.reused ? ", reused" : ""}): expected ${verdict.expected}, reported ${verdict.reported ?? "nothing"}`);
   if (check.extra.length > 0) parts.push(`reported but not in the view: ${check.extra.join(", ")}`);
-  if (check.duplicates) parts.push("duplicate listing ids in the report");
+  if (check.duplicated.length > 0) {
+    parts.push(`reported more than once: ${check.duplicated.join(", ")}`);
+  }
   return parts.join("; ");
 }
