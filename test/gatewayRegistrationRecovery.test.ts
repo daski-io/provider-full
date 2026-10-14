@@ -579,6 +579,41 @@ describe("activation evidence recovery", { timeout: 30_000 }, () => {
   });
 });
 
+describe("skill availability", { timeout: 30_000 }, () => {
+  function pauseSkill(skillId: string): void {
+    gateway.skills = gateway.skills.map((skill) =>
+      skill.skillId === skillId ? { ...skill, acceptingNewOrders: false } : skill);
+  }
+
+  it("never blocks a registration paused or resumed after its preparation", async () => {
+    gateway.activation = "manual";
+    gateway.unavailablePendingReads = 1;
+    await expect(register()).rejects.toThrow(/did not return JSON/);
+    const pending = await localRow();
+    // The gateway keeps the availability its preparation recorded.
+    pauseSkill("track-orbit");
+    gateway.activation = "on-evidence";
+
+    await expect(registerServiceWithGateway(GATEWAY, await service()))
+      .resolves.toMatchObject({ state: "ACTIVE", registrationId: pending.gateway_registration_id });
+  });
+
+  it("still holds a fresh preparation to the card's availability", async () => {
+    gateway.misreportAvailability = true;
+    await expect(register()).rejects.toThrow(/does not match the published skill [a-z-]+ \(mismatched: acceptingNewOrders\)/);
+    expect(h.coordinator!.prepared).toEqual([]);
+  });
+
+  it("prepares a paused skill with the availability the card serves", async () => {
+    pauseSkill("move-orbit");
+    const outcome = await register();
+    expect(outcome).toMatchObject({ state: "ACTIVE" });
+    const listing = gateway.registrations.get(outcome.registrationId)!.prepared.listings
+      .find((item) => item.skillId === "move-orbit")!;
+    expect(listing.acceptingNewOrders).toBe(false);
+  });
+});
+
 describe("verification diagnostics", { timeout: 30_000 }, () => {
   it("name the mismatched prepared fields without exposing signed bodies", async () => {
     gateway.payee = "0x9999999999999999999999999999999999999999";

@@ -54,6 +54,7 @@ export async function verifyRegistrationView(
   context: RegistrationContext,
   view: GatewayRegistrationView,
   intent: ProviderServiceRegistrationIntentEnvelope,
+  options: { freshPreparation?: boolean } = {},
 ): Promise<void> {
   await verifyPreparedRegistration({
     view,
@@ -66,6 +67,7 @@ export async function verifyRegistrationView(
     gatewaySigner: gatewaySigner(),
     publicClient,
     finalizedBlock: context.finalizedBlock,
+    checkAvailability: options.freshPreparation === true,
   });
 }
 
@@ -240,12 +242,13 @@ export async function prepareRegistration(
     return onStaleIntent(reason);
   };
   let view: GatewayRegistrationView;
+  let created: boolean;
   try {
-    view = await postGatewayRegistration(
+    ({ view, created } = await postGatewayRegistration(
       context.gatewayOrigin,
       local.idempotency_key,
       local.canonical_intent,
-    );
+    ));
   } catch (error) {
     const unprepared = unpreparedIntent(error, local, context);
     if (unprepared) return abandon(unprepared.reason, unprepared.attention);
@@ -271,7 +274,7 @@ export async function prepareRegistration(
       `${service.slug}: the gateway answered registration ${view.registrationId} as ${view.state}${view.state === "EVIDENCE_PENDING" ? " with evidence this provider has not persisted" : ""}`,
     );
   }
-  await verifyRegistrationView(context, view, local.canonical_intent);
+  await verifyRegistrationView(context, view, local.canonical_intent, { freshPreparation: created });
   const prepared = await savePreparedRegistration(local, view);
   return view.state === "ACTIVE"
     ? activate(context, service, prepared, view)

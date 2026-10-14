@@ -4,7 +4,11 @@ import type {
   ProviderServiceRegistrationEvidenceEnvelope,
   ProviderServiceRegistrationIntentEnvelope,
 } from "./types.js";
-import { GatewayRegistrationHttpError, requestBoundedJson } from "./wire.js";
+import {
+  GatewayRegistrationHttpError,
+  requestBoundedJson,
+  requestBoundedJsonResponse,
+} from "./wire.js";
 
 // The gateway's service-registration endpoints. Registration and evidence
 // posts are idempotent at the gateway (idempotency key, exact replay); the
@@ -40,12 +44,18 @@ export async function findGatewayRegistrationView(
   }
 }
 
+/**
+ * Post an intent. `created` is true only when the gateway prepared this
+ * registration just now (201) from the card it fetched for this request; a
+ * replay or a refreshed active registration answers 200 with the preparation
+ * it stored earlier.
+ */
 export async function postGatewayRegistration(
   gatewayOrigin: string,
   idempotencyKey: string,
   intent: ProviderServiceRegistrationIntentEnvelope,
-): Promise<GatewayRegistrationView> {
-  return parseGatewayRegistrationView(await requestBoundedJson(
+): Promise<{ view: GatewayRegistrationView; created: boolean }> {
+  const response = await requestBoundedJsonResponse(
     `${gatewayOrigin}/v1/service-registrations`,
     {
       method: "POST",
@@ -55,7 +65,11 @@ export async function postGatewayRegistration(
       },
       body: JSON.stringify(intent),
     },
-  ));
+  );
+  return {
+    view: parseGatewayRegistrationView(response.body),
+    created: response.status === 201,
+  };
 }
 
 export async function postGatewayEvidence(

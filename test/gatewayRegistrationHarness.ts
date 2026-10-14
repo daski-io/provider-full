@@ -69,6 +69,8 @@ export interface SkillDefinition {
   assetAction: boolean;
   /** Bumping it changes the skill contract (and therefore its hash). */
   revision: number;
+  /** Mutable card availability outside the contract; defaults to true. */
+  acceptingNewOrders?: boolean;
 }
 
 export const defaultSkills = (): SkillDefinition[] => [
@@ -122,7 +124,7 @@ export function serviceCard(skills: SkillDefinition[]) {
         skillId: skill.skillId,
         contract,
       }),
-      acceptingNewOrders: true,
+      acceptingNewOrders: skill.acceptingNewOrders ?? true,
       presentation: {
         name: skill.skillId,
         description: skill.skillId,
@@ -237,6 +239,8 @@ export class FakeGateway {
   corruptCommitmentFor: string | null = null;
   /** Reuse prior listings even when the payee changed. */
   reuseAcrossPayees = false;
+  /** Prepare new listings with the opposite of the card's availability. */
+  misreportAvailability = false;
   /** Called with the posted evidence before the gateway processes it. */
   onEvidence: ((evidence: unknown) => Promise<void>) | null = null;
 
@@ -505,7 +509,9 @@ export class FakeGateway {
       skillId: args.skill.skillId,
       skillContractHash: args.skill.skillContractHash,
       paymentRequired: args.skill.contract.paymentRequired,
-      acceptingNewOrders: true,
+      acceptingNewOrders: this.misreportAvailability
+        ? !args.skill.acceptingNewOrders
+        : args.skill.acceptingNewOrders,
       reused: false,
       controlProfile,
     };

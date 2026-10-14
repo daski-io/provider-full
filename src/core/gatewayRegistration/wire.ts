@@ -170,6 +170,14 @@ export async function requestBoundedJson(
   url: string,
   init: RequestInit = {},
 ): Promise<unknown> {
+  return (await requestBoundedJsonResponse(url, init)).body;
+}
+
+/** A bounded JSON request that also reports the success status it answered. */
+export async function requestBoundedJsonResponse(
+  url: string,
+  init: RequestInit = {},
+): Promise<{ status: number; body: unknown }> {
   const response = await fetchRegistration(url, init);
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   if (!contentType.includes("application/json")) {
@@ -199,7 +207,7 @@ export async function requestBoundedJson(
       : null;
     throw new GatewayRegistrationHttpError(response.status, code, detail);
   }
-  return parsed;
+  return { status: response.status, body: parsed };
 }
 
 export function fetchBoundedJson(url: string): Promise<unknown> {

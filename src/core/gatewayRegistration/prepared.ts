@@ -258,6 +258,12 @@ export async function verifyPreparedRegistration(args: {
   gatewaySigner: Address;
   publicClient: any;
   finalizedBlock: bigint;
+  /**
+   * Compare each listing's availability with the card's. Availability is
+   * mutable card state outside listing identity and the gateway keeps it as
+   * it was at preparation, so only a preparation made just now is held to it.
+   */
+  checkAvailability?: boolean;
 }): Promise<void> {
   const prepared = args.view.prepared;
   requireMatches(`gateway prepared the wrong service registration ${args.view.registrationId}`, {
@@ -311,7 +317,8 @@ export async function verifyPreparedRegistration(args: {
       }),
       skillContractHash: listing.skillContractHash === skill.skillContractHash,
       paymentRequired: listing.paymentRequired === skill.contract.paymentRequired,
-      acceptingNewOrders: listing.acceptingNewOrders === skill.acceptingNewOrders,
+      acceptingNewOrders: !args.checkAvailability ||
+        listing.acceptingNewOrders === skill.acceptingNewOrders,
     });
     await verifyControlProfile({
       listing,

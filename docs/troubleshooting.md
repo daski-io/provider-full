@@ -287,6 +287,11 @@ preparation and its splitter rows are stored in one transaction, and a
 continued registration restores any splitter row an older record lacks before
 it deploys or confirms splitters.
 
+Pausing or resuming a skill never blocks a registration in progress. Skill
+availability is mutable card state outside listing identity, and the gateway
+keeps the value it prepared with, so only a preparation the gateway made for
+the current request is checked against the card's availability.
+
 ### Forecast a run first
 
 ```bash
