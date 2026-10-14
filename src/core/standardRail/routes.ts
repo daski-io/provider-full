@@ -1,10 +1,12 @@
 import { Router } from "express";
 import { base, baseSepolia } from "viem/chains";
 import type { Config } from "../config.js";
-import { logError } from "../logger.js";
+import { logError, logWarn } from "../logger.js";
 import { StandardDispatchService } from "./dispatch.js";
+import { DispatchRejectedError } from "./dispatchErrors.js";
 import { StandardLifecycleService } from "./lifecycle.js";
 import { StandardQuoteService } from "./quote.js";
+import { QuoteRefusedError } from "./quoteErrors.js";
 import { assertExactKeys } from "./canonical.js";
 import type {
   SignedEnvelope,
@@ -81,20 +83,28 @@ export function createStandardRailRouter(
     } catch (error) { next(error); }
   });
 
+  // Quote and intake share the admitted quote URL; each answer is either the
+  // signed body or a bounded refusal in the gateway's field-error format.
   router.post("/quote", async (req, res) => {
     try {
-      assertExactKeys(req.body, ["request"], "quote request");
-      const request = (req.body as { request?: unknown }).request;
-      if (!request || typeof request !== "object") {
-        res.status(400).json({ error: "invalid_quote_request" });
-        return;
+      const body = req.body as { request?: unknown } | undefined;
+      if (!body || typeof body !== "object" || Array.isArray(body) ||
+          Object.keys(body).join(",") !== "request") {
+        throw new QuoteRefusedError(400, "envelope");
       }
-      sendSignedJson(res, await quote.quote(request as never));
+      sendSignedJson(res, await quote.handle(body.request));
     } catch (error) {
-      logError("Standard quote rejected", {
-        errorClass: error instanceof Error ? error.name : "UnknownError",
-      });
-      res.status(422).json({ error: "quote_rejected" });
+      const refusal = error instanceof QuoteRefusedError
+        ? error
+        : new QuoteRefusedError(503, "unavailable");
+      if (refusal === error) {
+        logWarn("Standard quote refused", { reason: refusal.reason, status: refusal.status });
+      } else {
+        logError("Standard quote failed", {
+          errorClass: error instanceof Error ? error.name : "UnknownError",
+        });
+      }
+      res.status(refusal.status).json(refusal.body());
     }
   });
 
@@ -122,10 +132,12 @@ export function createStandardRailRouter(
         evidenceBundle,
       }));
     } catch (error) {
+      const reason = error instanceof DispatchRejectedError ? error.reason : undefined;
       logError("Standard dispatch rejected", {
         errorClass: error instanceof Error ? error.name : "UnknownError",
+        ...(reason ? { reason } : {}),
       });
-      res.status(409).json({ error: "dispatch_rejected" });
+      res.status(409).json({ error: "dispatch_rejected", ...(reason ? { reason } : {}) });
     }
   });
 

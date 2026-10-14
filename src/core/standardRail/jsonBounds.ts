@@ -27,6 +27,13 @@ export const RESPONSE_JSON_BUDGET: JsonBudget = {
   maxStringLength: 262_144,
 };
 
+// Signed intake can carry supplier form metadata whose validation maps use
+// long pattern keys; the gateway admits a larger key length for it alone.
+export const INTAKE_RESPONSE_JSON_BUDGET: JsonBudget = {
+  ...RESPONSE_JSON_BUDGET,
+  maxKeyLength: 4_096,
+};
+
 export const UNSAFE_JSON_KEYS: ReadonlySet<string> = new Set([
   "__proto__",
   "constructor",

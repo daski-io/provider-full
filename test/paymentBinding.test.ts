@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { Hex } from "viem";
+import * as paymentBinding from "../src/core/standardRail/paymentBinding.js";
 import {
   assertDepositWithinQuoteWindow,
-  assertDispatchWithinQuoteSettlementWindow,
   assertQuoteWindowPolicy,
   selectDepositAuthorization,
 } from "../src/core/standardRail/paymentBinding.js";
@@ -127,16 +127,12 @@ describe("quote window policy", () => {
   });
 });
 
-describe("dispatch settlement lateness", () => {
-  it("gives the gateway one dispatch deadline after the payment window closes", () => {
-    expect(() => assertDispatchWithinQuoteSettlementWindow(
-      { issuedAt: 1_420 }, { validBefore: 1_120 }, { dispatchDeadlineSeconds: 300 },
-    )).not.toThrow();
-  });
-
-  it("rejects a fresh dispatch that resurrects a stale settlement", () => {
-    expect(() => assertDispatchWithinQuoteSettlementWindow(
-      { issuedAt: 1_421 }, { validBefore: 1_120 }, { dispatchDeadlineSeconds: 300 },
-    )).toThrow("too long after the quote payment window");
+describe("dispatch time after an on-time payment", () => {
+  it("has no provider-side quote-age cap; the deposit block proves timeliness", () => {
+    // The gateway retries initial dispatch on its own recovery clock, so a
+    // timely-paid order may arrive with a fresh envelope days after its quote.
+    expect(Object.keys(paymentBinding)).not.toContain("assertDispatchWithinQuoteSettlementWindow");
+    expect(() => assertDepositWithinQuoteWindow(1_119, { issuedAt: 1_000, validBefore: 1_120 }))
+      .not.toThrow();
   });
 });

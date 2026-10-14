@@ -28,10 +28,13 @@ export function selectDepositAuthorization<T extends AuthorizationUsedLog>(
   return bound[0]!;
 }
 
-/// Settlement must have happened inside the quote's payment window. The
-/// 30-second allowance covers sequencer clock skew ahead of the quoting
-/// clock; a deposit block stamped after validBefore is a stale quote and a
-/// deposit stamped before issuance is a replayed or spliced settlement.
+/// Settlement must have happened inside the quote's payment window, proven
+/// by the authenticated deposit block timestamp rather than the later
+/// dispatch time. The 30-second allowance covers sequencer clock skew ahead
+/// of the quoting clock; a deposit block stamped after validBefore is a late
+/// payment and a deposit stamped before issuance is a replayed or spliced
+/// settlement. A timely payment stays dispatchable after the window closes:
+/// the gateway retries initial dispatch on its own recovery clock.
 export function assertDepositWithinQuoteWindow(
   depositTimestamp: number,
   quote: { issuedAt: number; validBefore: number },
@@ -45,8 +48,9 @@ export function assertDepositWithinQuoteWindow(
 }
 
 /// Dynamic quotes must carry the payment window the provider committed to
-/// in its quote policy; fixed-price outcomes pin both bounds to zero and
-/// take their price from current listing config instead.
+/// in its quote policy. Fixed-price outcomes pin both policy bounds to zero;
+/// their gateway window is bounded by the persisted provider readiness quote
+/// it must fall inside.
 export function assertQuoteWindowPolicy(
   quote: { issuedAt: number; validBefore: number },
   outcome: {
@@ -62,18 +66,5 @@ export function assertQuoteWindowPolicy(
     lifetime > outcome.quoteMaximumLifetimeSeconds
   ) {
     throw new Error("Quote payment window violates the outcome quote policy");
-  }
-}
-
-/// A fresh dispatch signature must not resurrect an old settlement: the
-/// gateway gets one dispatch-deadline period after the quote payment window
-/// closes (finality plus assembly) to deliver the dispatch.
-export function assertDispatchWithinQuoteSettlementWindow(
-  dispatch: { issuedAt: number },
-  quote: { validBefore: number },
-  outcome: { dispatchDeadlineSeconds: number },
-): void {
-  if (dispatch.issuedAt > quote.validBefore + outcome.dispatchDeadlineSeconds) {
-    throw new Error("Dispatch was issued too long after the quote payment window");
   }
 }

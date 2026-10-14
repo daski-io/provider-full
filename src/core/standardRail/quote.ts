@@ -1,21 +1,49 @@
-import { privateKeyToAccount } from "viem/accounts";
-import { getAddress, recoverMessageAddress, type Hex } from "viem";
 import type { ValidateFunction } from "ajv";
+import type { Hex } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
 import { getServiceBySlug } from "../db/queries/services.js";
 import { getAdapter } from "../serviceRegistry/registry.js";
-import { pool } from "../db/pool.js";
-import { assertExactKeys, canonicalHash, SIGNED_ENVELOPE_KEYS, unsignedEnvelopeHash } from "./canonical.js";
+import { parseOptionalSupplierCostCeiling } from "../serviceRegistry/supplierCostCeiling.js";
+import type { FulfillmentAdapter, QuoteResult, SupplierCostCeiling } from "../serviceRegistry/types.js";
+import { canonicalHash } from "./canonical.js";
 import type { ProviderStandardRailConfig } from "./config.js";
-import { compileProviderSchema, validateProviderRequest } from "./schema.js";
-import type { SignedEnvelope } from "./types.js";
+import { verifyGatewayEnvelope } from "./gatewayEnvelope.js";
+import { describeIntake, requestMatchesHash } from "./intake.js";
+import { assertBoundedJsonValue, REQUEST_JSON_BUDGET } from "./jsonBounds.js";
+import { QuoteRefusedError, quoteEnvelopeRefusal, requestInvalid } from "./quoteErrors.js";
+import { providerSchemaFieldErrors, serviceFieldErrors } from "./quoteFieldErrors.js";
+import { assertQuoteCapacity, readinessQuoteLifetimeSeconds } from "./quotePolicy.js";
+import { persistProviderQuote, type ProviderQuotePayload } from "./quoteStore.js";
+import { assertRequestReadiness } from "./requestReadiness.js";
+import { compileProviderSchema } from "./schema.js";
+import type { ProviderOutcomeConfig } from "./types.js";
 
 interface ProviderQuoteRequest {
   outcomeId: string;
   listingManifestHash: Hex;
   requestHash: Hex;
   request: Record<string, unknown>;
+  payer: Hex | null;
 }
 
+const LOWERCASE_ADDRESS = /^0x[0-9a-f]{40}$/;
+const OUT_OF_BOUNDS = {
+  path: "$",
+  rule: "bounds",
+  message: "Request exceeds the accepted document bounds.",
+};
+const SERVICE_DECLINED = {
+  path: "$",
+  rule: "invalid",
+  message: "The request does not satisfy the service contract.",
+};
+
+/**
+ * The provider quote endpoint. It answers signed readiness quotes for fixed
+ * and dynamic listings and, on the same URL, signed intake discovery. A quote
+ * validates the request and service prerequisites, never starts work, and is
+ * persisted with its exact payer before it is signed.
+ */
 export class StandardQuoteService {
   private readonly validators = new Map<string, ValidateFunction>();
 
@@ -28,67 +56,122 @@ export class StandardQuoteService {
     }
   }
 
-  async quote(envelope: SignedEnvelope<ProviderQuoteRequest>): Promise<Record<string, unknown>> {
-    assertExactKeys(envelope, SIGNED_ENVELOPE_KEYS, "quote request envelope");
-    assertExactKeys(envelope.payload, [
-      "outcomeId", "listingManifestHash", "requestHash", "request",
-    ], "quote request payload");
-    const now = Math.floor(Date.now() / 1_000);
-    if (
-      envelope.artifactType !== "ProviderQuoteRequestV1" || envelope.schemaVersion !== 1 ||
-      envelope.environment !== this.config.environment || envelope.chainId !== this.chainId ||
-      envelope.audience !== this.config.providerAudience || envelope.issuedAt > now + 30 ||
-      envelope.validBefore <= now || envelope.validBefore > now + 120
-    ) throw new Error("Quote request envelope is invalid");
-    const signer = await recoverMessageAddress({
-      message: { raw: unsignedEnvelopeHash(envelope as unknown as Record<string, unknown>) },
-      signature: envelope.signature,
-    });
-    if (getAddress(signer) !== this.config.gatewayDispatchSigner) {
-      throw new Error("Quote request signature is invalid");
+  /** Each artifact type has its own handler; neither trusts the other's shape. */
+  async handle(envelope: unknown): Promise<Record<string, unknown>> {
+    const artifactType = envelope && typeof envelope === "object" && !Array.isArray(envelope)
+      ? (envelope as { artifactType?: unknown }).artifactType
+      : undefined;
+    if (artifactType === "ProviderQuoteRequestV1") return this.quote(envelope);
+    if (artifactType === "ProviderIntakeRequestV1") {
+      return describeIntake({
+        config: this.config,
+        chainId: this.chainId,
+        envelope,
+        validatorFor: (outcomeId) => this.validators.get(outcomeId),
+      });
     }
+    throw new QuoteRefusedError(400, "envelope");
+  }
+
+  async quote(value: unknown): Promise<Record<string, unknown>> {
+    const envelope = await verifyGatewayEnvelope<ProviderQuoteRequest>(value, {
+      artifactType: "ProviderQuoteRequestV1",
+      schemaVersion: 1,
+      payloadKeys: ["outcomeId", "listingManifestHash", "requestHash", "request", "payer"],
+      environment: this.config.environment,
+      chainId: this.chainId,
+      audience: this.config.providerAudience,
+      signer: this.config.gatewayDispatchSigner,
+      lifetime: { maxRemainingSeconds: 120, maxAgeSeconds: 120 },
+    }).catch((error: unknown) => { throw quoteEnvelopeRefusal(error); });
     const args = envelope.payload;
-    const outcome = this.config.outcomes.get(args.outcomeId);
-    if (
-      !outcome || outcome.listingManifestHash !== args.listingManifestHash ||
-      outcome.pricingMode !== "dynamic" || canonicalHash(args.request) !== args.requestHash
-    ) throw new Error("Quote request binding is invalid");
-    const validate = this.validators.get(args.outcomeId);
-    if (!validate) throw new Error("Quote outcome schema is unavailable");
-    validateProviderRequest(validate, args.request);
-    const service = await getServiceBySlug(outcome.serviceSlug);
-    if (!service?.is_active) throw new Error("Quote service unavailable");
-    const result = await getAdapter(service.adapter_name).quote(outcome.skillId, args.request);
-    const commissionBps = BigInt(outcome.commissionBps);
-    const minimumReleasableAmount = (10_000n + commissionBps - 1n) / commissionBps;
-    if (!result.ok || result.amount < minimumReleasableAmount) {
-      throw new Error("Provider cannot quote a releasable amount for this request");
+    // The gateway sends a lowercase payer (or null) and compares our echo
+    // literally; a differently cased address is a different signed value.
+    if (args.payer !== null && (typeof args.payer !== "string" || !LOWERCASE_ADDRESS.test(args.payer))) {
+      throw new QuoteRefusedError(400, "envelope");
     }
-    const issuedAt = now;
-    const payload = {
+    if (!args.request || typeof args.request !== "object" || Array.isArray(args.request) ||
+        !requestMatchesHash(args.request, args.requestHash)) {
+      throw new QuoteRefusedError(400, "envelope");
+    }
+    const outcome = this.config.outcomes.get(args.outcomeId);
+    const validate = this.validators.get(args.outcomeId);
+    if (!outcome || !validate || outcome.listingManifestHash !== args.listingManifestHash) {
+      throw new QuoteRefusedError(409, "outcome_policy");
+    }
+    try {
+      assertBoundedJsonValue(args.request, REQUEST_JSON_BUDGET, "Request");
+    } catch {
+      throw requestInvalid([OUT_OF_BOUNDS]);
+    }
+    if (!validate(args.request)) throw requestInvalid(providerSchemaFieldErrors(validate.errors));
+    const service = await getServiceBySlug(outcome.serviceSlug);
+    if (!service?.is_active) throw new QuoteRefusedError(503, "service_unavailable");
+    await assertQuoteCapacity(outcome);
+    const adapter = getAdapter(service.adapter_name);
+    const priced = await this.price(adapter, outcome, args.request);
+    await assertRequestReadiness({
+      adapter, skillId: outcome.skillId, request: args.request, payer: args.payer,
+    });
+    const issuedAt = Math.floor(Date.now() / 1_000);
+    const payload: ProviderQuotePayload = {
       outcomeId: outcome.outcomeId,
       listingManifestHash: outcome.listingManifestHash,
       requestHash: args.requestHash,
-      grossAmount: result.amount.toString(),
+      grossAmount: priced.grossAmount,
+      payer: args.payer,
       issuedAt,
-      validBefore: issuedAt + outcome.quoteMaximumLifetimeSeconds,
+      validBefore: issuedAt + readinessQuoteLifetimeSeconds(outcome),
     };
-    await pool.query(
-      `INSERT INTO standard_provider_quotes
-        (quote_hash,outcome_id,listing_manifest_hash,request_hash,gross_amount,
-         supplier_cost_ceiling,issued_at,valid_before)
-       VALUES ($1,$2,$3,$4,$5,$6,to_timestamp($7),to_timestamp($8))
-       ON CONFLICT (quote_hash) DO NOTHING`,
-      [
-        Buffer.from(canonicalHash(payload).slice(2), "hex"), outcome.outcomeId,
-        Buffer.from(outcome.listingManifestHash.slice(2), "hex"),
-        Buffer.from(args.requestHash.slice(2), "hex"), payload.grossAmount,
-        result.supplierCostCeiling ?? null, payload.issuedAt, payload.validBefore,
-      ],
-    );
+    await persistProviderQuote(payload, {
+      pricingMode: outcome.pricingMode,
+      supplierCostCeiling: priced.supplierCostCeiling,
+    });
     const signature = await privateKeyToAccount(this.config.providerAuthorityPrivateKey).signMessage({
       message: { raw: canonicalHash(payload) },
     });
     return { ...payload, signature };
+  }
+
+  /**
+   * The service validates the request and, for dynamic listings, prices it.
+   * A fixed listing's amount is the admitted listing price: the service may
+   * decline the request but can never change what the buyer pays.
+   */
+  private async price(
+    adapter: FulfillmentAdapter,
+    outcome: ProviderOutcomeConfig,
+    request: Record<string, unknown>,
+  ): Promise<{ grossAmount: string; supplierCostCeiling: SupplierCostCeiling | null }> {
+    let result: QuoteResult;
+    try {
+      result = await adapter.quote(outcome.skillId, structuredClone(request));
+    } catch {
+      throw new QuoteRefusedError(503, "service_unavailable");
+    }
+    if (!result.ok) {
+      const fieldErrors = serviceFieldErrors(Array.isArray(result.errors) ? result.errors : []);
+      throw requestInvalid(fieldErrors.length > 0 ? fieldErrors : [SERVICE_DECLINED]);
+    }
+    if (result.currency !== "USDC" || typeof result.amount !== "bigint" || result.amount <= 0n) {
+      throw new QuoteRefusedError(503, "price");
+    }
+    const amount = outcome.pricingMode === "fixed" ? BigInt(outcome.fixedGrossAmount) : result.amount;
+    if (outcome.pricingMode === "fixed" && result.amount !== amount) {
+      // The service's price no longer matches the admitted listing; selling
+      // at either amount would misprice the order until it is re-registered.
+      throw new QuoteRefusedError(503, "price");
+    }
+    const commissionBps = BigInt(outcome.commissionBps);
+    if (amount < (10_000n + commissionBps - 1n) / commissionBps) {
+      throw new QuoteRefusedError(422, "price");
+    }
+    let supplierCostCeiling: SupplierCostCeiling | null;
+    try {
+      supplierCostCeiling = parseOptionalSupplierCostCeiling(result.supplierCostCeiling);
+    } catch {
+      throw new QuoteRefusedError(503, "service_unavailable");
+    }
+    return { grossAmount: amount.toString(), supplierCostCeiling };
   }
 }

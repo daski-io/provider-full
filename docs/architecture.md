@@ -115,14 +115,18 @@ reads that create no durable product state.
 
 A paid order crosses several independent bindings:
 
-1. The provider quote validates service arguments and returns exact atomic USDC.
+1. The provider quote validates service arguments and returns exact atomic
+   USDC (the admitted listing price for fixed listings). It is persisted with
+   the gateway's exact payer before it is signed and never starts work.
 2. Daski binds the quote to the promoted runtime listing and payment recipe.
 3. The buyer authorizes a standard Exact-EVM USDC transfer.
 4. The facilitator verifies the payment and the gateway records finalized
    standard evidence.
 5. The gateway signs a dispatch committing to the provider, service, skill,
    request, order, payer, audience, and deadline.
-6. The provider verifies all bindings and atomically claims replay state.
+6. The provider verifies all bindings, including the persisted provider quote
+   for both pricing modes and the deposit block's settlement time, and
+   atomically claims replay state.
 7. Core materializes the transaction and invokes the service adapter.
 8. Results, artifacts, asset ownership, status, and terminal evidence are
    persisted.

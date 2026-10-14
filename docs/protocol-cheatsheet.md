@@ -11,7 +11,15 @@ The provider accepts paid work only through the standard Exact-EVM rail.
 4. The gateway independently verifies the deposit event and sends a signed,
    recipe-bound dispatch to the provider.
 5. The provider verifies the gateway signer, audience, order, quote, request
-   hash, policy hashes, deadlines, and replay state before fulfillment.
+   hash, policy hashes, deadlines, and replay state before fulfillment. For
+   both pricing modes it loads the persisted provider quote named by the
+   nonzero `providerQuoteHash` and checks its outcome, listing, request,
+   price, pricing mode and payer (compared as an address; a `null` quote
+   payer admits any payer), and that its window covers the gateway quote.
+   Settlement time is proven by the authenticated deposit block timestamp
+   inside the gateway quote window. There is no provider-side quote-age cap:
+   the gateway may dispatch a timely-paid order with a fresh envelope long
+   after the quote expired.
 6. Provider terminal attestations and chain evidence drive the gateway order
    state machine. Launch payments are not automatically reversed after release.
 
@@ -56,6 +64,47 @@ Those refusals are `400 {"error":"invalid_json"}`,
 Answers are plain `application/json` with `Cache-Control: no-store`; the
 starter installs no compression middleware. Signed bodies are built and
 signed for each request and never cached.
+
+## Quotes and intake
+
+The gateway posts `{"request": envelope}` to the quote URL for fixed and
+dynamic listings alike. Each handler checks the artifact type and schema
+version first, then the environment, chain, provider audience, the
+`gateway-dispatch` signer key id and freshness, and only then the signature;
+several envelope types share that key.
+
+- `ProviderQuoteRequestV1` carries exactly `outcomeId`,
+  `listingManifestHash`, `requestHash`, `request` and `payer` (lowercase hex,
+  or `null` for a payer-unbound readiness check). The answer has exactly
+  `outcomeId`, `listingManifestHash`, `requestHash`, `grossAmount`, `payer`,
+  `issuedAt`, `validBefore` and `signature`, where `payer` echoes the request
+  literally and the signature is EIP-191 over the canonical hash of the other
+  seven fields. That hash is the gateway's nonzero `providerQuoteHash`.
+- A fixed listing's amount is always its admitted price; the service may
+  decline the request but never change the price. Fixed quotes live 120 s;
+  dynamic quotes use the admitted quote policy capped at 180 s. Both leave at
+  least 60 s above the 30 s minimum payment window the gateway requires,
+  strictly, at receipt.
+- Before signing, core validates the request schema and bounds, service
+  availability (sales paused stops quotes), open paid work for the listing
+  version against its capacity, the service `quote()`, a supplier-cost
+  ceiling if one is returned, and the optional read-only `requestReadiness`
+  hook. The quote is persisted with its payer, pricing mode, price, request,
+  listing and window before it is signed. A quote never starts or reserves
+  product work.
+- `ProviderIntakeRequestV1` (payload without `payer`) returns the signed
+  intake contract: `requestSchema`, `requiredFields`, `selectorsRequired`,
+  `normalizedSelectors`, `fieldErrors`, `supported`, `issuedAt`,
+  `validBefore` (60 s). It stores, prices and starts nothing.
+
+Refusals are bounded JSON. `4xx {"error":"quote_rejected","reason":...}`
+declines the request (`envelope`, `envelope_lifetime`, `signature`,
+`outcome_policy`, `request_invalid`, `price`); `request_invalid` adds
+`fieldErrors: [{path, rule, message, allowedValues?}]` derived from the schema
+or from reviewed service text, never from submitted values.
+`503 {"error":"quote_unavailable","reason":...}` means retry later
+(`service_unavailable`, `capacity`, `readiness_unavailable`, `price`,
+`unavailable`).
 
 ## ERC-8004 identity
 

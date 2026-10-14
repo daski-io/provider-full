@@ -276,6 +276,10 @@ business failure.
 - Bound any upstream price request like a fulfillment request.
 - If fulfillment will spend externally, attach a `supplierCostCeiling` that
   commits the maximum supplier cost and currency.
+- Put availability checks that depend on mutable product state in the
+  read-only `requestReadiness` hook. It runs before each new quote with the
+  quote's payer (or `null`) and can only refuse; it must not reserve or
+  start anything, and it is not consulted again after payment.
 - Define what happens when a product quote expires or changes before dispatch.
 - Never return a successful paid quote while a required field or material
   upstream cost is unknown.

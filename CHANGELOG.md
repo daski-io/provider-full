@@ -45,6 +45,21 @@ All notable changes to this project will be documented here.
 - Standard-rail requests are parsed as bounded, uncompressed, strict UTF-8
   JSON with duplicate, prototype-named, oversized, and deeply nested keys
   refused before any handler runs; signed answers are never cached.
+- Fixed and dynamic listings answer the gateway's payer-bound
+  `ProviderQuoteRequestV1` with the exact seven-field signed quote (payer
+  echoed literally), persisted with its payer and pricing mode in core
+  migration 002. Fixed quotes always carry the admitted listing price and
+  live 120 s; dynamic quotes follow the admitted policy, at most 180 s.
+- Quote refusals return gateway-format `fieldErrors` and reviewed reasons
+  instead of a generic 422; signed `ProviderIntakeRequestV1` discovery is
+  answered on the quote URL without creating a quote.
+- Added the optional read-only `requestReadiness` and `intake` adapter hooks,
+  quote-time capacity per listing version, and strict supplier-cost ceiling
+  validation.
+- Dispatch now verifies the persisted, nonzero provider quote for both
+  pricing modes, including payer, request, listing, price and window
+  coverage, and no longer caps how long after its quote a timely-paid order
+  may be dispatched.
 
 ### Fixed
 

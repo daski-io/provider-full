@@ -1,6 +1,7 @@
 import type { AssetRow } from "../db/queries/assets.js";
 import type { ScreeningSubject } from "../screening/types.js";
 import type { Hex } from "viem";
+import type { IntakeDetail, RequestReadiness, RequestReadinessContext } from "./quoteTypes.js";
 
 export interface AdapterArtifact {
   name: string;
@@ -121,4 +122,16 @@ export interface FulfillmentAdapter {
     skillId: string,
     serviceArgs: Record<string, unknown>,
   ): Promise<QuoteResult>;
+  /**
+   * Optional read-only request readiness, run before every new quote after
+   * schema and quote validation. It must not reserve, purchase, or start
+   * anything; core never consults it again after payment.
+   */
+  requestReadiness?(
+    skillId: string,
+    serviceArgs: Record<string, unknown>,
+    context: RequestReadinessContext,
+  ): Promise<RequestReadiness>;
+  /** Optional authenticated intake discovery answered on the quote endpoint. */
+  intake?(skillId: string, selectors: Record<string, unknown>): Promise<IntakeDetail>;
 }

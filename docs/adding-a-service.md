@@ -187,7 +187,28 @@ async quote(
 
 If the price depends on a supplier quote, validate the input first, bound the
 supplier call, and return the exact amount. Use `supplierCostCeiling` when
-fulfillment must prove it stayed within a quoted external-spend ceiling.
+fulfillment must prove it stayed within a quoted external-spend ceiling; core
+validates its exact shape (`kind`, `supplier`, upper-case `currency`, decimal
+`maximumAmount`) and persists it with the quote.
+
+`quote()` runs for fixed listings too. Core always signs the admitted listing
+price for a fixed listing: return the same amount, and use `ok: false` to
+decline a request. A different amount stops new quotes until the listing is
+re-registered. Returned `errors` become the gateway's
+`fieldErrors: [{path, rule, message}]`; keep messages reviewed, buyer-facing
+and free of submitted values.
+
+Two optional, read-only adapter hooks run on the quote endpoint:
+
+- `requestReadiness(skillId, args, { payer, signal })` checks mutable product
+  prerequisites before each new quote and returns `{ ready: true }` or
+  `{ ready: false, fieldErrors }`. `payer` is the quote's lowercase payer or
+  `null`; refuse `null` if the product needs an identified payer. Honor
+  `signal` (core allows 5 s). Never reserve, purchase or start work here, and
+  never rely on it after payment: a funded dispatch is not re-gated by it.
+- `intake(skillId, selectors)` describes context-specific intake
+  requirements (`requiredFields`, `selectorsRequired`, `fieldErrors`,
+  `supported`, `normalizedSelectors`) for signed intake discovery.
 
 Never log request data to debug validation.
 

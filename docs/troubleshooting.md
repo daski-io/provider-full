@@ -405,6 +405,19 @@ Add exactly one import/entry in `src/providerServices.ts`. Do not import the
 service from core or another service. Remove incomplete copied folders before
 Testnet or keep them outside `src/services` while drafting.
 
+### Quote refused with `quote_rejected` or `quote_unavailable`
+
+Read the `reason`. `request_invalid` carries `fieldErrors` from the published
+schema, the service `quote()`, or `requestReadiness`; fix the request.
+`envelope`, `envelope_lifetime` and `signature` mean the gateway envelope does
+not match this provider's environment, chain, audience, signer or clock;
+compare the signed artifacts and host time instead of loosening checks.
+`price` on a fixed listing means the service quoted a different amount than
+the admitted listing: re-register the changed contract. `service_unavailable`
+(sales paused or the service failed), `capacity` (open paid work for this
+listing version fills `maxOpenOrders`) and `readiness_unavailable` clear on
+their own once the condition ends.
+
 ### Quote succeeds but execute rejects input
 
 Quote and execute must call the same deterministic validation. Keep validation

@@ -23,10 +23,7 @@ import { encryptString } from "../chain/encryption.js";
 import { assertExactKeys, canonicalHash, SIGNED_ENVELOPE_KEYS, unsignedEnvelopeHash } from "./canonical.js";
 import type { ProviderStandardRailConfig } from "./config.js";
 import { ProviderEvidenceVerifier } from "./evidence.js";
-import {
-  assertDispatchWithinQuoteSettlementWindow,
-  assertQuoteWindowPolicy,
-} from "./paymentBinding.js";
+import { loadAdmittedProviderQuote, verifyGatewayQuote } from "./dispatchQuoteBinding.js";
 import type {
   SignedEnvelope,
   DispatchStatusQueryV1,
@@ -42,6 +39,7 @@ import { fetchStandardTaskResponse } from "../a2a/responseBuilder.js";
 import { admitStandardEvidence } from "./evidenceAdmissions.js";
 import { recordStandardSecurityIncident } from "./incidents.js";
 import { STANDARD_DISPATCH_PAYLOAD_KEYS } from "./dispatchContract.js";
+import { DispatchRejectedError } from "./dispatchErrors.js";
 
 const bytes = (value: Hex): Buffer => Buffer.from(value.slice(2), "hex");
 
@@ -150,13 +148,14 @@ export class StandardDispatchService {
     if (forbiddenPayers.includes(getAddress(dispatch.payer).toLowerCase())) {
       throw new Error("Known provider or operational self-purchase is forbidden");
     }
-    await this.verifyQuote(args.quote, dispatch, outcome);
-    const admittedQuote = await this.loadProviderQuote(args.quote, dispatch, outcome);
-    if (
-      (outcome.pricingMode === "fixed" && dispatch.grossAmount !== outcome.fixedGrossAmount) ||
-      (outcome.pricingMode === "dynamic" && !admittedQuote)
-    ) throw new Error("Dispatch price is not admitted by the provider offer");
-    const supplierCostCeiling = admittedQuote?.supplierCostCeiling ?? null;
+    await verifyGatewayQuote({
+      config: this.config, chainId: this.chainId, envelope: args.quote, dispatch, outcome,
+    });
+    if (outcome.pricingMode === "fixed" && dispatch.grossAmount !== outcome.fixedGrossAmount) {
+      throw new DispatchRejectedError("price", "Dispatch price is not the admitted fixed price");
+    }
+    const admittedQuote = await loadAdmittedProviderQuote({ quote: args.quote, dispatch, outcome });
+    const supplierCostCeiling = admittedQuote.supplierCostCeiling;
     const validate = this.requestValidators.get(outcome.outcomeId);
     if (!validate) throw new Error("Provider outcome validator is unavailable");
     validateProviderRequest(validate, args.request);
@@ -186,6 +185,7 @@ export class StandardDispatchService {
     if (!skill?.is_active) throw new Error("Outcome skill is not active");
     const claimed = await this.claim({
       dispatch, dispatchHash, request: args.request, outcome, supplierCostCeiling,
+      providerQuoteHash: admittedQuote.quoteHash,
     });
     if (claimed.existing) {
       return this.signedResponse(claimed.taskId, dispatchHash, claimed.state);
@@ -385,49 +385,6 @@ export class StandardDispatchService {
     }
   }
 
-  private async verifyQuote(
-    envelope: SignedEnvelope<QuoteV1>,
-    dispatch: StandardRailDispatchV2,
-    outcome: ProviderOutcomeConfig,
-  ): Promise<void> {
-    assertExactKeys(envelope, SIGNED_ENVELOPE_KEYS, "quote envelope");
-    assertExactKeys(envelope.payload, [
-      "listingManifestHash", "providerOfferHash", "providerQuoteHash",
-      "canonicalRequestHash", "grossAmount",
-      "token", "splitter", "orderNonce", "issuedAt", "validBefore",
-    ], "quote payload");
-    const now = Math.floor(Date.now() / 1_000);
-    if (
-      envelope.artifactType !== "QuoteV1" || envelope.schemaVersion !== 1 ||
-      envelope.environment !== this.config.environment || envelope.chainId !== this.chainId ||
-      envelope.audience !== this.config.gatewayAudience || envelope.issuedAt !== envelope.payload.issuedAt ||
-      envelope.validBefore !== envelope.payload.validBefore || envelope.issuedAt > now + 30 ||
-      envelope.validBefore <= envelope.issuedAt || canonicalHash(envelope) !== dispatch.quoteHash
-    ) throw new Error("Quote envelope domain or lifetime is invalid");
-    const recovered = await recoverMessageAddress({
-      message: { raw: unsignedEnvelopeHash(envelope as unknown as Record<string, unknown>) },
-      signature: envelope.signature,
-    });
-    if (getAddress(recovered) !== this.config.gatewayQuoteSigner) {
-      throw new Error("Quote signature is invalid");
-    }
-    const quote = envelope.payload;
-    if (
-      quote.listingManifestHash !== dispatch.listingManifestHash ||
-      quote.providerOfferHash !== dispatch.providerOfferHash ||
-      !/^0x[0-9a-fA-F]{64}$/.test(quote.providerQuoteHash) ||
-      (outcome.pricingMode === "fixed") !==
-        (quote.providerQuoteHash.toLowerCase() === `0x${"00".repeat(32)}`) ||
-      quote.canonicalRequestHash !== dispatch.canonicalRequestHash ||
-      quote.grossAmount !== dispatch.grossAmount ||
-      getAddress(quote.token) !== getAddress(outcome.token) ||
-      getAddress(quote.splitter) !== getAddress(outcome.splitter) ||
-      quote.orderNonce !== dispatch.orderNonce
-    ) throw new Error("Quote does not bind the dispatched order");
-    assertQuoteWindowPolicy(envelope, outcome);
-    assertDispatchWithinQuoteSettlementWindow(dispatch, envelope, outcome);
-  }
-
   private async findExistingClaim(
     gatewayAudience: string,
     orderId: string,
@@ -448,6 +405,7 @@ export class StandardDispatchService {
     request: Record<string, unknown>;
     outcome: ProviderOutcomeConfig;
     supplierCostCeiling: SupplierCostCeiling | null;
+    providerQuoteHash: Hex;
   }): Promise<{ taskId: string; state: string; existing: boolean }> {
     const client = await pool.connect();
     try {
@@ -504,8 +462,9 @@ export class StandardDispatchService {
       });
       await client.query(
         `INSERT INTO standard_dispatch_claims
-          (gateway_audience,order_id,dispatch_nonce,dispatch_hash,request_hash,payer,state)
-         VALUES ($1,$2,$3,$4,$5,$6,'claimed')`,
+          (gateway_audience,order_id,dispatch_nonce,dispatch_hash,request_hash,payer,state,
+           provider_quote_hash)
+         VALUES ($1,$2,$3,$4,$5,$6,'claimed',$7)`,
         [
           args.dispatch.gatewayAudience,
           args.dispatch.orderId,
@@ -513,6 +472,7 @@ export class StandardDispatchService {
           bytes(args.dispatchHash),
           bytes(args.dispatch.canonicalProviderRequestHash),
           args.dispatch.payer,
+          bytes(args.providerQuoteHash),
         ],
       );
       await client.query(
@@ -603,30 +563,6 @@ export class StandardDispatchService {
       }),
     } : undefined;
     return { taskId, dispatchHash, signature, state: resolvedState, terminalAttestation };
-  }
-
-  private async loadProviderQuote(
-    quote: SignedEnvelope<QuoteV1>,
-    dispatch: StandardRailDispatchV2,
-    outcome: ProviderOutcomeConfig,
-  ): Promise<{ supplierCostCeiling: SupplierCostCeiling | null } | null> {
-    if (outcome.pricingMode === "fixed") return null;
-    const result = await pool.query<{ supplier_cost_ceiling: SupplierCostCeiling | null }>(
-      `SELECT supplier_cost_ceiling
-         FROM standard_provider_quotes
-        WHERE quote_hash=$1 AND outcome_id=$2 AND listing_manifest_hash=$3
-          AND request_hash=$4 AND gross_amount=$5
-          AND issued_at<=to_timestamp($6) AND valid_before>=to_timestamp($7)`,
-      [
-        bytes(quote.payload.providerQuoteHash), outcome.outcomeId,
-        bytes(dispatch.listingManifestHash),
-        bytes(dispatch.canonicalProviderRequestHash), dispatch.grossAmount,
-        quote.issuedAt, quote.validBefore,
-      ],
-    );
-    return result.rows[0]
-      ? { supplierCostCeiling: result.rows[0].supplier_cost_ceiling }
-      : null;
   }
 
   private async resolveAsset(args: {
