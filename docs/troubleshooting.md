@@ -229,6 +229,15 @@ to `PROVIDER_AGENT_ID`, refuses a different `--agent-id`, and never searches
 for or mints an agent; run the helper directly to find or mint one. Never
 mint a replacement to get past this message.
 
+### Identity helper stops after an unconfirmed send
+
+Every transaction the helper sends is signed at one nonce read before the
+first attempt, so retrying a send whose answer was lost repeats that
+transaction and never signs a second one (a second mint or listing fee). When
+the retries are refused and the nonce is already used, it stops with `may
+already have been sent at nonce <n>`. Wait until the wallet's pending
+transactions are mined and run it again; steps already on chain are skipped.
+
 ### Identity helper reports no `agentWallet`
 
 The canonical registry binds the registering wallet in `register()`, and the

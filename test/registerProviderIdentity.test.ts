@@ -38,6 +38,7 @@ function chainStub(overrides: Partial<{
   receipt: unknown;
   nonces: { confirmed: number; pending: number };
   tokenUri: string;
+  lostSends: number;
 }> = {}) {
   const state = {
     head: HEAD,
@@ -52,6 +53,8 @@ function chainStub(overrides: Partial<{
     receipt: null as unknown,
     nonces: { confirmed: 5, pending: 5 },
     tokenUri: AGENT_URI,
+    // Sends the node accepts but whose answer is lost.
+    lostSends: 0,
     reads: [] as Array<{ functionName: string; args?: readonly unknown[]; blockNumber?: bigint }>,
     nonceReads: [] as Array<{ blockNumber?: bigint; blockTag?: string }>,
     logQueries: [] as Array<{ fromBlock: bigint; toBlock: bigint }>,
@@ -106,6 +109,15 @@ function chainStub(overrides: Partial<{
   const wallet = {
     async writeContract(params: { functionName: string; nonce?: number }) {
       state.writes.push(params);
+      if (state.lostSends > 0) {
+        // The node accepted the transaction; its answer never arrived.
+        state.lostSends -= 1;
+        if (params.nonce === state.nonces.pending) state.nonces.pending += 1;
+        throw new Error("The request took too long to respond.");
+      }
+      if (params.nonce !== undefined && params.nonce < state.nonces.pending) {
+        throw new Error("nonce too low");
+      }
       if (!state.receipt) throw new Error("no transaction expected");
       return "0xtxhash";
     },
@@ -285,6 +297,28 @@ describe("existing provider identity on the canonical registry", () => {
     await expect(stepsFor(stub, { scanBlocks: 100_000n }).steps.ensureAgent())
       .rejects.toThrow(/holds 2 agent\(s\)[\s\S]*0 minted to it \(none\) of 1 found/);
     expect(stub.state.writes).toEqual([]);
+  });
+});
+
+describe("transaction sends", () => {
+  it("retry a send whose answer was lost at its own nonce, never as a second transaction", async () => {
+    const stub = chainStub({
+      lostSends: 1,
+      receipt: { status: "success", blockNumber: HEAD, logs: [] },
+    });
+    const attempt = stepsFor(stub).steps.ensureIndexed(AGENT_ID);
+    await expect(attempt).rejects.toThrow(
+      /index\.claim may already have been sent at nonce 5[\s\S]*Nothing was sent before it\./,
+    );
+    await expect(attempt).rejects.toMatchObject({ exitCode: 2 });
+    expect(stub.state.writes.length).toBeGreaterThan(1);
+    expect(new Set(stub.state.writes.map((write) => write.nonce))).toEqual(new Set([5]));
+  });
+
+  it("signs every transaction at the wallet's next nonce", async () => {
+    const stub = chainStub({ receipt: { status: "success", blockNumber: HEAD, logs: [] } });
+    await stepsFor(stub).steps.ensureIndexed(AGENT_ID);
+    expect(stub.state.writes).toEqual([expect.objectContaining({ functionName: "claim", nonce: 5 })]);
   });
 });
 

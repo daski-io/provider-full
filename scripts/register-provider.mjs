@@ -149,9 +149,35 @@ export function registrationSteps({
 
   // Labels of every transaction this run handed to the network.
   const sent = [];
+  const sentSummary = () =>
+    sent.length === 0 ? "Nothing was sent." : `This run already sent: ${sent.join(", ")}.`;
 
+  // Every transaction is signed at one nonce, read once before the first
+  // attempt. A retry after a send whose answer was lost can then only repeat
+  // that transaction, never sign a second one at the next nonce (a second
+  // mint, a second listing fee). When the retries are refused and the nonce
+  // has been used, the first send may have reached the network: the run
+  // stops, and a re-run skips every step already on chain.
   async function sendTx(label, params) {
-    const hash = await retryOnLag(label, () => wallet.writeContract(params));
+    const nonce = params.nonce ?? await retryOnLag(`${label}.nonce`, () =>
+      pub.getTransactionCount({ address: account.address, blockTag: "pending" }));
+    let hash;
+    try {
+      hash = await retryOnLag(label, () => wallet.writeContract({ ...params, nonce }));
+    } catch (err) {
+      const pendingNonce = await pub
+        .getTransactionCount({ address: account.address, blockTag: "pending" })
+        .catch(() => undefined);
+      if (pendingNonce !== undefined && pendingNonce > nonce) {
+        throw new RegistrationAbort(
+          `${label} may already have been sent at nonce ${nonce}, but its send was not confirmed. ` +
+          "Wait until the wallet's pending transactions are mined, then re-run; steps already on chain are skipped. " +
+          (sent.length === 0 ? "Nothing was sent before it." : `Sent before it: ${sent.join(", ")}.`),
+          2,
+        );
+      }
+      throw err;
+    }
     sent.push(label);
     log({ step: `${label}.sent`, hash });
     const receipt = await pub.waitForTransactionReceipt({ hash });
@@ -336,7 +362,7 @@ export function registrationSteps({
       `agent ${agentId} has no agentWallet on the canonical registry. The registry binds the registering wallet in register() ` +
       "and no longer exposes walletRotationNonce(), which the former SetAgentWallet consent flow needed, so this script cannot " +
       "bind one; binding a wallet after the fact is a separate decision. " +
-      (sent.length === 0 ? "Nothing was sent." : `This run already sent: ${sent.join(", ")}.`),
+      sentSummary(),
       2,
     );
   }
