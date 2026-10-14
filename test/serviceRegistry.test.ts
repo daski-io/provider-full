@@ -150,6 +150,35 @@ describe("serviceRegistry: in-process surface", () => {
     );
     expect(upsertServiceMock).not.toHaveBeenCalled();
   });
+
+  it("refuses a fulfillment window a lost initial dispatch could not survive", async () => {
+    const skill = (deadlines: { dispatchSeconds?: number; fulfillmentSeconds?: number }) => makeModule({
+      skills: [{
+        id: "short-window",
+        name: "Short window",
+        description: "Deadline validation.",
+        examples: ["Run it"],
+        pricing: { USDC: { type: "one-time", fixed_amount: "1000" } },
+        requiresAssetOwnership: false,
+        inputSchema: emptySchema,
+        resultSchema: emptySchema,
+        deadlines,
+      }],
+      protocol: { docs: { service: "# Test", skills: { "short-window": "# Short window" } } },
+    });
+    // The gateway replaces an unanswered envelope only after validBefore
+    // (dispatchSeconds) + 60 s; the replacement then needs its answer budget.
+    await expect(registerService(skill({ dispatchSeconds: 300, fulfillmentSeconds: 120 })))
+      .rejects.toThrow(/fulfillmentSeconds must be at least 600/);
+    await expect(registerService(skill({ dispatchSeconds: 300, fulfillmentSeconds: 599 })))
+      .rejects.toThrow(/at least 600 \(dispatchSeconds \+ 60 \+ 120 \+ 120\)/);
+    await expect(registerService(skill({ fulfillmentSeconds: 599 }))).rejects.toThrow(/at least 600/);
+    await expect(registerService(skill({ dispatchSeconds: 29 }))).rejects.toThrow(/dispatchSeconds/);
+    await expect(registerService(skill({ fulfillmentSeconds: 31_536_001 }))).rejects.toThrow(/fulfillmentSeconds/);
+    expect(upsertServiceMock).not.toHaveBeenCalled();
+    await expect(registerService(skill({ dispatchSeconds: 300, fulfillmentSeconds: 600 }))).resolves.toBeUndefined();
+    await expect(registerService(skill({}))).resolves.toBeUndefined();
+  });
 });
 
 describe("serviceRegistry: agent_domain defaulting", () => {

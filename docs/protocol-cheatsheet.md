@@ -26,6 +26,22 @@ The provider accepts paid work only through the standard Exact-EVM rail.
 There is no provider payment endpoint, local facilitator, native settlement
 router, or alternate payment-rail selector.
 
+## Published skill contracts
+
+Each paid skill's AgentCard contract carries exactly the gateway's closed key
+set `inputSchema, resultSchema, pricing, paymentRequired,
+requiresAssetOwnership, assetType, fulfillmentMode, purchaseReadiness,
+capacity, deadlines, assetAction`; the gateway refuses a registration missing
+any of them. `purchaseReadiness` is always `null` (no payer-DNS purchase
+prerequisite in generic core) and `deadlines` always names both
+`dispatchSeconds` (default 300) and `fulfillmentSeconds` (default 2,592,000).
+Registration refuses `fulfillmentSeconds < dispatchSeconds + 300`: a lost
+initial dispatch is replaced only after `validBefore + 60 s`, answered within
+the 120-second synchronous budget, plus a reviewed 120-second margin, and the
+gateway stops re-dispatching `fulfillmentSeconds` after it observed the
+release. Every key is hashed into `skillContractHash`; a changed contract is a
+new version that re-registers through `npm run daski:register`.
+
 ## Direct A2A methods
 
 `POST /a2a/:serviceSlug` accepts JSON-RPC `SendMessage` only for admitted,

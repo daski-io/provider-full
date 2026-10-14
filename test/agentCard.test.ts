@@ -168,6 +168,23 @@ describe("agent card generator", () => {
     expect(registered?.acceptingNewOrders).toBe(true);
   });
 
+  it("publishes exactly the gateway's closed skill contract key set", () => {
+    const card = generateAgentCard(makeService(), [makeSkill()]);
+    const ext = card.extensions[DASKI_CONTRACT_EXT_URI] as {
+      skills: Array<{ skillId: string; skillContractHash: string; contract: Record<string, unknown> }>;
+    };
+    for (const skill of ext.skills) {
+      // gateway serviceRegistration/card.ts refuses a contract missing any key.
+      expect(Object.keys(skill.contract).sort()).toEqual([
+        "assetAction", "assetType", "capacity", "deadlines", "fulfillmentMode", "inputSchema",
+        "paymentRequired", "pricing", "purchaseReadiness", "requiresAssetOwnership", "resultSchema",
+      ]);
+      expect(skill.contract.purchaseReadiness).toBeNull();
+      // Both deadlines are explicit: the gateway's sealed defaults when undeclared.
+      expect(skill.contract.deadlines).toEqual({ dispatchSeconds: 300, fulfillmentSeconds: 2_592_000 });
+    }
+  });
+
   it("emits service taxonomy and per-skill fulfillment without the legacy category", () => {
     const card = generateAgentCard(makeService(), [
       makeSkill({ fulfillment_mode: "automated" }),

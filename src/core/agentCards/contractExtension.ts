@@ -1,14 +1,26 @@
-import { canonicalHash } from "../standardRail/canonical.js";
+import { assertExactKeys, canonicalHash } from "../standardRail/canonical.js";
 import { config } from "../config.js";
 import type { ServiceRow } from "../db/queries/services.js";
 import type { SkillRow } from "../db/queries/skills.js";
 import { isPaymentRequired } from "../pricing/index.js";
+import { skillDeadlines } from "../serviceRegistry/deadlines.js";
 import type {
   ServiceModule,
   SkillDefinition,
 } from "../serviceRegistry/types.js";
 
 export const DASKI_CONTRACT_EXTENSION_URI = "https://daski.io/a2a/v2";
+
+/**
+ * The gateway parses a published skill contract with exactly these keys
+ * (serviceRegistration/card.ts) and refuses a registration missing any of
+ * them. Every key is part of the skill contract hash.
+ */
+export const PUBLISHED_SKILL_CONTRACT_KEYS = [
+  "inputSchema", "resultSchema", "pricing", "paymentRequired",
+  "requiresAssetOwnership", "assetType", "fulfillmentMode", "purchaseReadiness",
+  "capacity", "deadlines", "assetAction",
+] as const;
 
 export interface PublishedSkillContract {
   skillId: string;
@@ -42,10 +54,15 @@ function publishedContract(
     assetType: definition.assetType ?? null,
     fulfillmentMode:
       definition.fulfillmentMode ?? module.manifest.defaultFulfillmentMode,
+    // Generic core has no payer-DNS purchase prerequisite.
+    purchaseReadiness: null,
     capacity: definition.capacity ?? { maxOpenOrders: 100 },
-    deadlines: definition.deadlines ?? {},
+    // Both deadlines are always published so the contract states the window
+    // registration validated (serviceRegistry/deadlines.ts).
+    deadlines: skillDeadlines(definition),
     assetAction: definition.assetAction ?? null,
   };
+  assertExactKeys(contract, PUBLISHED_SKILL_CONTRACT_KEYS, `skill ${definition.id} contract`);
   const skillContractHash = canonicalHash({
     schemaVersion: 1,
     serviceSlug: module.manifest.slug,

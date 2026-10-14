@@ -308,3 +308,14 @@ Contact onboarding before changing a reviewed:
 Treat a coordinated artifact revision as one atomic set. Keep the previous
 release available until the new candidate has passed Testnet and the intended
 environment's approval process.
+
+This release changes every published skill contract: it adds the gateway's
+required `purchaseReadiness: null` and always publishes both deadlines (an
+undeclared one takes the gateway default, `dispatchSeconds: 300`,
+`fulfillmentSeconds: 2592000`). The dummy `echo` contract hash moves from
+`0xb4c348ff…8ea4` to `0x5daf51e3…b4f9` and `create-note` from
+`0x0163d987…a035` to `0xe23243e3…bef9`; the old contracts were refused by the
+gateway's closed-key parser. Re-register every changed service through the
+normal reviewed `npm run daski:register` workflow so the gateway preparation
+and runtime commitments match the new contracts. Never edit catalog rows or
+re-sign an issued artifact to match.

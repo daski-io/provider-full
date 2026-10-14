@@ -133,17 +133,36 @@ export const reportSkillContracts: Record<string, SkillContractDefinition> = {
       summary: schema.string(2_000),
     }, ["reportId", "summary"]),
     capacity: { maxOpenOrders: 20 },
-    deadlines: { dispatchSeconds: 300, fulfillmentSeconds: 120 },
+    deadlines: { dispatchSeconds: 300, fulfillmentSeconds: 86_400 },
   },
 };
 ```
+
+Core publishes every contract with the gateway's closed key set
+(`inputSchema, resultSchema, pricing, paymentRequired, requiresAssetOwnership,
+assetType, fulfillmentMode, purchaseReadiness, capacity, deadlines,
+assetAction`), with `purchaseReadiness: null` because generic core has no
+payer-DNS purchase prerequisite, and always publishes both deadlines. An
+undeclared deadline takes the gateway's sealed default (`dispatchSeconds: 300`,
+`fulfillmentSeconds: 2592000`). Registration refuses a `fulfillmentSeconds`
+below `dispatchSeconds + 300`: when an initial dispatch is lost, the gateway may
+replace it only after the envelope's `validBefore` (`dispatchSeconds`) plus 60
+seconds, the replacement is fulfilled synchronously within the gateway's
+120-second provider timeout, and core keeps a reviewed 120-second margin for
+refusal backoff, status polling, transport timeouts and clock tolerance. The
+gateway stops re-dispatching a paid order once `fulfillmentSeconds` have
+passed since it observed the release, so a shorter window makes a lost
+dispatch unrecoverable. Declare the window your slowest legitimate fulfilment
+needs, including queueing, retries and human review.
 
 Rules enforced at registration include:
 
 - service, type, and skill ids use stable kebab-case;
 - jurisdiction is `global` alone or unique ISO 3166-1/3166-2 codes;
 - each skill has valid pricing and fulfillment mode;
-- every skill has non-placeholder documentation; and
+- every skill has non-placeholder documentation;
+- `dispatchSeconds` is 30 to 86,400 and `fulfillmentSeconds` is at least
+  `dispatchSeconds + 300` (at most 31,536,000); and
 - an ephemeral task is free, open, automated, terminal, and creates no durable
   business state.
 

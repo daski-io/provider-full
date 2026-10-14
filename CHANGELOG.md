@@ -95,6 +95,11 @@ All notable changes to this project will be documented here.
   pricing modes, including payer, request, listing, price and window
   coverage, and no longer caps how long after its quote a timely-paid order
   may be dispatched.
+- Published skill contracts carry the gateway's closed key set, including
+  `purchaseReadiness: null`, and both deadlines explicitly; registration
+  refuses a fulfillment window shorter than `dispatchSeconds + 300`, which a
+  lost initial dispatch could not survive. Every contract hash changes, so
+  changed services re-register through `daski:register`.
 
 ### Fixed
 

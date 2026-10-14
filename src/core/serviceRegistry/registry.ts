@@ -9,6 +9,7 @@ import { isFree } from "../pricing/index.js";
 import { config } from "../config.js";
 import { logInfo } from "../logger.js";
 import { runModuleMigrations } from "./moduleMigrations.js";
+import { assertRecoverableDeadlines, skillDeadlines } from "./deadlines.js";
 import { requireScreeningScopes } from "../screening/registry.js";
 import {
   compileProviderSchema,
@@ -155,6 +156,11 @@ export async function registerService(module: ServiceModule): Promise<void> {
     ) {
       throw new Error(`Service ${manifest.slug}: skill capacity is invalid`);
     }
+    // The published window must let the gateway recover a lost dispatch.
+    assertRecoverableDeadlines(
+      `Service ${manifest.slug}: skill "${skill.id}"`,
+      skillDeadlines(skill),
+    );
     SKILL_INPUT_VALIDATORS.set(`${manifest.slug}:${skill.id}`, inputValidator);
     try {
       validatePricing(skill.pricing);
