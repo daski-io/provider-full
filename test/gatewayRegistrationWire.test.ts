@@ -259,4 +259,55 @@ describe("gateway registration wire contract", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("backs off a rate-limited request, honoring Retry-After within the cap", async () => {
+    vi.useFakeTimers();
+    const limited = (retryAfter: string | null) => new Response(null, {
+      status: 429,
+      headers: retryAfter ? { "retry-after": retryAfter } : {},
+    });
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(limited(null))
+      .mockResolvedValueOnce(limited("90"))
+      .mockResolvedValueOnce(limited("3600"))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }));
+    vi.stubGlobal("fetch", fetch);
+    try {
+      const result = requestBoundedJson("https://gateway.example/v1/service-registrations/x");
+      await vi.advanceTimersByTimeAsync(20_000 - 1);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(fetch).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(fetch).toHaveBeenCalledTimes(3);
+      await vi.advanceTimersByTimeAsync(120_000);
+      await expect(result).resolves.toEqual({ ok: true });
+      expect(fetch).toHaveBeenCalledTimes(4);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
+  it("surfaces a rate limit that outlasts the bounded retries", async () => {
+    vi.useFakeTimers();
+    const fetch = vi.fn(async () => new Response(
+      JSON.stringify({ error: { code: "RATE_LIMITED", message: "slow down" } }),
+      { status: 429, headers: { "content-type": "application/json" } },
+    ));
+    vi.stubGlobal("fetch", fetch);
+    try {
+      const result = requestBoundedJson("https://gateway.example/register")
+        .catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(20_000 + 40_000 + 80_000 + 120_000);
+      expect(await result).toMatchObject({ status: 429, code: "RATE_LIMITED" });
+      expect(fetch).toHaveBeenCalledTimes(5);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
 });

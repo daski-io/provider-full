@@ -132,17 +132,45 @@ export class GatewayRegistrationHttpError extends Error {
   }
 }
 
+// The gateway rate-limits registration traffic per provider. A 429 refuses
+// the request before any processing, so the same request is retried after
+// a bounded exponential backoff that honors Retry-After up to the cap.
+const RATE_LIMIT_RETRIES = 4;
+const RATE_LIMIT_BASE_DELAY_MS = 20_000;
+const RATE_LIMIT_MAX_DELAY_MS = 120_000;
+
+function rateLimitDelayMs(response: Response, attempt: number): number {
+  const retryAfter = response.headers.get("retry-after");
+  const seconds = retryAfter === null ? Number.NaN : Number(retryAfter);
+  const requested = Number.isFinite(seconds)
+    ? seconds * 1_000
+    : retryAfter ? Date.parse(retryAfter) - Date.now() : 0;
+  return Math.min(
+    RATE_LIMIT_MAX_DELAY_MS,
+    Math.max(RATE_LIMIT_BASE_DELAY_MS * 2 ** attempt, Number.isFinite(requested) ? requested : 0),
+  );
+}
+
+async function fetchRegistration(url: string, init: RequestInit): Promise<Response> {
+  for (let attempt = 0; ; attempt += 1) {
+    const response = await fetch(url, {
+      ...init,
+      method: init.method ?? "GET",
+      redirect: "error",
+      headers: { accept: "application/json", ...init.headers },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (response.status !== 429 || attempt >= RATE_LIMIT_RETRIES) return response;
+    await response.body?.cancel().catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, rateLimitDelayMs(response, attempt)));
+  }
+}
+
 export async function requestBoundedJson(
   url: string,
   init: RequestInit = {},
 ): Promise<unknown> {
-  const response = await fetch(url, {
-    ...init,
-    method: init.method ?? "GET",
-    redirect: "error",
-    headers: { accept: "application/json", ...init.headers },
-    signal: AbortSignal.timeout(10_000),
-  });
+  const response = await fetchRegistration(url, init);
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   if (!contentType.includes("application/json")) {
     throw new Error("registration endpoint did not return JSON");

@@ -55,6 +55,11 @@ All notable changes to this project will be documented here.
   while the wallet owns one, and no longer calls `walletRotationNonce`.
 - Re-registration keeps reused listings on the commitment their admission
   promoted, refuses identity drift, and names every cross-check mismatch.
+- Registration resumes from the persisted record and the gateway's live
+  state: an activated registration left in `ATTENTION` is promoted without a
+  new intent or transaction, accepted evidence is replayed exactly after
+  expiry, unaccepted evidence is refreshed over the original splitter
+  transactions, and gateway rate limits are retried with bounded backoff.
 
 ### Removed
 

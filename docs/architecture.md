@@ -149,6 +149,16 @@ as identity drift. A refused cross-check names each disagreeing listing.
 Safe retirement is a separate explicit command and fails while active tasks,
 assets, jobs, supplier operations, or reviews remain.
 
+Every run decides its next step from the local registration record and the
+gateway's live view of the same registration
+(`gatewayRegistration/recovery.ts`): promote a registration the gateway
+activated, continue a pending one under its persisted intent, or sign a new
+intent only when there is nothing to resume. A pending registration's
+intent, preparation, splitter writes and accepted evidence are never
+replaced; accepted evidence is replayed exactly, and only evidence the
+gateway never accepted is re-signed over the original splitter
+transactions.
+
 ## Assets and wallet actions
 
 Returning `AdapterResult.asset` provisions a new asset and links it to the

@@ -61,6 +61,14 @@ export async function getGatewayRegistration(
   return result.rows[0] ?? null;
 }
 
+/**
+ * Record a freshly signed intent. A first admission inserts; otherwise the
+ * caller passes the exact row it decided to replace, which must be a
+ * promoted (ACTIVE) or settled ATTENTION record, and the replacement is a
+ * compare-and-set on that row's state and intent. A record whose gateway
+ * registration is still pending or active is never wiped here: recovery
+ * decides that before any intent is signed.
+ */
 export async function beginGatewayRegistration(args: {
   gatewayOrigin: string;
   serviceRowId: string;
@@ -68,43 +76,74 @@ export async function beginGatewayRegistration(args: {
   cardContractHash: Hex;
   idempotencyKey: string;
   intent: ProviderServiceRegistrationIntentEnvelope;
+  replacing: GatewayRegistrationRow | null;
 }): Promise<GatewayRegistrationRow> {
-  const existing = await getGatewayRegistration(args.gatewayOrigin, args.serviceId);
-  if (existing && !["ACTIVE", "ATTENTION"].includes(existing.state)) return existing;
-  if (
-    existing &&
-    existing.card_contract_hash.equals(bytes(args.cardContractHash)) &&
-    existing.state === "ACTIVE"
-  ) return existing;
-  const id = existing?.id ?? randomUUID();
-  const result = await pool.query<GatewayRegistrationRow>(
-    `INSERT INTO provider_gateway_registrations
-      (id,gateway_origin,service_row_id,service_id,card_contract_hash,state,
-       idempotency_key,canonical_intent)
-     VALUES ($1,$2,$3,$4,$5,'INTENT_READY',$6,$7)
-     ON CONFLICT (gateway_origin,service_id) DO UPDATE SET
-       service_row_id=EXCLUDED.service_row_id,
-       card_contract_hash=EXCLUDED.card_contract_hash,
-       state='INTENT_READY',
-       idempotency_key=EXCLUDED.idempotency_key,
-       gateway_registration_id=NULL,
-       canonical_intent=EXCLUDED.canonical_intent,
-       prepared_response=NULL,
-       canonical_evidence=NULL,
-       last_error_code=NULL,
+  const values = [
+    args.gatewayOrigin,
+    args.serviceRowId,
+    bytes(args.serviceId),
+    bytes(args.cardContractHash),
+    args.idempotencyKey,
+    args.intent,
+  ];
+  if (!args.replacing) {
+    const inserted = await pool.query<GatewayRegistrationRow>(
+      `INSERT INTO provider_gateway_registrations
+        (id,gateway_origin,service_row_id,service_id,card_contract_hash,state,
+         idempotency_key,canonical_intent)
+       VALUES ($7,$1,$2,$3,$4,'INTENT_READY',$5,$6)
+       ON CONFLICT (gateway_origin,service_id) DO NOTHING
+       RETURNING *`,
+      [...values, randomUUID()],
+    );
+    if (!inserted.rows[0]) {
+      throw new Error("another registration run created this service's gateway record");
+    }
+    return inserted.rows[0];
+  }
+  if (!["ACTIVE", "ATTENTION"].includes(args.replacing.state)) {
+    throw new Error(`a ${args.replacing.state} gateway registration cannot be replaced`);
+  }
+  const replaced = await pool.query<GatewayRegistrationRow>(
+    `UPDATE provider_gateway_registrations SET
+       service_row_id=$2,card_contract_hash=$4,state='INTENT_READY',
+       idempotency_key=$5,gateway_registration_id=NULL,canonical_intent=$6,
+       prepared_response=NULL,canonical_evidence=NULL,last_error_code=NULL,
        updated_at=now()
+     WHERE id=$7 AND gateway_origin=$1 AND service_id=$3
+       AND state=$8 AND canonical_intent=$9::jsonb
      RETURNING *`,
     [
-      id,
-      args.gatewayOrigin,
-      args.serviceRowId,
-      bytes(args.serviceId),
-      bytes(args.cardContractHash),
-      args.idempotencyKey,
-      args.intent,
+      ...values,
+      args.replacing.id,
+      args.replacing.state,
+      args.replacing.canonical_intent,
     ],
   );
-  return result.rows[0]!;
+  if (!replaced.rows[0]) {
+    throw new Error("the gateway registration record changed during recovery");
+  }
+  return replaced.rows[0];
+}
+
+/**
+ * Leave ATTENTION to continue the persisted registration, keeping its
+ * intent, preparation, splitter writes and evidence untouched.
+ */
+export async function resumeGatewayRegistration(
+  localId: string,
+): Promise<GatewayRegistrationRow> {
+  const result = await pool.query<GatewayRegistrationRow>(
+    `UPDATE provider_gateway_registrations
+        SET state=CASE WHEN canonical_evidence IS NULL THEN 'PREPARED'
+                       ELSE 'EVIDENCE_SUBMITTED' END,
+            last_error_code=NULL,updated_at=now()
+      WHERE id=$1 AND state='ATTENTION'
+      RETURNING *`,
+    [localId],
+  );
+  if (!result.rows[0]) throw new Error("the gateway registration left ATTENTION concurrently");
+  return result.rows[0];
 }
 
 export async function savePreparedRegistration(
@@ -195,16 +234,23 @@ export async function markRegistrationBroadcast(localId: string): Promise<void> 
   );
 }
 
+/**
+ * Persist signed evidence before it is posted. A compare-and-set on the
+ * envelope it replaces (null for the first one) keeps a concurrent run from
+ * overwriting evidence the gateway may already have accepted.
+ */
 export async function saveRegistrationEvidence(
   localId: string,
   evidence: ProviderServiceRegistrationEvidenceEnvelope,
+  replacing: ProviderServiceRegistrationEvidenceEnvelope | null,
 ): Promise<void> {
   const result = await pool.query(
     `UPDATE provider_gateway_registrations
         SET state='EVIDENCE_SUBMITTED',canonical_evidence=$2,
             last_error_code=NULL,updated_at=now()
-      WHERE id=$1 AND state IN ('PREPARED','BROADCAST','EVIDENCE_SUBMITTED')`,
-    [localId, evidence],
+      WHERE id=$1 AND state IN ('PREPARED','BROADCAST','EVIDENCE_SUBMITTED')
+        AND canonical_evidence IS NOT DISTINCT FROM $3::jsonb`,
+    [localId, evidence, replacing],
   );
   if (result.rowCount !== 1) throw new Error("registration evidence persistence claim was lost");
 }

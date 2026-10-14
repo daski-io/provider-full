@@ -162,8 +162,11 @@ npm run daski:register -- --gateway https://<daski-testnet-gateway>
 This second command signs provider intent, verifies gateway preparations,
 persists splitter writes before broadcast, submits activation evidence,
 cross-checks runtime commitments, and atomically promotes catalog heads. Use
-`--service <slug>` only for an intentional narrowed run. Both commands are
-external mutations; doctor and boot invoke neither.
+`--service <slug>` only for an intentional narrowed run. If a run stops, run
+it again: it resumes from the persisted registration and the gateway's live
+state without a new intent or transaction while the gateway still holds that
+registration ([recovery](troubleshooting.md#gateway-registration-recovery)).
+Both commands are external mutations; doctor and boot invoke neither.
 
 ### 9. Prove deployed readiness and discovery
 

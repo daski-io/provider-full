@@ -193,8 +193,9 @@ npm run daski:register -- --gateway https://<daski-testnet-gateway>
 The command reconciles the configured ERC-8004 provider identity, publishes
 every active service contract, obtains gateway-signed preparations, persists chain writes
 before broadcast, verifies activation evidence, and atomically promotes the
-runtime catalog. `--service <slug>` limits a run. Re-running an unchanged
-service is convergent.
+runtime catalog. `--service <slug>` limits a run. Re-running is convergent: an
+unchanged service is left alone, and an interrupted registration resumes from
+its persisted intent and the gateway's live state.
 
 Retirement is separate and explicit:
 

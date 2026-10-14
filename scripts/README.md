@@ -36,9 +36,10 @@ addresses, signer, and funded wallet before use:
 - `npm run daski:register -- --gateway <origin>` registers every active
   service contract with the gateway, persists splitter writes before
   broadcast, submits activation evidence, and promotes runtime-catalog heads.
-  It can send transactions and mutate gateway/database state. `--service
-  <slug>` narrows an intentional update. `--retire 0x<SERVICE_ID>` is a
-  separate guarded retirement and must not be combined with `--service`.
+  It can send transactions and mutate gateway/database state; a rerun
+  resumes an interrupted registration. `--service <slug>` narrows an
+  intentional update. `--retire 0x<SERVICE_ID>` is a separate guarded
+  retirement and must not be combined with `--service`.
 - `node --env-file=.env scripts/probe-identity.mjs` reads the configured
   Base Sepolia identity and registry state.
 - `node --env-file=.env scripts/probe-tokenuri.mjs <agentId>...` reads

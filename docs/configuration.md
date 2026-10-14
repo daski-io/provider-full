@@ -122,6 +122,18 @@ artifacts and send transactions. `--service <slug>` narrows the run;
 | `--update-uri` | Passed to the identity helper: rewrite a drifted on-chain agent URI. |
 | `--skip-provider-identity` | Skip the identity helper for an already reconciled identity. |
 
+A run resumes a previous one from the local record and the gateway's live
+state; see [Troubleshooting](troubleshooting.md#gateway-registration-recovery).
+These optional variables tune only the registration command's activation
+polling. Each is an integer number of milliseconds; a malformed or
+out-of-range value stops the run instead of polling at an unintended rate.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `REGISTRATION_ACTIVATION_POLL_MS` | `20000` (1,000–600,000) | Interval between reads of a registration awaiting gateway verification. |
+| `REGISTRATION_ACTIVATION_REKICK_MS` | `60000` (1,000–3,600,000) | Idle time before evidence is resubmitted; accepted evidence is always replayed unchanged. |
+| `REGISTRATION_ACTIVATION_TIMEOUT_MS` | `1800000` (60,000–86,400,000) | How long one run waits for activation before stopping; the next run resumes. |
+
 ## Standard Exact-EVM rail
 
 These values are issued or reviewed as one environment-specific set. Missing,

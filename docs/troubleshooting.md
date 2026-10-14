@@ -253,6 +253,56 @@ refused as `service already registered` is adopted from the latest block
 after its identity is verified. An abandoned cycle can never mark a later,
 failed reconciliation healthy.
 
+## Gateway registration recovery
+
+Re-running `npm run daski:register` is convergent. Each run reads the local
+registration record and the gateway's live view of the same registration, then
+resumes where the previous run stopped. A record is replaced by a new signed
+intent only for a first admission, a changed card of an already promoted
+registration, a registration the gateway ended (`REJECTED` or `SUPERSEDED`),
+or an intent the gateway never prepared. While the gateway holds a
+registration as pending or active, its persisted intent, preparation,
+splitter writes and accepted evidence are kept.
+
+### Activation evidence
+
+The gateway accepts evidence once and then honors only an exact replay of that
+envelope, also after it expires. In `EVIDENCE_PENDING` the provider replays the
+persisted envelope unchanged and never re-signs, refreshes or overwrites it,
+including from `ATTENTION`. While the gateway still reports `PREPARED`, no
+evidence was accepted: an expired persisted envelope, or one refused once as
+`EVIDENCE_AUTH_INVALID`, is re-signed over the same registration, preparation
+and original splitter transaction hashes and persisted before it is posted.
+Recovery never redeploys or re-signs a splitter transaction; a journaled write
+that never reached the mempool is resent with its original signed bytes.
+
+Activation polling defaults to every 20 seconds, and gateway `429` answers are
+retried with bounded backoff that honors `Retry-After`. See
+[Configuration](configuration.md#provider-wallet-and-registration).
+
+### Registration in `ATTENTION`
+
+The record's `last_error_code` says why a run stopped. Diagnostics name
+skills, listing ids, commitment fields and public hashes only, never a signed
+body or secret.
+
+| Code | Next run |
+| --- | --- |
+| `runtime_commitment_mismatch` | The gateway activated, but its reported runtime commitments differ from the local resolution; the error names each listing with the expected and reported hash. While the gateway still reports `ACTIVE`, a run resumes promotion with the persisted intent and signs or broadcasts nothing. A repeated mismatch needs Daski review. |
+| `reused_listing_drift` | A listing the gateway reused no longer reproduces its admitted commitment (the error names the differing fields), or it is a free listing without a control profile and no promoted head exists for it. This is identity drift and is refused; do not edit catalog rows. |
+| `prepared_registration_drift`, `gateway_registration_rejected`, `gateway_registration_superseded` | The gateway ended the registration; a run starts a new intent and logs the restart. |
+| `intent_expired_before_prepare` | The gateway never accepted the intent; a run signs a new one, within a bounded attempt budget. |
+| `rail_policy_changed_during_prepare`, `prepared_registration_changed` | The pending registration no longer matches the gateway's policy or its own persisted preparation. It cannot continue; ask Daski to end it. |
+
+A run also stops without changing state when the served card changed while a
+registration is pending (`card_changed_during_registration`) or activated but
+unpromoted (`activated_registration_unpromoted`; publish the registered card
+again, let the run promote it, then deploy the change), when the gateway holds
+accepted evidence this provider never persisted
+(`accepted_evidence_not_persisted`), or when the gateway answers a registration
+admitted under an intent this provider did not persist. Report these to Daski
+rather than deleting local records.
+
 ## Service, API, and MCP integration
 
 ### Service folder is not registered

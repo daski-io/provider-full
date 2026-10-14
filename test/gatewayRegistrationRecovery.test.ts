@@ -6,10 +6,12 @@ import type {
   FakeWriteCoordinator,
 } from "./gatewayRegistrationHarness.js";
 
-// Registration against PostgreSQL with an offline gateway and chain: a
-// reused listing keeps its admitted commitment, identity drift is refused,
-// and verification names what mismatched. Nothing here signs a real
-// transaction or reaches a network.
+// Registration recovery against PostgreSQL with an offline gateway and chain:
+// a reused listing keeps its admitted commitment, an activated registration
+// left in ATTENTION resumes promotion, accepted evidence replays unchanged
+// after expiry, and unaccepted evidence is refreshed without touching the
+// splitter transactions. Nothing here signs a real transaction or reaches a
+// network.
 
 const h = vi.hoisted(() => ({
   db: null as pg.Pool | null,
@@ -177,6 +179,12 @@ async function heads() {
     .map((row) => [row.skill_id as string, row]));
 }
 
+async function splitterWrites() {
+  return (await database.pool.query(
+    "SELECT * FROM provider_gateway_splitter_writes ORDER BY listing_id",
+  )).rows;
+}
+
 function changePaidSkill(): void {
   gateway.skills = defaultSkills().map((skill) =>
     skill.skillId === "reserve-orbit" ? { ...skill, revision: 2 } : skill);
@@ -274,6 +282,171 @@ describe("reused listings", { timeout: 30_000 }, () => {
       last_error_code: "reused_listing_drift",
     });
     expect(await versions()).toEqual(before);
+  });
+});
+
+describe("activated registrations left in ATTENTION", { timeout: 30_000 }, () => {
+  it("resume promotion with the persisted intent, preparation and evidence", async () => {
+    await register();
+    const trackListing = (await heads()).get("track-orbit")!.listing_id as string;
+    changePaidSkill();
+    gateway.corruptCommitmentFor = trackListing;
+
+    const refused = await register().then(() => null, (error: Error) => error);
+    // The refusal names the disagreement, never a signed body or secret.
+    expect(refused?.message).toMatch(new RegExp(
+      `track-orbit \\(${trackListing}, reused\\): expected 0x[0-9a-f]{64}, reported 0x${"e".repeat(64)}`,
+    ));
+    expect(refused?.message).not.toMatch(/signature|privateKey|"payload"/);
+    const attention = await localRow();
+    expect(attention).toMatchObject({
+      state: "ATTENTION",
+      last_error_code: "runtime_commitment_mismatch",
+    });
+    expect(gateway.registrations.get(attention.gateway_registration_id)!.state).toBe("ACTIVE");
+    const writesBefore = await splitterWrites();
+    const signaturesBefore = vi.mocked(signProviderEnvelope).mock.calls.length;
+    const preparedBefore = h.coordinator!.prepared.length;
+
+    gateway.corruptCommitmentFor = null;
+    gateway.requests.length = 0;
+    const resumed = await register();
+
+    expect(resumed).toMatchObject({
+      state: "ACTIVE",
+      registrationId: attention.gateway_registration_id,
+    });
+    const after = await localRow();
+    expect(after).toMatchObject({
+      state: "ACTIVE",
+      id: attention.id,
+      gateway_registration_id: attention.gateway_registration_id,
+      idempotency_key: attention.idempotency_key,
+    });
+    expect(after.canonical_intent).toEqual(attention.canonical_intent);
+    expect(after.prepared_response).toEqual(attention.prepared_response);
+    expect(after.canonical_evidence).toEqual(attention.canonical_evidence);
+    expect(await splitterWrites()).toEqual(writesBefore);
+    // No new intent, no evidence, no transaction, no gateway mutation.
+    expect(vi.mocked(signProviderEnvelope).mock.calls.length).toBe(signaturesBefore);
+    expect(h.coordinator!.prepared.length).toBe(preparedBefore);
+    expect(h.coordinator!.rebroadcast).toEqual([]);
+    expect(gateway.requests.every((request) => request.method === "GET")).toBe(true);
+    const promoted = await heads();
+    expect(promoted.get("reserve-orbit")!.runtime_commitment.providerIntentHash)
+      .toBe(canonicalHash(after.canonical_intent));
+    expect(promoted.get("track-orbit")!.listing_id).toBe(trackListing);
+  });
+
+  it("restart with a fresh intent once the gateway ended the persisted registration", async () => {
+    await register();
+    changePaidSkill();
+    gateway.activation = "manual";
+    gateway.unavailablePendingReads = 1;
+    await expect(register()).rejects.toThrow(/did not return JSON/);
+    const pending = await localRow();
+    expect(pending.state).toBe("EVIDENCE_SUBMITTED");
+    gateway.registrations.get(pending.gateway_registration_id)!.state = "REJECTED";
+    gateway.activation = "on-evidence";
+
+    const restarted = await register();
+    expect(restarted).toMatchObject({ state: "ACTIVE" });
+    expect(restarted.registrationId).not.toBe(pending.gateway_registration_id);
+    const after = await localRow();
+    expect(after.id).toBe(pending.id);
+    expect(canonicalHash(after.canonical_intent)).not.toBe(canonicalHash(pending.canonical_intent));
+    expect(h.logs).toContainEqual(expect.objectContaining({
+      message: "Gateway registration restarts with a new intent",
+      extra: expect.objectContaining({
+        reason: "gateway-terminal",
+        priorRegistrationId: pending.gateway_registration_id,
+        priorErrorCode: "gateway_registration_rejected",
+      }),
+    }));
+  });
+});
+
+describe("activation evidence recovery", { timeout: 30_000 }, () => {
+  it("replays the exact accepted envelope after its expiry, even from ATTENTION", async () => {
+    gateway.activation = "manual";
+    gateway.unavailablePendingReads = 1;
+    await expect(register()).rejects.toThrow(/did not return JSON/);
+    const pending = await localRow();
+    const accepted = pending.canonical_evidence;
+    expect(gateway.registrations.get(pending.gateway_registration_id)!.state).toBe("EVIDENCE_PENDING");
+    // A record parked in ATTENTION while the gateway still verifies.
+    await database.pool.query(
+      "UPDATE provider_gateway_registrations SET state='ATTENTION',last_error_code='operator_hold'",
+    );
+    vi.useFakeTimers({ toFake: ["Date"], shouldAdvanceTime: true });
+    vi.setSystemTime((accepted.validBefore + 120) * 1_000);
+    gateway.activation = "on-evidence";
+    gateway.requests.length = 0;
+    const signaturesBefore = vi.mocked(signProviderEnvelope).mock.calls.length;
+    const preparedBefore = h.coordinator!.prepared.length;
+
+    await expect(registerServiceWithGateway(GATEWAY, await service()))
+      .resolves.toMatchObject({ state: "ACTIVE", registrationId: pending.gateway_registration_id });
+
+    const posted = gateway.requests.filter((request) => request.method === "POST");
+    expect(posted).toHaveLength(1);
+    expect(posted[0]!.path).toMatch(/\/evidence$/);
+    expect(posted[0]!.body).toEqual(accepted);
+    expect(vi.mocked(signProviderEnvelope).mock.calls.length).toBe(signaturesBefore);
+    expect(h.coordinator!.prepared.length).toBe(preparedBefore);
+    expect(h.coordinator!.rebroadcast).toEqual([]);
+    const after = await localRow();
+    expect(after.canonical_evidence).toEqual(accepted);
+    expect(after.canonical_intent).toEqual(pending.canonical_intent);
+    expect(after.state).toBe("ACTIVE");
+  });
+
+  it("never re-signs accepted evidence that the gateway refuses to replay", async () => {
+    gateway.activation = "manual";
+    gateway.unavailablePendingReads = 1;
+    await expect(register()).rejects.toThrow(/did not return JSON/);
+    const accepted = (await localRow()).canonical_evidence;
+    gateway.refuseReplays = 1;
+    const signaturesBefore = vi.mocked(signProviderEnvelope).mock.calls.length;
+
+    await expect(registerServiceWithGateway(GATEWAY, await service()))
+      .rejects.toThrow(/EVIDENCE_AUTH_INVALID/);
+    expect(vi.mocked(signProviderEnvelope).mock.calls.length).toBe(signaturesBefore);
+    expect((await localRow()).canonical_evidence).toEqual(accepted);
+  });
+
+  it("refreshes expired unaccepted evidence over the original splitter hashes before posting", async () => {
+    gateway.unavailableEvidencePosts = 1;
+    await expect(register()).rejects.toThrow(/did not return JSON/);
+    const stale = (await localRow()).canonical_evidence;
+    const pending = await localRow();
+    expect(gateway.registrations.get(pending.gateway_registration_id)!.state).toBe("PREPARED");
+    expect(stale.payload.splitterTransactionHashes).toHaveLength(1);
+    vi.useFakeTimers({ toFake: ["Date"], shouldAdvanceTime: true });
+    vi.setSystemTime((stale.validBefore + 120) * 1_000);
+    const persistedAtPost: unknown[] = [];
+    gateway.onEvidence = async () => {
+      persistedAtPost.push((await localRow()).canonical_evidence);
+    };
+    const preparedBefore = h.coordinator!.prepared.length;
+
+    await expect(registerServiceWithGateway(GATEWAY, await service()))
+      .resolves.toMatchObject({ state: "ACTIVE" });
+
+    const posted = gateway.requests.filter((request) =>
+      request.method === "POST" && request.path.endsWith("/evidence")).at(-1)!.body as typeof stale;
+    expect(posted.payload).toEqual({
+      ...stale.payload,
+      evidenceNonce: expect.stringMatching(/^0x[0-9a-f]{64}$/),
+    });
+    expect(posted.payload.evidenceNonce).not.toBe(stale.payload.evidenceNonce);
+    expect(posted.payload.expectedState).toBe("PREPARED");
+    expect(posted.validBefore).toBeGreaterThan(Math.floor(Date.now() / 1_000));
+    // Persisted before it was posted, and the splitters were not touched.
+    expect(persistedAtPost).toEqual([posted]);
+    expect(h.coordinator!.prepared.length).toBe(preparedBefore);
+    expect(h.coordinator!.rebroadcast).toEqual([]);
+    expect((await localRow()).canonical_evidence).toEqual(posted);
   });
 });
 
