@@ -275,6 +275,24 @@ any path that closes it) reports `status: "closed"` under a higher revision in
 that same transaction; a later request opens a new Review. Operator replies
 are not published in this release.
 
+`input` and `cancel` keep their request schemas (`{inputText, data}`, where
+`data` may only repeat fields of the payer-committed request, and
+`{reason?}`) and have no business request id, so each is identified by its
+admitted task and its own content (core migration 008): a cancellation once
+per order, an input by its request hash. The identity is claimed under a
+300-second lease before the service is called and committed in the same
+transaction as the task state it produced. A retry under a fresh gateway
+grant or payer nonce therefore answers the committed outcome without calling
+the service again; a cancellation with a different reason, or a different
+input while one is unresolved, is `action_conflict`. A failure before the
+service acted, or a definite service refusal (`CancellationRefusedError`),
+frees the identity; any other failure keeps it bound and answers
+`lifecycle_unavailable`, and the next attempt with the same content
+reconciles it: it records an effect that already happened (the order moved
+on) or calls the service again, whose own supplier journal must make that
+call safe. An identical input repeated in a later input round is the same
+identity; send it with different content.
+
 Every failure is a refusal with exactly one key:
 
 | Answer | Meaning |

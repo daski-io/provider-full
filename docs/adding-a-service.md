@@ -301,6 +301,15 @@ purchase, provisioning request, filing, or other non-idempotent action.
 Implement bounded classification, retry, circuit-breaker, cancellation, and
 recovery tests alongside the service.
 
+Buyer `input` and `cancel` reach `handleInput()` and `cancel()` at most once
+per durable action identity at a time. Core claims the identity before calling
+you and commits it with the state you produce, so a buyer's retry under a fresh
+authorization never calls you again after a committed outcome. When your call
+throws anything other than `CancellationRefusedError` (a definite refusal that
+changed nothing), core cannot know whether you acted: the next attempt calls
+you again with the same task, and your supplier journal must make that repeat
+safe. Throw `CancellationRefusedError` only when nothing changed.
+
 ### Supplier-cost ceilings
 
 A quote that admits external spend returns `supplierCostCeiling`. Core

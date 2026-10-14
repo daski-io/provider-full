@@ -103,6 +103,13 @@ All notable changes to this project will be documented here.
   refused, and a verification outage stays retryable instead of looking like
   a wrong signature. Asset actions and queries verify the gateway grant
   before the payer signature, so an ungranted request never spends RPC.
+- Buyer input and cancellation are durably idempotent (core migration 008):
+  each is identified by its task and content, claimed under a lease before
+  the service is called and committed with the task state it produced, so a
+  fresh grant or payer nonce never repeats a committed mutation. A definite
+  pre-effect failure frees the identity, an uncertain outcome keeps it bound
+  for the next attempt to reconcile, and conflicting content is
+  `action_conflict`.
 - Support accepts the gateway's `{requestId, message}`, deduplicated by
   order, payer and `requestId` against its content hash (core migration 007):
   a retry under a fresh authorization returns the original signed

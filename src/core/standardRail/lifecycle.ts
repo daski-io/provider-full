@@ -38,23 +38,24 @@ export class StandardLifecycleService {
         const supportReceipt = await acceptSupportRequest(this.config, task, call);
         return signedLifecycleAnswer(this.config, order, { result: { supportReceipt } });
       }
-      case "input": {
-        const { state } = await readLifecycleState(this.config, order);
-        await applyLifecycleInput(task, call, state);
+      case "input":
+        await applyLifecycleInput(task, call, () => this.publicState(task));
         return signedLifecycleAnswer(this.config, order, { result: await this.completionResult(task) });
-      }
-      case "cancel": {
-        const { state } = await readLifecycleState(this.config, order);
-        await applyLifecycleCancel(task, state);
+      case "cancel":
+        await applyLifecycleCancel(task, call, () => this.publicState(task));
         return signedLifecycleAnswer(this.config, order);
-      }
     }
+  }
+
+  private async publicState(task: StandardTaskRow): Promise<string> {
+    return (await readLifecycleState(this.config, { orderId: task.standard_order_id, taskId: task.id })).state;
   }
 
   /** The frozen projection of a completed order, revealed only for the payer's own signature. */
   private async artifactResult(task: StandardTaskRow, call: LifecycleCall): Promise<unknown> {
-    const { state } = await readLifecycleState(this.config, { orderId: task.standard_order_id, taskId: task.id });
-    if (state !== "completed") throw artifactUnavailable("Artifacts are available only after completed fulfilment");
+    if (await this.publicState(task) !== "completed") {
+      throw artifactUnavailable("Artifacts are available only after completed fulfilment");
+    }
     const frozen = await loadFrozenTerminalProjection(pool, task.id);
     if (!frozen) throw artifactUnavailable("The order's deliverable bytes are not retained");
     return call.authorization.form === "payer-signed"
@@ -65,8 +66,7 @@ export class StandardLifecycleService {
   /// A completion answered inline carries the frozen unrevealed projection,
   /// whose hash the attestation signs.
   private async completionResult(task: StandardTaskRow): Promise<unknown> {
-    const { state } = await readLifecycleState(this.config, { orderId: task.standard_order_id, taskId: task.id });
-    if (state !== "completed") return undefined;
+    if (await this.publicState(task) !== "completed") return undefined;
     return (await loadFrozenTerminalProjection(pool, task.id))?.projection;
   }
 }

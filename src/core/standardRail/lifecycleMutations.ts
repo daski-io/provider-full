@@ -9,8 +9,15 @@ import { getAdapter } from "../serviceRegistry/registry.js";
 import { admittedSupplierCostCeiling } from "../serviceRegistry/supplierCostCeiling.js";
 import { CancellationRefusedError, type FulfillmentAdapter } from "../serviceRegistry/types.js";
 import { canonicalHash } from "./canonical.js";
+import {
+  abandonLifecycleAction,
+  claimLifecycleAction,
+  commitLifecycleAction,
+  releaseLifecycleAction,
+  type LifecycleActionClaim,
+} from "./lifecycleActions.js";
 import type { LifecycleCall } from "./lifecycleAuthorization.js";
-import { lifecycleUnavailable, unsupportedAction } from "./lifecycleErrors.js";
+import { lifecycleUnavailable, unsupportedAction, type LifecycleRefusal } from "./lifecycleErrors.js";
 import { STANDARD_TASK_COLUMNS, type StandardTaskRow } from "./lifecycleStore.js";
 import { enqueueReputationOutcome } from "./reputationOutcomeStore.js";
 import { freezeTerminalResult } from "./terminalResult.js";
@@ -49,6 +56,7 @@ export async function persistLifecycleState(
   task: StandardTaskRow,
   state: TransactionStatus,
   completedAt: Date | null,
+  action: LifecycleActionClaim,
 ): Promise<void> {
   if (state !== task.status) validateTransition(task.status, state);
   const client = await pool.connect();
@@ -79,6 +87,8 @@ export async function persistLifecycleState(
         WHERE order_id=$1 AND transaction_id=$3`,
       [task.standard_order_id, state, task.id],
     );
+    // The action's outcome commits with the state it produced.
+    await commitLifecycleAction(client, action, state);
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
@@ -88,25 +98,78 @@ export async function persistLifecycleState(
   }
 }
 
-/** Cancel a nonterminal order through its service, then persist and freeze it. */
-export async function applyLifecycleCancel(task: StandardTaskRow, publicState: string): Promise<void> {
-  if (!CANCELABLE.has(publicState) || !CANCELABLE.has(task.status)) {
-    throw unsupportedAction("Task cannot be canceled from its current state");
-  }
-  const adapter = await adapterFor(task);
-  const claimed = await claimLifecycleMutation(task);
+/** Refusals the service gave definitely: nothing changed, so the identity is freed. */
+const NOTHING_CHANGED = new WeakSet<object>();
+const nothingChanged = (refusal: LifecycleRefusal): LifecycleRefusal => {
+  NOTHING_CHANGED.add(refusal);
+  return refusal;
+};
+
+/**
+ * Run one claimed action attempt. A failure before the service is called,
+ * or a definite refusal from it, releases the identity; any other failure
+ * after the service was called leaves the outcome uncertain, so the identity
+ * stays bound for the next attempt to reconcile and the caller answers
+ * temporarily unavailable, never as if the action had not happened.
+ */
+async function attempt(
+  claim: LifecycleActionClaim,
+  work: (effect: { started(): void }) => Promise<void>,
+): Promise<void> {
+  let started = false;
   try {
-    await adapter.cancel({
-      ...claimed,
-      supplierMutationStarted: claimed.metadata.supplier_mutation_started === true,
-      supplierCostCeiling: admittedSupplierCostCeiling(claimed.metadata),
-    });
+    await work({ started: () => { started = true; } });
   } catch (error) {
-    // A definite refusal changed nothing; any other failure may have acted.
-    if (error instanceof CancellationRefusedError) throw unsupportedAction("The service refused the cancellation");
-    throw lifecycleUnavailable("Cancellation outcome is unknown");
+    if (!started || (typeof error === "object" && error !== null && NOTHING_CHANGED.has(error))) {
+      await releaseLifecycleAction(claim).catch(() => undefined);
+      throw error;
+    }
+    await abandonLifecycleAction(claim).catch(() => undefined);
+    throw lifecycleUnavailable("Lifecycle action outcome is unknown");
   }
-  await persistLifecycleState(claimed, "canceled", new Date());
+}
+
+/**
+ * Cancel a nonterminal order once: the claim is durable before the service is
+ * called and commits with the canceled state, so a retry under a fresh
+ * authorization answers the committed cancellation instead of repeating it.
+ */
+export async function applyLifecycleCancel(
+  task: StandardTaskRow,
+  call: LifecycleCall,
+  readPublicState: () => Promise<string>,
+): Promise<void> {
+  const claimed = await claimLifecycleAction(task, call);
+  if (claimed.kind === "replay") return;
+  const claim = claimed.claim;
+  await attempt(claim, async (effect) => {
+    // Read under the claim, so no other attempt of this action interleaves.
+    const publicState = await readPublicState();
+    if (publicState === "canceled" && claim.resumed) {
+      // An earlier attempt's cancellation took effect; record it.
+      await commitLifecycleAction(pool, claim, "canceled");
+      return;
+    }
+    if (!CANCELABLE.has(publicState) || !CANCELABLE.has(task.status)) {
+      throw unsupportedAction("Task cannot be canceled from its current state");
+    }
+    const adapter = await adapterFor(task);
+    const fenced = await claimLifecycleMutation(task);
+    effect.started();
+    try {
+      await adapter.cancel({
+        ...fenced,
+        supplierMutationStarted: fenced.metadata.supplier_mutation_started === true,
+        supplierCostCeiling: admittedSupplierCostCeiling(fenced.metadata),
+      });
+    } catch (error) {
+      if (error instanceof CancellationRefusedError) {
+        throw nothingChanged(unsupportedAction("The service refused the cancellation"));
+      }
+      throw error;
+    }
+    await persistLifecycleState(fenced, "canceled", new Date(), claim);
+  });
 }
 
 /// Input may re-supply the committed request; every field must equal what
@@ -137,34 +200,51 @@ function assertInputMatchesCommittedRequest(task: StandardTaskRow, revealed: Rec
   }
 }
 
-/** Hand buyer input to the service of an order awaiting it, then persist its answer. */
-export async function applyLifecycleInput(task: StandardTaskRow, call: LifecycleCall, publicState: string): Promise<void> {
-  if (publicState !== "input-required" || task.status !== "input-required") {
-    throw unsupportedAction("Task is not awaiting buyer input");
-  }
-  const data = call.request.data as Record<string, unknown>;
-  assertInputMatchesCommittedRequest(task, data);
-  const adapter = await adapterFor(task);
-  const claimed = await claimLifecycleMutation(task);
-  let processed: Awaited<ReturnType<typeof processAdapterResult>>;
-  try {
+/**
+ * Hand one buyer input to the service of an order awaiting it, identified by
+ * its request: the claim is durable before the service is called and commits
+ * with the state the service produced, so a retry of the same input under a
+ * fresh authorization answers that state instead of repeating it.
+ */
+export async function applyLifecycleInput(
+  task: StandardTaskRow,
+  call: LifecycleCall,
+  readPublicState: () => Promise<string>,
+): Promise<void> {
+  const claimed = await claimLifecycleAction(task, call);
+  if (claimed.kind === "replay") return;
+  const claim = claimed.claim;
+  await attempt(claim, async (effect) => {
+    const publicState = await readPublicState();
+    if (claim.resumed && publicState !== "input-required") {
+      // An earlier attempt of this input moved the order on; record it.
+      await commitLifecycleAction(pool, claim, publicState);
+      return;
+    }
+    if (publicState !== "input-required" || task.status !== "input-required") {
+      throw unsupportedAction("Task is not awaiting buyer input");
+    }
+    const data = call.request.data as Record<string, unknown>;
+    assertInputMatchesCommittedRequest(task, data);
+    const adapter = await adapterFor(task);
+    const fenced = await claimLifecycleMutation(task);
+    effect.started();
     const result = await adapter.handleInput(
       {
-        ...claimed,
-        supplierMutationStarted: claimed.metadata.supplier_mutation_started === true,
-        supplierCostCeiling: admittedSupplierCostCeiling(claimed.metadata),
+        ...fenced,
+        supplierMutationStarted: fenced.metadata.supplier_mutation_started === true,
+        supplierCostCeiling: admittedSupplierCostCeiling(fenced.metadata),
       },
       call.request.inputText as string,
       data,
-      { requestHash: canonicalHash(call.request), payer: claimed.standard_payer, standardOrderId: claimed.standard_order_id },
+      { requestHash: canonicalHash(call.request), payer: fenced.standard_payer, standardOrderId: fenced.standard_order_id },
     );
-    processed = await processAdapterResult(claimed.id, result, claimed.service_id);
-  } catch {
-    throw lifecycleUnavailable("Input outcome is unknown");
-  }
-  await persistLifecycleState(
-    { ...claimed, status: processed.status, version: processed.version },
-    processed.status,
-    processed.completed_at,
-  );
+    const processed = await processAdapterResult(fenced.id, result, fenced.service_id);
+    await persistLifecycleState(
+      { ...fenced, status: processed.status, version: processed.version },
+      processed.status,
+      processed.completed_at,
+      claim,
+    );
+  });
 }
