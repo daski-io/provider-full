@@ -1,2 +1,4 @@
 # Keep checksummed migrations and cross-platform tooling byte-stable.
 * text=auto eol=lf
+# Vendored gateway fixtures are verified byte for byte against their manifest.
+test/fixtures/provider-wire/** -text

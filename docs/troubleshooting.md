@@ -418,6 +418,17 @@ the admitted listing: re-register the changed contract. `service_unavailable`
 listing version fills `maxOpenOrders`) and `readiness_unavailable` clear on
 their own once the condition ends.
 
+### Dispatch refused with `dispatch_rejected`
+
+Nothing was admitted; the gateway sends a fresh envelope for the paid order.
+`503 ... "service_unavailable"` means a declared service readiness invariant
+is failing and clears once the product recovers. `quote_window` means the
+forwarded quote is not the one the signed dispatch binds or names a provider
+quote this database never persisted (for example after restoring an older
+backup or pointing two deployments at different databases); `price` means a
+persisted quote does not bind this order. Compare the gateway order with the
+`standard_provider_quotes` row instead of loosening the check.
+
 ### Dispatch answers an empty 503
 
 This is deliberate: the provider either holds a claim for the order under a

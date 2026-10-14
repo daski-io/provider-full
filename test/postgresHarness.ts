@@ -17,6 +17,8 @@ export function testDatabaseUrl(): string {
 
 export interface DisposableDatabase {
   pool: pg.Pool;
+  /** Connection URL of the disposable database, for an additional pool. */
+  url: string;
   drop(): Promise<void>;
 }
 
@@ -53,6 +55,7 @@ export async function createMigratedDatabase(label: string): Promise<DisposableD
   }
   return {
     pool,
+    url: url.toString(),
     async drop() {
       await pool.end();
       await admin((client) => client.query(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`));

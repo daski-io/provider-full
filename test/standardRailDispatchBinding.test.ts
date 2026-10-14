@@ -135,7 +135,7 @@ describe("dispatch verifies the persisted provider quote for both pricing modes 
   });
 
   it("refuses the retired zero provider quote hash and an unknown quote", async () => {
-    for (const providerQuoteHash of [hash("0"), hash("1")]) {
+    for (const [providerQuoteHash, reason] of [[hash("0"), "price"], [hash("1"), "quote_window"]] as const) {
       const quote = await gatewayQuoteV1({
         outcome: fixedOutcome, request,
         providerQuote: {
@@ -147,7 +147,7 @@ describe("dispatch verifies the persisted provider quote for both pricing modes 
         outcome: fixedOutcome, quote, request, payer: payerA,
         reputationContract: config.reputationContract, outcomeSchemaUid: config.reputationOutcomeSchemaUid,
       });
-      await expect(service().accept(args)).rejects.toMatchObject({ reason: "price" });
+      await expect(service().accept(args)).rejects.toMatchObject({ reason });
     }
     expect(h.adapter.execute).not.toHaveBeenCalled();
   });

@@ -18,6 +18,7 @@ import {
   DispatchStatusError,
 } from "./dispatchErrors.js";
 import { fulfillAdmittedDispatch } from "./dispatchExecution.js";
+import { assertForwardedQuoteIntegrity } from "./dispatchQuoteBinding.js";
 import { signedDispatchSnapshot, type DispatchSnapshotV1 } from "./dispatchResponse.js";
 import { ORDER_ID, verifyDispatchEnvelope } from "./dispatchVerification.js";
 import { ProviderEvidenceVerifier } from "./evidence.js";
@@ -109,6 +110,9 @@ export class StandardDispatchService {
     const dispatch = envelope.payload;
     const dispatchHash = canonicalHash(envelope);
     const key = { gatewayAudience: dispatch.gatewayAudience, orderId: dispatch.orderId };
+    // Offline and outcome-independent: never look up state for a request
+    // whose forwarded quote the signed dispatch does not bind.
+    await assertForwardedQuoteIntegrity({ config: this.config, envelope: args.quote, dispatch });
     // Whether a claim exists decides between replay and refusal, so a failed
     // lookup proves nothing and the answer must stay ambiguous.
     const existing = await findDispatchClaim(key).catch((error: unknown) => {

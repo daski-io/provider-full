@@ -19,7 +19,8 @@ function exactBody(body: unknown, keys: string): body is Record<string, unknown>
 /**
  * Quote, dispatch and dispatch-status routes. A dispatch has three outcomes:
  * a definite pre-admission refusal (`409 {"error":"dispatch_rejected",
- * "reason"}`), the signed snapshot, or an empty 503 whenever admission exists
+ * "reason"}`, 503 for `service_unavailable`), the signed snapshot, or an
+ * empty 503 whenever admission exists
  * or its outcome is unknown, never a JSON error. Status uses
  * `404 {"error":"dispatch_status_unavailable","reason":"outcome_policy"}`
  * only for proven absence of any claim for the order.
@@ -58,7 +59,10 @@ export function mountProtocolRoutes(router: Router, services: {
     } catch (error) {
       if (error instanceof DispatchRejectedError) {
         logWarn("Standard dispatch refused before admission", { reason: error.reason });
-        res.status(409).json({ error: "dispatch_rejected", reason: error.reason });
+        // A product outage is a retryable refusal; every other reason is a
+        // conflict with the order. Both are definite: nothing was admitted.
+        res.status(error.reason === "service_unavailable" ? 503 : 409)
+          .json({ error: "dispatch_rejected", reason: error.reason });
         return;
       }
       logError("Standard dispatch answered ambiguously", { errorClass: errorClass(error) });

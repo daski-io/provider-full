@@ -397,7 +397,9 @@ describe("admitted paid work is never answered with a guessed failure", () => {
     let failing = true;
     h.module = { operations: { readiness: { checkInvariants: () => failing ? ["supplier unreachable"] : [] } } };
     const refused = await dispatchOrder(order);
-    expect(refused.status).toBe(409);
+    // A retryable product outage: still a definite JSON refusal, at 503.
+    expect(refused.status).toBe(503);
+    expect(await classifyDispatchAnswer(refused.clone())).toBe("refused");
     await expect(refused.json()).resolves.toEqual({ error: "dispatch_rejected", reason: "service_unavailable" });
     expect(h.executions).toBe(0);
     expect(await tasksFor(order.dispatch.payload.orderId)).toBe(0);

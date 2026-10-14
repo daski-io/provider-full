@@ -103,6 +103,13 @@ All notable changes to this project will be documented here.
   refused, and a verification outage stays retryable instead of looking like
   a wrong signature. Asset actions and queries verify the gateway grant
   before the payer signature, so an ungranted request never spends RPC.
+- The gateway's canonical provider-wire fixtures are vendored under
+  `test/fixtures/provider-wire/` with an offline parity check, and the real
+  quote, intake, dispatch and status handlers are driven through every
+  applicable vector byte for byte. A `service_unavailable` dispatch refusal is
+  now a `503` JSON refusal, an unknown provider quote is refused as
+  `quote_window`, and the forwarded QuoteV1's binding and signature are
+  verified before any claim lookup.
 - Published skill contracts carry the gateway's closed key set, including
   `purchaseReadiness: null`, and both deadlines explicitly; registration
   refuses a fulfillment window shorter than `dispatchSeconds + 300`, which a

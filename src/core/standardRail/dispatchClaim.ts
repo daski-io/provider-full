@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import type { Hex } from "viem";
 import { encryptString } from "../chain/encryption.js";
@@ -11,6 +10,7 @@ import {
   DispatchCommitUncertainError,
   DispatchRejectedError,
 } from "./dispatchErrors.js";
+import { newStandardTaskId } from "./identifiers.js";
 import { recordStandardSecurityIncident } from "./incidents.js";
 import type { ProviderOutcomeConfig, StandardRailDispatchV2 } from "./types.js";
 
@@ -84,7 +84,7 @@ export async function probeDispatchClaim(
 
 async function insertAdmission(client: PoolClient, args: AdmissionArgs): Promise<string> {
   const { dispatch } = args;
-  const taskId = `task-${randomUUID()}`;
+  const taskId = newStandardTaskId();
   const customer = await upsertCustomer(dispatch.payer, client);
   const contactEmail = typeof args.request.contactEmail === "string"
     ? args.request.contactEmail.trim().toLowerCase() : null;

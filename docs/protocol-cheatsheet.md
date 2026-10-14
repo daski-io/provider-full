@@ -161,14 +161,23 @@ outcomes:
 
 | Provider knowledge | Answer |
 | --- | --- |
-| Definite refusal before any admission, re-confirmed by an authoritative claim probe | `409 {"error":"dispatch_rejected","reason":...}`; the gateway later sends a new envelope |
+| Definite refusal before any admission, re-confirmed by an authoritative claim probe | `409 {"error":"dispatch_rejected","reason":...}` (`503` for `service_unavailable`); the gateway later sends a new envelope |
 | A claim exists for this exact envelope | `200` with the signed snapshot, even after the envelope expired |
 | Admission exists for another envelope, the commit outcome is unknown, or admitted work cannot be rendered | empty `503` (no body, `Retry-After`); the gateway reconciles by status with the original hash |
 
 Refusal reasons are `validator`, `envelope_lifetime`, `signature`,
 `outcome_policy`, `self_purchase`, `quote_window`, `price`, `evidence` and
-`service_unavailable`. No route or middleware turns a possibly-admitted
-dispatch into a JSON error.
+`service_unavailable`. `quote_window` covers a forwarded QuoteV1 the signed
+dispatch does not bind or that names a provider quote this provider never
+persisted; `price` covers a persisted quote that does not bind this order.
+No route or middleware turns a possibly-admitted dispatch into a JSON error.
+
+- The forwarded QuoteV1's shape, its hash binding into the signed dispatch and
+  its `gateway-quote` signature are verified offline before any claim is
+  looked up; an exact replay always carries the identical quote.
+- An authenticated envelope that has expired is still checked, read-only, for
+  an exact replay of an admitted claim before it is refused, so a duplicate
+  delivery of admitted work receives its signed snapshot.
 
 - Admission runs under a per-order transaction advisory lock. As its last
   statement before commit it rechecks `validBefore` against the database
@@ -219,6 +228,27 @@ never consume that budget. The terminal
 `resultHash` is still derived from the task projection today; the frozen
 terminal-result store replaces that single seam
 (`src/core/standardRail/terminalResult.ts`).
+
+## Conformance fixtures
+
+`test/fixtures/provider-wire/` vendors the gateway's canonical synthetic
+provider-wire fixtures verbatim, and `test/fixtures/provider-wire.source.json`
+records their gateway commit and the manifest's SHA-256. The offline parity
+test checks every listed file's hash, that no other file is present and that
+the manifest matches its record; the directory is checked out with `-text`.
+The vector tests drive the real quote, intake, dispatch, status and lifecycle
+handlers against a disposable PostgreSQL database with a frozen clock and
+require byte-for-byte canonical equality with each vector a full provider
+answers. To re-vendor after an intentional gateway change, from a gateway
+checkout at the new commit:
+
+```sh
+git -C ../gateway archive <commit> test/fixtures/provider-wire | tar -x
+git -C ../gateway show <commit>:test/fixtures/provider-wire/manifest.json | sha256sum
+```
+
+then update the source record and fix any vector the provider no longer
+matches; never edit a fixture file.
 
 ## ERC-8004 identity
 

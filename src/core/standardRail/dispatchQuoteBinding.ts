@@ -26,6 +26,35 @@ export interface AdmittedProviderQuote {
 const same = (left: string, right: string): boolean => left.toLowerCase() === right.toLowerCase();
 
 /**
+ * The signed dispatch binds the forwarded QuoteV1 by hash, so its shape, that
+ * hash and its gateway-quote signature are checked offline before any claim
+ * is looked up: an exact replay always carries the identical quote, and a
+ * request with any other quote is refused without reading state.
+ */
+export async function assertForwardedQuoteIntegrity(args: {
+  config: ProviderStandardRailConfig;
+  envelope: unknown;
+  dispatch: StandardRailDispatchV2;
+}): Promise<void> {
+  try {
+    assertExactKeys(args.envelope, SIGNED_ENVELOPE_KEYS, "quote envelope");
+    assertExactKeys((args.envelope as { payload?: unknown }).payload, QUOTE_PAYLOAD_KEYS, "quote payload");
+  } catch {
+    throw new DispatchRejectedError("quote_window", "Quote envelope shape is invalid");
+  }
+  const envelope = args.envelope as SignedEnvelope<QuoteV1>;
+  const bound = await withDispatchRejection("quote_window", () => canonicalHash(envelope) === args.dispatch.quoteHash);
+  if (!bound) throw new DispatchRejectedError("quote_window", "Quote envelope is not the one the dispatch binds");
+  const recovered = await withDispatchRejection("signature", () => recoverMessageAddress({
+    message: { raw: unsignedEnvelopeHash(envelope as unknown as Record<string, unknown>) },
+    signature: envelope.signature,
+  }));
+  if (getAddress(recovered) !== args.config.gatewayQuoteSigner) {
+    throw new DispatchRejectedError("signature", "Quote signature is invalid");
+  }
+}
+
+/**
  * Verify the gateway QuoteV1 forwarded with every dispatch. Fixed and dynamic
  * listings alike carry a nonzero provider quote hash. The quote's age is not
  * compared with the current time: a timely payment can be dispatched with a
@@ -115,8 +144,10 @@ export async function loadAdmittedProviderQuote(args: {
 }): Promise<AdmittedProviderQuote> {
   const { quote, dispatch, outcome } = args;
   const stored = await loadProviderQuote(quote.payload.providerQuoteHash);
-  if (!stored || !reproducesQuoteHash(stored)) {
-    throw new DispatchRejectedError("price", "Dispatch is not bound to a persisted provider quote");
+  // A quote this provider never issued cannot bind the order's window.
+  if (!stored) throw new DispatchRejectedError("quote_window", "Dispatch is not bound to a persisted provider quote");
+  if (!reproducesQuoteHash(stored)) {
+    throw new DispatchRejectedError("price", "Persisted provider quote does not reproduce its hash");
   }
   if (
     stored.outcomeId !== outcome.outcomeId ||
