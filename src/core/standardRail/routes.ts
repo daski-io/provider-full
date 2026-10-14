@@ -1,25 +1,16 @@
 import { Router } from "express";
 import { base, baseSepolia } from "viem/chains";
 import type { Config } from "../config.js";
-import { logError, logWarn } from "../logger.js";
+import { logError } from "../logger.js";
 import { StandardDispatchService } from "./dispatch.js";
-import { DispatchRejectedError } from "./dispatchErrors.js";
 import { StandardLifecycleService } from "./lifecycle.js";
+import { mountProtocolRoutes } from "./protocolRoutes.js";
 import { StandardQuoteService } from "./quote.js";
-import { QuoteRefusedError } from "./quoteErrors.js";
 import { assertExactKeys } from "./canonical.js";
-import type {
-  SignedEnvelope,
-  StandardEvidenceBundleV2,
-  StandardRailDispatchV2,
-  DispatchStatusQueryV1,
-  QuoteV1,
-} from "./types.js";
 import type { ProviderStandardRailConfig } from "./config.js";
 import type { ProviderWalletConfig } from "./walletConfig.js";
 import { ProviderAssetQueryService } from "./assetQuery.js";
 import { ProviderAssetActionService } from "./assetAction.js";
-import { sendSignedJson } from "./transport.js";
 
 export function createStandardRailRouter(
   core: Config,
@@ -83,80 +74,7 @@ export function createStandardRailRouter(
     } catch (error) { next(error); }
   });
 
-  // Quote and intake share the admitted quote URL; each answer is either the
-  // signed body or a bounded refusal in the gateway's field-error format.
-  router.post("/quote", async (req, res) => {
-    try {
-      const body = req.body as { request?: unknown } | undefined;
-      if (!body || typeof body !== "object" || Array.isArray(body) ||
-          Object.keys(body).join(",") !== "request") {
-        throw new QuoteRefusedError(400, "envelope");
-      }
-      sendSignedJson(res, await quote.handle(body.request));
-    } catch (error) {
-      const refusal = error instanceof QuoteRefusedError
-        ? error
-        : new QuoteRefusedError(503, "unavailable");
-      if (refusal === error) {
-        logWarn("Standard quote refused", { reason: refusal.reason, status: refusal.status });
-      } else {
-        logError("Standard quote failed", {
-          errorClass: error instanceof Error ? error.name : "UnknownError",
-        });
-      }
-      res.status(refusal.status).json(refusal.body());
-    }
-  });
-
-  router.post("/dispatch", async (req, res) => {
-    try {
-      assertExactKeys(req.body, ["dispatch", "quote", "request", "evidenceBundle"], "dispatch request");
-      const body = req.body as {
-        dispatch?: SignedEnvelope<StandardRailDispatchV2, 2>;
-        quote?: SignedEnvelope<QuoteV1>;
-        request?: Record<string, unknown>;
-        evidenceBundle?: StandardEvidenceBundleV2;
-      };
-      if (!body.dispatch || !body.quote || !body.request || !body.evidenceBundle) {
-        res.status(400).json({ error: "invalid_dispatch" });
-        return;
-      }
-      const dispatchEnvelope = body.dispatch;
-      const quoteEnvelope = body.quote;
-      const request = body.request;
-      const evidenceBundle = body.evidenceBundle;
-      sendSignedJson(res, await dispatch.accept({
-        dispatch: dispatchEnvelope,
-        quote: quoteEnvelope,
-        request,
-        evidenceBundle,
-      }));
-    } catch (error) {
-      const reason = error instanceof DispatchRejectedError ? error.reason : undefined;
-      logError("Standard dispatch rejected", {
-        errorClass: error instanceof Error ? error.name : "UnknownError",
-        ...(reason ? { reason } : {}),
-      });
-      res.status(409).json({ error: "dispatch_rejected", ...(reason ? { reason } : {}) });
-    }
-  });
-
-  router.post("/dispatch/status", async (req, res) => {
-    try {
-      assertExactKeys(req.body, ["query"], "dispatch status request");
-      const query = (req.body as { query?: SignedEnvelope<DispatchStatusQueryV1> }).query;
-      if (!query) {
-        res.status(400).json({ error: "invalid_dispatch_status" });
-        return;
-      }
-      sendSignedJson(res, await dispatch.status(query));
-    } catch (error) {
-      logError("Standard dispatch status rejected", {
-        errorClass: error instanceof Error ? error.name : "UnknownError",
-      });
-      res.status(404).json({ error: "dispatch_status_unavailable" });
-    }
-  });
+  mountProtocolRoutes(router, { quote, dispatch });
 
   router.post("/lifecycle", async (req, res) => {
     try {

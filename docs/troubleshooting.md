@@ -418,6 +418,25 @@ the admitted listing: re-register the changed contract. `service_unavailable`
 listing version fills `maxOpenOrders`) and `readiness_unavailable` clear on
 their own once the condition ends.
 
+### Dispatch answers an empty 503
+
+This is deliberate: the provider either holds a claim for the order under a
+different envelope, could not prove whether its admission committed, or
+admitted the order but could not sign the answer. The gateway then polls
+`/dispatch/status` with the original dispatch hash instead of sending a new
+envelope. Check the logs for `Standard dispatch answered ambiguously` and the
+`changed_dispatch_replay` security incident. Never convert this into a JSON
+error: the gateway would treat it as a refusal and re-dispatch admitted work.
+
+### Dispatch status answers `outcome_policy`, `dispatch_conflict`, or `admission_in_progress`
+
+`404 ... "outcome_policy"` is the provider's proof that it holds no claim for
+the order; after the original envelope's `validBefore` plus 60 seconds the
+gateway may send a new envelope. `409 ... "dispatch_conflict"` means a claim
+exists for a different dispatch hash: reconcile the gateway order with the
+claim the provider holds rather than re-dispatching. `503 ...
+"admission_in_progress"` and `"unavailable"` clear on retry.
+
 ### Quote succeeds but execute rejects input
 
 Quote and execute must call the same deterministic validation. Keep validation

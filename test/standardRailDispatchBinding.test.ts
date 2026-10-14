@@ -212,7 +212,9 @@ describe("settlement time, not dispatch time, bounds a timely payment (C-T04)", 
   it("refuses a payment settled after the gateway quote window closed", async () => {
     const args = await paidOrder({ quotedAt: Math.floor(Date.now() / 1_000) - 3_600 });
     h.depositTimestamp = args.quote.validBefore + 1;
-    await expect(service().accept(args)).rejects.toThrow("outside the quote payment window");
+    await expect(service().accept(args)).rejects.toMatchObject({ reason: "evidence" });
+    await expect(vi.mocked(ProviderEvidenceVerifier.prototype.verify).mock.results[0]!.value)
+      .rejects.toThrow("outside the quote payment window");
     expect(h.adapter.execute).not.toHaveBeenCalled();
   });
 });

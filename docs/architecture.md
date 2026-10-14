@@ -126,7 +126,10 @@ A paid order crosses several independent bindings:
    request, order, payer, audience, and deadline.
 6. The provider verifies all bindings, including the persisted provider quote
    for both pricing modes and the deposit block's settlement time, and
-   atomically claims replay state.
+   atomically claims replay state under a per-order lock with a final
+   expiry fence. A funded order is an obligation: paused sales or full
+   local capacity never refuse it, an exact replay returns the same task,
+   and a different envelope never replaces it.
 7. Core materializes the transaction and invokes the service adapter.
 8. Results, artifacts, asset ownership, status, and terminal evidence are
    persisted. Every dispatch and status answer re-reads the task state and

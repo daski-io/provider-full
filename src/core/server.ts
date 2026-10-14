@@ -22,7 +22,10 @@ import {
 } from "./security/httpCapacity.js";
 import { createStandardRailRouter } from "./standardRail/routes.js";
 import {
+  exceptStatusReads,
+  isStandardRailDispatch,
   isStrictlyParsedStandardRailJson,
+  sendAmbiguousUnavailable,
   standardRailJsonIngress,
 } from "./standardRail/transport.js";
 import { a2aRouter } from "./a2a/router.js";
@@ -40,6 +43,29 @@ export async function startServer(
   standardRailConfig: ProviderStandardRailConfig,
   walletConfig?: ProviderWalletConfig,
 ): Promise<void> {
+  const app = createProviderApp(standardRailConfig, walletConfig);
+  await new Promise<void>((resolve, reject) => {
+    const onListening = () => {
+      listening.off("error", reject);
+      logInfo(`Server listening on port ${config.PORT}`, {
+        baseUrl: config.BASE_URL,
+      });
+      resolve();
+    };
+    const listening = config.CHAIN_MODE === "mock"
+      ? app.listen(config.PORT, "127.0.0.1", onListening)
+      : app.listen(config.PORT, onListening);
+    configureHttpTimeouts(listening);
+    listening.once("error", reject);
+    server = listening;
+  });
+}
+
+/** The complete provider HTTP stack, without listening. */
+export function createProviderApp(
+  standardRailConfig: ProviderStandardRailConfig,
+  walletConfig?: ProviderWalletConfig,
+): Express {
   const app = express();
   installHttpSecurityBoundary(app);
   app.use("/admin", (_req, res, next) => {
@@ -64,7 +90,9 @@ export async function startServer(
     perMinute: config.RATE_LIMIT_GLOBAL_PER_MIN,
     bypassIps,
   });
-  app.use(globalLimiter);
+  // Verified-servicing status reads are polled for an order's whole life;
+  // they skip per-client limits but keep the concurrency budget above.
+  app.use(exceptStatusReads(globalLimiter));
   installCorsBoundary(app);
   const webhookLimiter = makeRateLimiter({
     namespace: "webhook",
@@ -173,7 +201,7 @@ export async function startServer(
   app.use("/admin", adminRouter);
   app.use(
     "/standard-rail",
-    a2aLimiter,
+    exceptStatusReads(a2aLimiter),
     createStandardRailRouter(config, standardRailConfig, walletConfig),
   );
   app.use("/webhooks", postmarkWebhookRouter);
@@ -190,9 +218,15 @@ export async function startServer(
     }
   }
 
-  app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
     logError("HTTP request failed", { error: (err as Error).message });
     if (res.headersSent) return;
+    // Parser refusals are answered inside the standard-rail ingress; anything
+    // else on the dispatch path may follow an admission and stays ambiguous.
+    if (isStandardRailDispatch(req)) {
+      sendAmbiguousUnavailable(res);
+      return;
+    }
     const status = (err as { status?: number }).status;
     if (status === 413) {
       res.status(413).json({ error: "request_too_large" });
@@ -200,22 +234,7 @@ export async function startServer(
     }
     res.status(500).json({ error: "internal_error" });
   });
-
-  await new Promise<void>((resolve, reject) => {
-    const onListening = () => {
-      listening.off("error", reject);
-      logInfo(`Server listening on port ${config.PORT}`, {
-        baseUrl: config.BASE_URL,
-      });
-      resolve();
-    };
-    const listening = config.CHAIN_MODE === "mock"
-      ? app.listen(config.PORT, "127.0.0.1", onListening)
-      : app.listen(config.PORT, onListening);
-    configureHttpTimeouts(listening);
-    listening.once("error", reject);
-    server = listening;
-  });
+  return app;
 }
 
 export async function stopServer(): Promise<void> {

@@ -64,6 +64,18 @@ All notable changes to this project will be documented here.
   a persisted semantic projection and revision (core migration 004, all-null
   at revision 0), freshly stamped with the database clock and signed per
   request; terminal answers keep the attestation and inline results are gone.
+- Dispatch has three outcomes: a definite pre-admission
+  `409 {"error":"dispatch_rejected","reason"}` confirmed by a claim probe,
+  the signed snapshot (also for exact replays after expiry), or an empty 503
+  whenever admission exists, its commit is uncertain, or a different envelope
+  targets an admitted order. Admission rechecks expiry against the database
+  clock under a per-order lock, and claims are immutable and never deleted
+  (core migration 005).
+- `/dispatch/status` returns
+  `404 {"error":"dispatch_status_unavailable","reason":"outcome_policy"}` only
+  for proven absence of any claim and uses distinct bodies for every other
+  failure; status reads are exempt from per-client and purchase rate limits.
+- Funded dispatches are no longer refused for paused sales or local capacity.
 - Dispatch now verifies the persisted, nonzero provider quote for both
   pricing modes, including payer, request, listing, price and window
   coverage, and no longer caps how long after its quote a timely-paid order

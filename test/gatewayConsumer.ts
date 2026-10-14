@@ -297,3 +297,38 @@ export function semanticOperationsHash(operations: z.infer<typeof gatewayOperati
   const { observedAt: _observedAt, ...semantic } = operations;
   return canonicalHash(semantic);
 }
+
+/**
+ * providerDispatch.ts dispatch(): a 4xx/5xx JSON body with a non-null `error`
+ * is a definite refusal (the gateway deletes its claim and later sends a new
+ * envelope); anything else that is not ok is ambiguous and is reconciled by
+ * status with the original hash.
+ */
+export async function classifyDispatchAnswer(response: Response): Promise<"accepted" | "refused" | "ambiguous"> {
+  let body: unknown;
+  try {
+    body = await readGatewayJson(response);
+  } catch {
+    return "ambiguous";
+  }
+  if (response.ok) return "accepted";
+  if (response.status >= 400 && response.status < 600 && body && typeof body === "object" &&
+      !Array.isArray(body) && "error" in body && (body as { error: unknown }).error != null) {
+    return "refused";
+  }
+  return "ambiguous";
+}
+
+/**
+ * providerDispatch.ts queryProviderDispatchStatus(): only a 404 whose JSON has
+ * a non-null `error` and `reason: "outcome_policy"` proves the provider holds
+ * no claim; every other failure leaves the dispatch unknown.
+ */
+export async function classifyStatusAnswer(response: Response): Promise<"snapshot" | "no_claim" | "unknown"> {
+  if (response.ok) return "snapshot";
+  if (response.status !== 404) return "unknown";
+  const body = await readGatewayJson(response).catch(() => null);
+  return body && typeof body === "object" && !Array.isArray(body) && "error" in body &&
+    (body as { error: unknown }).error != null && (body as { reason?: unknown }).reason === "outcome_policy"
+    ? "no_claim" : "unknown";
+}

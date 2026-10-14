@@ -15,6 +15,29 @@ export const STANDARD_RAIL_STATUS_MAX_REQUEST_BYTES = 16 * 1024;
 type StandardRailRequest = Request & { rawBody?: Buffer; standardRailJson?: true };
 
 const STATUS_PATH = /^\/dispatch\/status\/?$/;
+const STATUS_URL = /^\/standard-rail\/dispatch\/status\/?(?:\?.*)?$/;
+const DISPATCH_URL = /^\/standard-rail\/dispatch\/?(?:\?.*)?$/;
+
+/**
+ * A gateway reconciliation read. It is polled roughly every ten seconds for
+ * the whole life of an order, so it is exempt from purchase and per-client
+ * rate limits; the process concurrency budget, the small body bound and
+ * signature verification before any database read still apply.
+ */
+export function isStandardRailStatusRead(req: Request): boolean {
+  return req.method === "POST" && STATUS_URL.test(req.originalUrl);
+}
+
+export function isStandardRailDispatch(req: Request): boolean {
+  return req.method === "POST" && DISPATCH_URL.test(req.originalUrl);
+}
+
+/** Run a rate limiter for every request except verified-servicing status reads. */
+export function exceptStatusReads(
+  limiter: (req: Request, res: Response, next: NextFunction) => void | Promise<void>,
+): (req: Request, res: Response, next: NextFunction) => void | Promise<void> {
+  return (req, res, next) => (isStandardRailStatusRead(req) ? next() : limiter(req, res, next));
+}
 
 export function isStrictlyParsedStandardRailJson(req: Request): boolean {
   return (req as StandardRailRequest).standardRailJson === true;
@@ -105,4 +128,15 @@ export function standardRailJsonIngress(): Array<RequestHandler | ErrorRequestHa
 export function sendSignedJson(res: Response, body: unknown): void {
   res.setHeader("Cache-Control", "no-store");
   res.json(body);
+}
+
+/**
+ * Deliberately ambiguous transport answer: an empty 503 the gateway cannot
+ * read as a definite refusal, so it reconciles through the status endpoint
+ * with the original dispatch hash instead of sending a new envelope.
+ */
+export function sendAmbiguousUnavailable(res: Response): void {
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Retry-After", "10");
+  res.status(503).end();
 }

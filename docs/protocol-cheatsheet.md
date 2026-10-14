@@ -132,7 +132,58 @@ returned.
   time.
 
 A status read is one SELECT plus signing: it writes nothing, calls no
-product, and rebuilds no history for a pending order. The terminal
+product, and rebuilds no history for a pending order.
+
+## Dispatch outcomes
+
+Accepted work is keyed by gateway audience and order. Its request, payer,
+provider-quote and dispatch bindings are immutable and a claim is never
+deleted (core migration 005). Every dispatch ends in exactly one of three
+outcomes:
+
+| Provider knowledge | Answer |
+| --- | --- |
+| Definite refusal before any admission, re-confirmed by an authoritative claim probe | `409 {"error":"dispatch_rejected","reason":...}`; the gateway later sends a new envelope |
+| A claim exists for this exact envelope | `200` with the signed snapshot, even after the envelope expired |
+| Admission exists for another envelope, the commit outcome is unknown, or admitted work cannot be rendered | empty `503` (no body, `Retry-After`); the gateway reconciles by status with the original hash |
+
+Refusal reasons are `validator`, `envelope_lifetime`, `signature`,
+`outcome_policy`, `self_purchase`, `quote_window`, `price` and `evidence`.
+No route or middleware turns a possibly-admitted dispatch into a JSON error.
+
+- Admission runs under a per-order transaction advisory lock. As its last
+  statement before commit it rechecks `validBefore` against the database
+  clock, so no claim commits at or after expiry however slowly the request
+  arrived. If the commit acknowledgement is lost, the request probes the
+  claim and continues only when the claim carries its own task id.
+- A different envelope for an admitted order is recorded as a security
+  incident and answered with the empty 503; it never replaces the claim.
+- A funded dispatch is never refused because sales are paused, the skill row
+  is inactive, or open work exceeds the listing's capacity: the gateway
+  reserves capacity per listing version from payment, and new readiness
+  quotes stop instead.
+
+## Status outcomes
+
+`/dispatch/status` verifies the signed `DispatchStatusQueryV1` (artifact type,
+domain, `gateway-dispatch` key id, freshness, signature) before reading any
+claim. Exactly `404 {"error":"dispatch_status_unavailable","reason":"outcome_policy"}`
+means "no claim": it is returned only after an authoritative probe found no
+claim for (gateway audience, order) while holding the order's admission lock.
+Every other failure leaves the dispatch unknown:
+
+| Condition | Answer |
+| --- | --- |
+| Malformed body or query, stale or wrong-domain envelope | `400 {"error":"dispatch_status_rejected","reason":"validator"\|"envelope_lifetime"}` |
+| Bad signature | `401 {"error":"dispatch_status_rejected","reason":"signature"}` |
+| A claim exists for a different dispatch hash | `409 {"error":"dispatch_status_unavailable","reason":"dispatch_conflict"}` |
+| Admission in flight | `503 {"error":"dispatch_status_unavailable","reason":"admission_in_progress"}` |
+| Database or signing failure | `503 {"error":"dispatch_status_unavailable","reason":"unavailable"}` |
+
+Status reads are exempt from the per-client and purchase rate limits (the
+gateway polls about every ten seconds for an order's whole life); the process
+concurrency budget, the 16 KiB body bound and signature verification still
+apply. The terminal
 `resultHash` is still derived from the task projection today; the frozen
 terminal-result store replaces that single seam
 (`src/core/standardRail/terminalResult.ts`).
