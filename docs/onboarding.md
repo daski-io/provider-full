@@ -153,7 +153,14 @@ the helper only verifies that binding. Put the minted/bound id in
 `PROVIDER_AGENT_ID`.
 
 After setting the minted/bound id, deploy the candidate so the gateway can read
-its AgentCards. Then register active service contracts:
+its AgentCards. Forecast the service registration first; it is read-only:
+
+```bash
+npm run daski:register -- --gateway https://<daski-testnet-gateway> --check-only
+```
+
+Review the forecast with the onboarding contact, then register active service
+contracts:
 
 ```bash
 npm run daski:register -- --gateway https://<daski-testnet-gateway>
@@ -162,11 +169,13 @@ npm run daski:register -- --gateway https://<daski-testnet-gateway>
 This second command signs provider intent, verifies gateway preparations,
 persists splitter writes before broadcast, submits activation evidence,
 cross-checks runtime commitments, and atomically promotes catalog heads. Use
-`--service <slug>` only for an intentional narrowed run. If a run stops, run
-it again: it resumes from the persisted registration and the gateway's live
-state without a new intent or transaction while the gateway still holds that
-registration ([recovery](troubleshooting.md#gateway-registration-recovery)).
-Both commands are external mutations; doctor and boot invoke neither.
+`--service <slug>` only for an intentional narrowed run. If a run stops,
+forecast and run it again: it resumes from the persisted registration and the
+gateway's live state without a new intent or transaction while the gateway
+still holds that registration
+([recovery](troubleshooting.md#gateway-registration-recovery)). Both
+commands, without `--check-only`, are external mutations; doctor and boot
+invoke neither.
 
 ### 9. Prove deployed readiness and discovery
 

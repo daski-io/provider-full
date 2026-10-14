@@ -53,6 +53,7 @@ only core and cross-service tests.
 ```bash
 npm run dev:db:up
 npm run doctor -- --stage=testnet
+npm run daski:register -- --gateway <reviewed-testnet-origin> --check-only
 npm run daski:register -- --gateway <reviewed-testnet-origin>
 npm run try-skill -- dummy echo
 npm run docs:check
@@ -75,7 +76,8 @@ development database; `npm run dev:db:stop` preserves its named volume.
 supplier. PostgreSQL-backed tests (`DATABASE_URL_TEST`) and security/migration
 scripts require an explicit disposable database.
 `daski:register` can sign, write to chain, and mutate gateway/catalog state;
-listing it here is not authorization to run it.
+listing it here is not authorization to run it. Its `--check-only` forecast is
+read-only.
 
 ## Change workflow
 

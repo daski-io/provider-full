@@ -9,9 +9,17 @@ import {
   runMigrations,
   verifyDatabaseRoleSeparation,
 } from "./core/db/pool.js";
-import { listActiveServices } from "./core/db/queries/services.js";
+import {
+  assertReadOnlySessions,
+  enforceReadOnlySessions,
+} from "./core/db/readOnlySessions.js";
+import { listActiveServices, type ServiceRow } from "./core/db/queries/services.js";
 import { bootstrapServiceRegistry } from "./core/chain/serviceRegistrar.js";
 import { registerServiceWithGateway } from "./core/gatewayRegistration/client.js";
+import {
+  checkServiceRegistration,
+  forecastFails,
+} from "./core/gatewayRegistration/forecast.js";
 import { retireGatewayService } from "./core/gatewayRegistration/retirement.js";
 import { normalizedGatewayOrigin } from "./core/gatewayRegistration/wire.js";
 import { redactSensitiveText } from "./core/security/redaction.js";
@@ -36,6 +44,9 @@ function options(name: string): string[] {
   }
   return values;
 }
+
+const describe = (error: unknown) =>
+  redactSensitiveText(error instanceof Error ? error.message : String(error));
 
 // The identity script finds an existing agent on the canonical registry;
 // --agent-id pins it and --scan-blocks bounds the Transfer-event lookup.
@@ -64,6 +75,46 @@ async function ensureProviderIdentity(): Promise<void> {
   });
 }
 
+function selectServices(active: ServiceRow[]): ServiceRow[] {
+  const selected = new Set(options("--service"));
+  const services = active.filter((service) =>
+    selected.size === 0 || selected.has(service.slug));
+  if (services.length === 0) throw new Error("no active provider services matched");
+  const missing = [...selected].filter((slug) =>
+    !services.some((service) => service.slug === slug));
+  if (missing.length > 0) {
+    throw new Error(`unknown or inactive services: ${missing.join(", ")}`);
+  }
+  return services;
+}
+
+// Read-only forecast of what a registration run would do per service. No
+// migration, identity script, ServiceRegistry bootstrap, signature,
+// broadcast, gateway mutation or database write: every database session is
+// read-only and gateway access is GET only.
+async function forecast(gateway: string): Promise<void> {
+  enforceReadOnlySessions(pool);
+  if (!await checkDatabase()) throw new Error("provider database is unreachable");
+  await assertReadOnlySessions(pool);
+  let failing = 0;
+  for (const service of selectServices(await listActiveServices())) {
+    let line;
+    try {
+      line = await checkServiceRegistration(gateway, service);
+    } catch (error) {
+      line = {
+        serviceSlug: service.slug,
+        state: "BLOCKED" as const,
+        action: "forecast-read-failed",
+        detail: describe(error).replace(/\s+/g, " ").slice(0, 512),
+      };
+    }
+    process.stdout.write(`${JSON.stringify(line)}\n`);
+    if (forecastFails(line)) failing += 1;
+  }
+  if (failing > 0) throw new Error(`${failing} service(s) would not complete registration`);
+}
+
 async function main(): Promise<void> {
   const gateway = option("--gateway") ?? config.GATEWAY_BASE_URL;
   if (!gateway) throw new Error("--gateway or GATEWAY_BASE_URL is required");
@@ -73,6 +124,11 @@ async function main(): Promise<void> {
   }
   if (retirement && options("--service").length > 0) {
     throw new Error("--retire cannot be combined with --service");
+  }
+  if (process.argv.includes("--check-only")) {
+    if (retirement) throw new Error("--check-only cannot be combined with --retire");
+    await forecast(gateway);
+    return;
   }
   if (!retirement && !process.argv.includes("--skip-provider-identity")) {
     await ensureProviderIdentity();
@@ -92,20 +148,9 @@ async function main(): Promise<void> {
     return;
   }
 
-  const selected = new Set(options("--service"));
-  const services = (await listActiveServices()).filter((service) =>
-    selected.size === 0 || selected.has(service.slug));
-  if (services.length === 0) throw new Error("no active provider services matched");
-  const missing = [...selected].filter((slug) =>
-    !services.some((service) => service.slug === slug));
-  if (missing.length > 0) {
-    throw new Error(`unknown or inactive services: ${missing.join(", ")}`);
-  }
-
+  const services = selectServices(await listActiveServices());
   await bootstrapServiceRegistry();
   const failures: string[] = [];
-  const describe = (error: unknown) =>
-    error instanceof Error ? error.message : String(error);
 
   // Phase 1 — broadcast every service's splitter deployments up front so
   // all of them share ONE finality window instead of paying it per service.
@@ -135,10 +180,7 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  const message = redactSensitiveText(
-    error instanceof Error ? error.message : String(error),
-  );
-  process.stderr.write(`daski registration failed: ${message}\n`);
+  process.stderr.write(`daski registration failed: ${describe(error)}\n`);
   process.exitCode = 1;
 }).finally(async () => {
   await closeMigrationPool().catch(() => undefined);

@@ -39,7 +39,9 @@ addresses, signer, and funded wallet before use:
   It can send transactions and mutate gateway/database state; a rerun
   resumes an interrupted registration. `--service <slug>` narrows an
   intentional update. `--retire 0x<SERVICE_ID>` is a separate guarded
-  retirement and must not be combined with `--service`.
+  retirement and must not be combined with `--service`. `--check-only` is a
+  read-only forecast of the same run: read-only database sessions, gateway
+  `GET` requests only, and no signature or transaction.
 - `node --env-file=.env scripts/probe-identity.mjs` reads the configured
   Base Sepolia identity and registry state.
 - `node --env-file=.env scripts/probe-tokenuri.mjs <agentId>...` reads

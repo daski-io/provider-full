@@ -187,10 +187,12 @@ operator has reviewed the wallet, chain, gateway, and possible transaction
 costs, run on Testnet:
 
 ```bash
+npm run daski:register -- --gateway https://<daski-testnet-gateway> --check-only
 npm run daski:register -- --gateway https://<daski-testnet-gateway>
 ```
 
-The command reconciles the configured ERC-8004 provider identity, publishes
+The first command is a read-only forecast of what a run would do. The second
+reconciles the configured ERC-8004 provider identity, publishes
 every active service contract, obtains gateway-signed preparations, persists chain writes
 before broadcast, verifies activation evidence, and atomically promotes the
 runtime catalog. `--service <slug>` limits a run. Re-running is convergent: an

@@ -20,6 +20,8 @@ All notable changes to this project will be documented here.
 - A harness-agnostic Agent Skill under `.agents/skills/` plus installation and
   validation guidance for compatible coding agents.
 - Documentation, skill, and release-package validation gates.
+- `npm run daski:register -- --check-only`, a read-only registration
+  forecast with read-only database sessions and gateway `GET` requests only.
 
 ### Changed
 

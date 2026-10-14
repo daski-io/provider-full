@@ -157,7 +157,8 @@ intent only when there is nothing to resume. A pending registration's
 intent, preparation, splitter writes and accepted evidence are never
 replaced; accepted evidence is replayed exactly, and only evidence the
 gateway never accepted is re-signed over the original splitter
-transactions.
+transactions. The `--check-only` forecast runs the same decision and
+verification with read-only database sessions and gateway `GET` requests.
 
 ## Assets and wallet actions
 

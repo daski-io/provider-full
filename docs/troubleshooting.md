@@ -207,6 +207,9 @@ Stop. Both `scripts/register-provider.mjs` and `npm run daski:register` are
 mutating. Review their chain, addresses, agent/service ids, origin, wallet,
 balances, gateway, and selected service/retirement flags with the onboarding
 contact before authorizing them. Doctor and boot never invoke registration.
+`npm run daski:register -- --gateway <origin> --check-only` is the read-only
+forecast of what a run would do; see
+[Gateway registration recovery](#gateway-registration-recovery).
 
 ### Identity helper refuses to mint a second agent
 
@@ -263,6 +266,27 @@ registration, a registration the gateway ended (`REJECTED` or `SUPERSEDED`),
 or an intent the gateway never prepared. While the gateway holds a
 registration as pending or active, its persisted intent, preparation,
 splitter writes and accepted evidence are kept.
+
+### Forecast a run first
+
+```bash
+npm run daski:register -- --gateway https://<daski-gateway> --check-only
+```
+
+The forecast performs the same chain, card, database and gateway reads and
+the same recovery decision, verification and promotion cross-check as a run,
+then prints one JSON line per active service. It runs no migration, identity
+helper or ServiceRegistry bootstrap, opens only read-only database sessions,
+sends only gateway `GET` requests, and signs or broadcasts nothing. It exits
+non-zero when any service is `BLOCKED` or a promotion would fail.
+
+| State | Meaning |
+| --- | --- |
+| `ACTIVE` | Registered and unchanged; a run does nothing. |
+| `RESUME` | The gateway activated the registration; a run promotes it. `crossCheck` says whether the exact-set check passes. |
+| `IN_PROGRESS` | A pending registration continues under its persisted intent; `action` names the evidence step (`replay-accepted-evidence`, `refresh-unaccepted-evidence`, `resubmit-unaccepted-evidence`, `confirm-splitters-and-submit-evidence`, `post-persisted-intent`). |
+| `RE-REGISTER` | A run signs a new intent; `changedSkills` lists skills whose contract differs from their promoted head. |
+| `BLOCKED` | A run would refuse; `action` and `detail` name the reason. |
 
 ### Activation evidence
 
