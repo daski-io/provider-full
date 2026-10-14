@@ -216,20 +216,25 @@ forecast of what a run would do; see
 The helper finds an existing agent on the canonical IdentityRegistry, not only
 through the Daski AgentIndex: a run that stopped between `register()` and the
 index claim is found through the wallet's ERC-721 balance and its `Transfer`
-events. When the wallet owns an agent the scan cannot resolve within
-`--scan-blocks` (default 500,000 blocks), or owns several, it stops without
-sending anything. Re-run with `--agent-id <id>`; the id is verified with
-`ownerOf` against the provider wallet. `npm run daski:register` forwards
-`--agent-id` and `--scan-blocks` to the helper. Never mint a replacement to get
-past this message.
+events. Only an agent minted to the provider wallet is adopted; an agent
+someone else transferred to it is never treated as this provider's
+registration. When the wallet holds agents the scan cannot account for within
+`--scan-blocks` (default 500,000 blocks), or several minted to it, it stops
+without sending anything. It also refuses to mint while any transaction from
+the wallet is not yet mined, and it signs a mint at the nonce it read with the
+zero balance, so an earlier registration and a new one can never both be
+mined. Re-run with `--agent-id <id>`; the id is verified with `ownerOf`
+against the provider wallet. `npm run daski:register` forwards `--agent-id`
+and `--scan-blocks` to the helper. Never mint a replacement to get past this
+message.
 
 ### Identity helper reports no `agentWallet`
 
 The canonical registry binds the registering wallet in `register()`, and the
 helper only verifies that binding. It no longer calls `walletRotationNonce` or
 the former `setAgentWallet` consent flow, which the registry does not expose.
-An agent with no bound wallet is a separate, reviewed recovery; nothing was
-sent.
+An agent with no bound wallet is a separate, reviewed recovery; the message
+names any transaction the run already sent.
 
 ### RPC is reachable but reports the wrong chain
 

@@ -35,7 +35,7 @@ export interface RegistrationStepsOptions {
 
 export interface RegistrationSteps {
   retryOnLag<T>(label: string, fn: () => Promise<T>): Promise<T>;
-  ownedAgentIds(balance: bigint): Promise<bigint[]>;
+  heldAgents(balance: bigint, head: bigint): Promise<{ minted: bigint[]; transferredIn: bigint[] }>;
   ensureAgent(): Promise<{ agentId: bigint; registeredAt?: bigint }>;
   ensureAgentWallet(agentId: bigint, registeredAt: bigint | undefined): Promise<void>;
   ensureIndexed(agentId: bigint): Promise<void>;

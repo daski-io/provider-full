@@ -29,9 +29,10 @@ addresses, signer, and funded wallet before use:
 - `node --env-file=.env scripts/register-provider.mjs` registers or
   reconciles the provider identity, AgentIndex entry, and marketplace
   listing, and verifies the wallet binding `register()` made. It finds an
-  existing agent on the canonical registry (`--agent-id <id>` pins one,
-  `--scan-blocks <n>` bounds the event scan) and never mints while the wallet
-  owns one. It sends transactions and may spend ETH and USDC. `--update-uri`
+  agent minted to the wallet on the canonical registry (`--agent-id <id>`
+  pins one, `--scan-blocks <n>` bounds the event scan), never adopts one
+  transferred in, and never mints while a transaction from the wallet is
+  pending. It sends transactions and may spend ETH and USDC. `--update-uri`
   also changes the on-chain agent URI.
 - `npm run daski:register -- --gateway <origin>` registers every active
   service contract with the gateway, persists splitter writes before

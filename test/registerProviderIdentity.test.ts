@@ -26,7 +26,7 @@ const AGENT_ID = 4242n;
 const MINT_BLOCK = 7_000_000n;
 const HEAD = 7_035_000n;
 
-interface Transfer { blockNumber: bigint; tokenId: bigint; to: string }
+interface Transfer { blockNumber: bigint; tokenId: bigint; to: string; from?: string }
 
 function chainStub(overrides: Partial<{
   balance: bigint;
@@ -36,6 +36,8 @@ function chainStub(overrides: Partial<{
   indexResolve: bigint;
   laggingReads: number;
   receipt: unknown;
+  nonces: { confirmed: number; pending: number };
+  tokenUri: string;
 }> = {}) {
   const state = {
     head: HEAD,
@@ -48,9 +50,12 @@ function chainStub(overrides: Partial<{
     // Pinned getAgentWallet reads that fail before a node that has the block answers.
     laggingReads: 0,
     receipt: null as unknown,
+    nonces: { confirmed: 5, pending: 5 },
+    tokenUri: AGENT_URI,
     reads: [] as Array<{ functionName: string; args?: readonly unknown[]; blockNumber?: bigint }>,
+    nonceReads: [] as Array<{ blockNumber?: bigint; blockTag?: string }>,
     logQueries: [] as Array<{ fromBlock: bigint; toBlock: bigint }>,
-    writes: [] as Array<{ functionName: string }>,
+    writes: [] as Array<{ functionName: string; nonce?: number }>,
     ...overrides,
   };
   const pub = {
@@ -73,7 +78,7 @@ function chainStub(overrides: Partial<{
             throw new Error("header not found");
           }
           return state.agentWallets.get(args![0] as bigint) ?? zeroAddress;
-        case "tokenURI": return AGENT_URI;
+        case "tokenURI": return state.tokenUri;
         default: throw new Error(`unexpected read ${functionName}`);
       }
     },
@@ -89,13 +94,17 @@ function chainStub(overrides: Partial<{
           transfer.blockNumber >= fromBlock && transfer.blockNumber <= toBlock && transfer.to === args.to)
         .map((transfer) => ({
           blockNumber: transfer.blockNumber,
-          args: { from: zeroAddress, to: transfer.to, tokenId: transfer.tokenId },
+          args: { from: transfer.from ?? zeroAddress, to: transfer.to, tokenId: transfer.tokenId },
         }));
     },
     async waitForTransactionReceipt() { return state.receipt; },
+    async getTransactionCount(query: { blockNumber?: bigint; blockTag?: string }) {
+      state.nonceReads.push(query);
+      return query.blockTag === "pending" ? state.nonces.pending : state.nonces.confirmed;
+    },
   };
   const wallet = {
-    async writeContract(params: { functionName: string }) {
+    async writeContract(params: { functionName: string; nonce?: number }) {
       state.writes.push(params);
       if (!state.receipt) throw new Error("no transaction expected");
       return "0xtxhash";
@@ -220,6 +229,62 @@ describe("existing provider identity on the canonical registry", () => {
     await expect(steps.ensureAgent()).resolves.toEqual({ agentId: AGENT_ID, registeredAt: MINT_BLOCK });
     expect(stub.state.writes.map((write) => write.functionName)).toEqual(["register"]);
     expect(logs.map((entry) => entry.step)).toContain("identity.register.done");
+    // Signed at the nonce read at the very block whose balance was zero.
+    expect(stub.state.writes[0]!.nonce).toBe(5);
+    expect(stub.state.reads.find((read) => read.functionName === "balanceOf")?.blockNumber).toBe(HEAD);
+    expect(stub.state.nonceReads).toContainEqual({ address: WALLET, blockNumber: HEAD });
+  });
+
+  it("refuses to mint while a transaction from the wallet is not yet mined", async () => {
+    const stub = chainStub({
+      balance: 0n, owners: new Map(), transfers: [],
+      nonces: { confirmed: 5, pending: 6 },
+    });
+    await expect(stepsFor(stub).steps.ensureAgent())
+      .rejects.toThrow(/1 transaction\(s\) not yet mined[\s\S]*Refusing to mint a second agent/);
+    expect(stub.state.writes).toEqual([]);
+  });
+
+  it("never adopts an agent transferred in by someone else and mints its own", async () => {
+    const topics = encodeEventTopics({
+      abi: identityAbi,
+      eventName: "Registered",
+      args: { agentId: 5_000n, owner: WALLET },
+    } as never);
+    const data = encodeAbiParameters([{ type: "string" }], [AGENT_URI]);
+    const stub = chainStub({
+      owners: new Map([[9_000n, WALLET]]),
+      transfers: [{ blockNumber: MINT_BLOCK, tokenId: 9_000n, to: WALLET, from: OTHER }],
+      tokenUri: "https://elsewhere.example/agent.json",
+      receipt: { status: "success", blockNumber: HEAD, logs: [{ address: IDENTITY, data, topics }] },
+    });
+    const { steps, logs } = stepsFor(stub, { updateUri: true });
+    await expect(steps.ensureAgent()).resolves.toEqual({ agentId: 5_000n, registeredAt: HEAD });
+    // The foreign agent's URI is never rewritten and it is never adopted.
+    expect(stub.state.writes.map((write) => write.functionName)).toEqual(["register"]);
+    expect(logs).toContainEqual(expect.objectContaining({ step: "identity.foreign", agentIds: ["9000"] }));
+  });
+
+  it("still finds its own agent after it was transferred away and back", async () => {
+    const stub = chainStub({
+      transfers: [
+        { blockNumber: MINT_BLOCK, tokenId: AGENT_ID, to: WALLET },
+        { blockNumber: MINT_BLOCK + 30_000n, tokenId: AGENT_ID, to: WALLET, from: OTHER },
+      ],
+    });
+    await expect(stepsFor(stub).steps.ensureAgent()).resolves.toEqual({ agentId: AGENT_ID });
+    expect(stub.state.writes).toEqual([]);
+  });
+
+  it("refuses to mint while held agents remain unaccounted for", async () => {
+    const stub = chainStub({
+      balance: 2n,
+      owners: new Map([[9_000n, WALLET], [AGENT_ID, WALLET]]),
+      transfers: [{ blockNumber: MINT_BLOCK, tokenId: 9_000n, to: WALLET, from: OTHER }],
+    });
+    await expect(stepsFor(stub, { scanBlocks: 100_000n }).steps.ensureAgent())
+      .rejects.toThrow(/holds 2 agent\(s\)[\s\S]*0 minted to it \(none\) of 1 found/);
+    expect(stub.state.writes).toEqual([]);
   });
 });
 
@@ -241,6 +306,18 @@ describe("payment wallet binding", () => {
     await expect(attempt).rejects.toThrow(/walletRotationNonce/);
     await expect(attempt).rejects.toMatchObject({ exitCode: 2 });
     expect(stub.state.writes).toEqual([]);
+  });
+
+  it("names what the run already sent when it stops on an unbound wallet", async () => {
+    const stub = chainStub({
+      agentWallets: new Map(),
+      tokenUri: "https://elsewhere.example/agent.json",
+      receipt: { status: "success", blockNumber: HEAD, logs: [] },
+    });
+    const { steps } = stepsFor(stub, { agentIdArg: AGENT_ID, updateUri: true });
+    await expect(steps.ensureAgent()).resolves.toEqual({ agentId: AGENT_ID });
+    await expect(steps.ensureAgentWallet(AGENT_ID, undefined))
+      .rejects.toThrow(/This run already sent: identity\.setAgentURI\./);
   });
 
   it("leaves a deliberately bound payout wallet alone", async () => {

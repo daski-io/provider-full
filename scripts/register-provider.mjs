@@ -6,13 +6,16 @@
 //
 // An existing identity is found on the canonical registry itself. An
 // explicit --agent-id is verified with ownerOf; otherwise a non-zero ERC-721
-// balanceOf(wallet) means the wallet already owns an agent, and its id is
-// recovered from the registry's Transfer events, scanned back from the head
-// in windows the RPC accepts. The AgentIndex reverse lookup is only a fast
-// path: it knows a wallet after claim(), a later step, so a run that crashed
-// between register() and claim() must not mint again. A balance the scan
-// cannot resolve aborts and asks for --agent-id; the script never mints
-// while the registry shows a balance.
+// balanceOf(wallet) is resolved from the registry's Transfer events, scanned
+// back from the head in windows the RPC accepts. The AgentIndex reverse
+// lookup is only a fast path: it knows a wallet after claim(), a later step,
+// so a run that crashed between register() and claim() must not mint again.
+// Only an agent minted to the wallet is adopted; agents transferred in by
+// someone else are never this provider's registration. A balance the scan
+// cannot account for aborts and asks for --agent-id. A mint is refused while
+// the wallet has a transaction not yet mined, and it is signed at the nonce
+// read with the zero balance, so a registration already sent and a new one
+// can never both be mined.
 //
 // The canonical registry binds the registering wallet as the agentWallet in
 // register() itself, and provider identity checks reject providers without a
@@ -144,8 +147,12 @@ export function registrationSteps({
     }
   }
 
+  // Labels of every transaction this run handed to the network.
+  const sent = [];
+
   async function sendTx(label, params) {
     const hash = await retryOnLag(label, () => wallet.writeContract(params));
+    sent.push(label);
     log({ step: `${label}.sent`, hash });
     const receipt = await pub.waitForTransactionReceipt({ hash });
     log({ step: `${label}.receipt`, status: receipt.status, blockNumber: receipt.blockNumber.toString() });
@@ -176,16 +183,18 @@ export function registrationSteps({
     });
   }
 
-  // Agent ids the wallet currently owns, recovered from the registry's
-  // Transfer events to the wallet. Scans back from the head in windows the
-  // RPC accepts (halving on a range error) until `balance` owned ids are in
-  // hand or `scanBlocks` blocks have been covered.
-  async function ownedAgentIds(balance) {
-    const head = await pub.getBlockNumber();
+  // The agents the wallet holds, recovered from the registry's Transfer
+  // events to the wallet and split into those minted to it (its own
+  // registrations: a Transfer from the zero address) and those transferred in
+  // from someone else. Scans back from `head` in windows the RPC accepts
+  // (halving on a range error); it stops early only once `balance` held
+  // agents are found and all of them are its own, otherwise it covers
+  // `scanBlocks` blocks so an earlier mint of a re-acquired agent is seen.
+  async function heldAgents(balance, head) {
     const floor = head > scanBlocks ? head - scanBlocks : 0n;
-    log({ step: "identity.scan", fromBlock: floor.toString(), toBlock: head.toString(), note: "registry balance is non-zero; recovering the agent id from Transfer events" });
-    const seen = new Set();
-    const owned = [];
+    log({ step: "identity.scan", fromBlock: floor.toString(), toBlock: head.toString(), note: "registry balance is non-zero; recovering held agents from Transfer events" });
+    const held = new Map();
+    const checked = new Set();
     let window = LOG_WINDOW_START;
     let toBlock = head;
     while (toBlock >= floor) {
@@ -202,15 +211,20 @@ export function registrationSteps({
       }
       for (const entry of entries) {
         const id = entry.args.tokenId;
-        if (seen.has(id)) continue;
-        seen.add(id);
-        const owner = await ownerOf(id);
-        if (owner && sameAddress(owner, account.address)) owned.push(id);
+        if (!checked.has(id)) {
+          checked.add(id);
+          const owner = await ownerOf(id);
+          if (owner && sameAddress(owner, account.address)) held.set(id, false);
+        }
+        if (held.has(id) && sameAddress(entry.args.from, zeroAddress)) held.set(id, true);
       }
-      if (BigInt(owned.length) >= balance || fromBlock === floor) break;
+      const allOwn = [...held.values()].every(Boolean);
+      if ((BigInt(held.size) >= balance && allOwn) || fromBlock === floor) break;
       toBlock = fromBlock - 1n;
     }
-    return owned;
+    const minted = [...held].filter(([, own]) => own).map(([id]) => id);
+    const transferredIn = [...held].filter(([, own]) => !own).map(([id]) => id);
+    return { minted, transferredIn };
   }
 
   // Returns the provider's existing agentId — verified from --agent-id, the
@@ -239,25 +253,50 @@ export function registrationSteps({
     }
 
     // The registry is the source of truth: the ERC-721 balance is non-zero
-    // as soon as register() has mined, whether or not claim() ever ran.
-    const balance = await readIdentity("balanceOf", [account.address]);
+    // as soon as register() has mined, whether or not claim() ever ran. The
+    // balance and the wallet's nonce are read at one block, and a mint is
+    // signed at exactly that nonce: a registration this wallet already sent
+    // either shows in that balance or occupies that nonce, so at most one of
+    // them can ever be mined.
+    const head = await pub.getBlockNumber();
+    const balance = await readIdentity("balanceOf", [account.address], { blockNumber: head });
     if (balance > 0n) {
-      const owned = await ownedAgentIds(balance);
-      if (balance === 1n && owned.length === 1) {
-        log({ step: "identity.skip", agentId: owned[0].toString(), note: "already registered (canonical registry balance; id recovered from Transfer events)" });
-        await reconcileUri(owned[0]);
-        return { agentId: owned[0] };
+      const { minted, transferredIn } = await heldAgents(balance, head);
+      if (minted.length === 1) {
+        log({ step: "identity.skip", agentId: minted[0].toString(), note: "already registered (minted to the provider wallet; id recovered from Transfer events)" });
+        await reconcileUri(minted[0]);
+        return { agentId: minted[0] };
       }
+      if (minted.length > 1 || BigInt(transferredIn.length) !== balance) {
+        const found = [...minted, ...transferredIn];
+        throw new RegistrationAbort(
+          `the provider wallet holds ${balance} agent(s) on the canonical registry; the last ${scanBlocks} blocks of Transfer events resolved ` +
+          `${minted.length} minted to it (${minted.map(String).join(", ") || "none"}) of ${found.length} found; re-run with --agent-id <id> ` +
+          "(verified with ownerOf) or a larger --scan-blocks. Refusing to mint a second agent.",
+          1,
+        );
+      }
+      // Every held agent was transferred in by someone else: none is this
+      // wallet's registration, so none is adopted.
+      log({ step: "identity.foreign", agentIds: transferredIn.map(String), note: "transferred-in agents are not this provider's registration; not adopting them" });
+    }
+
+    const [confirmedNonce, pendingNonce] = await Promise.all([
+      pub.getTransactionCount({ address: account.address, blockNumber: head }),
+      pub.getTransactionCount({ address: account.address, blockTag: "pending" }),
+    ]);
+    if (pendingNonce > confirmedNonce) {
       throw new RegistrationAbort(
-        `the provider wallet already owns ${balance} agent(s) on the canonical registry, but the last ${scanBlocks} blocks of Transfer events resolved ` +
-        `${owned.length ? owned.map(String).join(", ") : "none"}; re-run with --agent-id <id> (verified with ownerOf). Refusing to mint a second agent.`,
+        `the provider wallet has ${pendingNonce - confirmedNonce} transaction(s) not yet mined; one may be a registration in flight. ` +
+        "Wait until they are mined and re-run. Refusing to mint a second agent.",
         1,
       );
     }
 
-    log({ step: "identity.register", agentURI: agentUri });
+    log({ step: "identity.register", agentURI: agentUri, nonce: confirmedNonce });
     const receipt = await sendTx("identity.register", {
       address: identity, abi: identityAbi, functionName: "register", args: [agentUri],
+      nonce: confirmedNonce,
     });
 
     // The receipt's Registered event is the authoritative source of the
@@ -296,7 +335,8 @@ export function registrationSteps({
     throw new RegistrationAbort(
       `agent ${agentId} has no agentWallet on the canonical registry. The registry binds the registering wallet in register() ` +
       "and no longer exposes walletRotationNonce(), which the former SetAgentWallet consent flow needed, so this script cannot " +
-      "bind one; binding a wallet after the fact is a separate decision. Nothing was sent.",
+      "bind one; binding a wallet after the fact is a separate decision. " +
+      (sent.length === 0 ? "Nothing was sent." : `This run already sent: ${sent.join(", ")}.`),
       2,
     );
   }
@@ -388,7 +428,7 @@ export function registrationSteps({
     return summary;
   }
 
-  return { retryOnLag, sendTx, ownedAgentIds, ensureAgent, ensureAgentWallet, ensureIndexed, ensureListed, run };
+  return { retryOnLag, sendTx, heldAgents, ensureAgent, ensureAgentWallet, ensureIndexed, ensureListed, run };
 }
 
 export async function main(argv = process.argv.slice(2), env = process.env) {
