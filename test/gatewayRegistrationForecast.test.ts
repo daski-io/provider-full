@@ -299,6 +299,24 @@ describe("read-only registration forecast", { timeout: 30_000 }, () => {
     await expect(register()).resolves.toMatchObject({ state: "ACTIVE" });
   });
 
+  it("forecasts a registration behind a stale ServiceRegistry URI the run would rewrite first", async () => {
+    h.chain!.serviceUri = "https://provider.example/.well-known/agent-card.json";
+    const forecast = await forecastWithoutEffects();
+    expect(forecast).toMatchObject({
+      state: "RE-REGISTER",
+      action: "sign-new-intent",
+      serviceUriHeal: true,
+      detail: expect.stringMatching(
+        /^a run first rewrites the stale ServiceRegistry URI to https:\/\/provider\.example\/agent-cards\/orbital-logistics\.json; first-admission/,
+      ),
+    });
+    expect(forecastFails(forecast)).toBe(false);
+
+    // The run itself, which has already healed the URI, never accepts it.
+    await expect(registerServiceWithGateway(GATEWAY, await service()))
+      .rejects.toThrow(/finalized ServiceRegistry record drifted/);
+  });
+
   it("forecasts first admission, an unchanged registration and a changed card", async () => {
     expect(await forecastWithoutEffects()).toMatchObject({
       state: "RE-REGISTER",

@@ -127,7 +127,9 @@ A run resumes a previous one from the local record and the gateway's live
 state; see [Troubleshooting](troubleshooting.md#gateway-registration-recovery).
 These optional variables tune only the registration command's activation
 polling. Each is an integer number of milliseconds; a malformed or
-out-of-range value stops the run instead of polling at an unintended rate.
+out-of-range value stops the run, and the forecast, when it starts, before
+the identity helper or any chain write, instead of polling at an unintended
+rate.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |

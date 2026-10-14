@@ -32,6 +32,12 @@ export interface RegistrationContext {
   record: FinalizedService;
   providerPayee: Address;
   published: PublishedServiceContract;
+  /**
+   * Forecast only: the finalized serviceURI is stale and the run's
+   * ServiceRegistry bootstrap would rewrite it first; `record` carries the
+   * URI it would write.
+   */
+  serviceUriHealPending: boolean;
 }
 
 export function gatewaySigner(): Address {
@@ -55,10 +61,11 @@ async function loadPolicy(gatewayOrigin: string): Promise<RegistrationPolicy> {
 async function chainService(
   service: ServiceRow,
   finalizedBlock: bigint,
-): Promise<{ record: FinalizedService; providerPayee: Address }> {
+  healableServiceUri: boolean,
+): Promise<{ record: FinalizedService; providerPayee: Address; serviceUriHealPending: boolean }> {
   if (!service.on_chain_id) throw new Error(`${service.slug} is not registered on chain`);
   const serviceId = `0x${service.on_chain_id.toString("hex")}` as Hex;
-  const [record, owner, agentWallet] = await Promise.all([
+  const [finalized, owner, agentWallet] = await Promise.all([
     publicClient.readContract({
       address: config.SERVICE_REGISTRY_ADDRESS as Hex,
       abi: serviceRegistryAbi,
@@ -85,15 +92,20 @@ async function chainService(
     `/agent-cards/${service.slug}.json`,
     config.BASE_URL,
   ).toString();
+  // Only the serviceURI is healable: the run's ServiceRegistry bootstrap
+  // rewrites a stale one before gateway registration, and a forecast that
+  // asks for it is evaluated as if that rewrite had happened.
+  const serviceUriHealPending = finalized.serviceURI !== expectedUri;
   if (
-    !record.active ||
-    record.providerAgentId !== config.PROVIDER_AGENT_ID ||
-    record.serviceId.toLowerCase() !== serviceId ||
-    record.serviceSlug !== service.slug ||
-    record.version !== service.version ||
-    record.serviceURI !== expectedUri ||
-    getAddress(record.serviceWallet) !== getAddress(service.service_wallet ?? ZERO)
+    !finalized.active ||
+    finalized.providerAgentId !== config.PROVIDER_AGENT_ID ||
+    finalized.serviceId.toLowerCase() !== serviceId ||
+    finalized.serviceSlug !== service.slug ||
+    finalized.version !== service.version ||
+    (serviceUriHealPending && !healableServiceUri) ||
+    getAddress(finalized.serviceWallet) !== getAddress(service.service_wallet ?? ZERO)
   ) throw new Error(`${service.slug} finalized ServiceRegistry record drifted`);
+  const record = serviceUriHealPending ? { ...finalized, serviceURI: expectedUri } : finalized;
   if (
     getAddress(providerAddress) !== getAddress(owner) &&
     getAddress(providerAddress) !== getAddress(agentWallet)
@@ -104,7 +116,7 @@ async function chainService(
   if (providerPayee === getAddress(ZERO)) {
     throw new Error("provider has no verified payment wallet");
   }
-  return { record, providerPayee };
+  return { record, providerPayee, serviceUriHealPending };
 }
 
 async function publishedContract(
@@ -130,16 +142,31 @@ async function publishedContract(
 
 /**
  * The gateway policy, the finalized chain record and provider authority, and
- * the provider's own published card for one service. Reads only.
+ * the provider's own published card for one service. Reads only. A run
+ * refuses a stale serviceURI here (its bootstrap has already rewritten it);
+ * the forecast, which runs no bootstrap, passes `healableServiceUri`.
  */
 export async function loadRegistrationContext(
   gateway: string,
   service: ServiceRow,
+  options: { healableServiceUri?: boolean } = {},
 ): Promise<RegistrationContext> {
   const gatewayOrigin = normalizedGatewayOrigin(gateway);
   const policy = await loadPolicy(gatewayOrigin);
   const finalizedBlock = await finalizedReadBlockNumber();
-  const { record, providerPayee } = await chainService(service, finalizedBlock);
+  const { record, providerPayee, serviceUriHealPending } = await chainService(
+    service,
+    finalizedBlock,
+    options.healableServiceUri === true,
+  );
   const published = await publishedContract(record);
-  return { gatewayOrigin, policy, finalizedBlock, record, providerPayee, published };
+  return {
+    gatewayOrigin,
+    policy,
+    finalizedBlock,
+    record,
+    providerPayee,
+    published,
+    serviceUriHealPending,
+  };
 }

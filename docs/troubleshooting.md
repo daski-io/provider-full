@@ -314,6 +314,12 @@ or a promotion would fail.
 | `RE-REGISTER` | A run signs a new intent; `changedSkills` lists skills whose contract differs from their promoted head. |
 | `BLOCKED` | A run would refuse; `action` and `detail` name the reason. |
 
+A line with `serviceUriHeal: true` belongs to a service whose finalized
+ServiceRegistry URI is stale: a run's ServiceRegistry bootstrap rewrites it
+before gateway registration, so the forecast is evaluated as if it had. A run
+drives gateway registration with the service rows that bootstrap leaves, so a
+service it registers on chain is admitted in the same run.
+
 ### Activation evidence
 
 The gateway accepts evidence once and then honors only an exact replay of that

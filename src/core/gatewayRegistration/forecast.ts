@@ -1,7 +1,7 @@
 import type { ServiceRow } from "../db/queries/services.js";
 import { redactSensitiveText } from "../security/redaction.js";
 import { ReusedListingDriftError, describeCrossCheck } from "./activationIdentity.js";
-import { loadRegistrationContext } from "./chainContext.js";
+import { loadRegistrationContext, type RegistrationContext } from "./chainContext.js";
 import { planServiceRegistration } from "./client.js";
 import { staleIntentBindings, verifyRegistrationView } from "./progress.js";
 import { resolveActivationEvidence } from "./activationEvidence.js";
@@ -35,6 +35,8 @@ export interface RegistrationForecast {
   /** Whether promotion's deployment evidence resolves, as a run would resolve it. */
   evidence?: { ok: boolean; detail: string };
   splitters?: { required: number; journaled: number; confirmed: number };
+  /** The run's ServiceRegistry bootstrap would first rewrite a stale serviceURI. */
+  serviceUriHeal?: boolean;
 }
 
 const EVIDENCE_ACTIONS: Record<EvidenceStep, string> = {
@@ -67,11 +69,12 @@ async function splitterSummary(
 }
 
 /**
- * Read-only forecast of what registerServiceWithGateway would do for one
- * service: the same chain, card, local-record, gateway and catalog reads, the
- * same recovery decision, verification and promotion cross-check, and no
- * write. Nothing is signed, broadcast, posted, promoted or persisted; gateway
- * access is GET only.
+ * Read-only forecast of what a registration run would do for one service:
+ * the same chain, card, local-record, gateway and catalog reads, the same
+ * recovery decision, verification, promotion cross-check and evidence
+ * resolution, and no write. A serviceURI the run's bootstrap would rewrite
+ * is evaluated as rewritten and reported. Nothing is signed, broadcast,
+ * posted, promoted or persisted; gateway access is GET only.
  */
 export async function checkServiceRegistration(
   gateway: string,
@@ -86,7 +89,21 @@ export async function checkServiceRegistration(
       detail: "the service has no ServiceRegistry id yet; a run would register it on chain before gateway admission",
     };
   }
-  const context = await loadRegistrationContext(gateway, service);
+  const context = await loadRegistrationContext(gateway, service, { healableServiceUri: true });
+  const forecast = await forecastPlan(context, service);
+  if (!context.serviceUriHealPending) return forecast;
+  return {
+    ...forecast,
+    serviceUriHeal: true,
+    detail: `a run first rewrites the stale ServiceRegistry URI to ${context.record.serviceURI}; ${forecast.detail}`,
+  };
+}
+
+async function forecastPlan(
+  context: RegistrationContext,
+  service: ServiceRow,
+): Promise<RegistrationForecast> {
+  const base = { serviceSlug: service.slug };
   const { local, plan } = await planServiceRegistration(context);
   const heads = await priorHeadsFor(context.gatewayOrigin, context.record.serviceId);
   const changedSkills = context.published.skills

@@ -14,12 +14,12 @@ import {
   enforceReadOnlySessions,
 } from "./core/db/readOnlySessions.js";
 import { listActiveServices, type ServiceRow } from "./core/db/queries/services.js";
-import { bootstrapServiceRegistry } from "./core/chain/serviceRegistrar.js";
-import { registerServiceWithGateway } from "./core/gatewayRegistration/client.js";
+import { activationPolling } from "./core/gatewayRegistration/evidence.js";
 import {
   checkServiceRegistration,
   forecastFails,
 } from "./core/gatewayRegistration/forecast.js";
+import { registerSelectedServices } from "./core/gatewayRegistration/registrationRun.js";
 import { retireGatewayService } from "./core/gatewayRegistration/retirement.js";
 import { normalizedGatewayOrigin } from "./core/gatewayRegistration/wire.js";
 import { redactSensitiveText } from "./core/security/redaction.js";
@@ -93,6 +93,7 @@ function selectServices(active: ServiceRow[]): ServiceRow[] {
 // broadcast, gateway mutation or database write: every database session is
 // read-only and gateway access is GET only.
 async function forecast(gateway: string): Promise<void> {
+  activationPolling();
   enforceReadOnlySessions(pool);
   if (!await checkDatabase()) {
     throw new Error(
@@ -134,6 +135,7 @@ async function main(): Promise<void> {
     await forecast(gateway);
     return;
   }
+  if (!retirement) activationPolling();
   if (!retirement && !process.argv.includes("--skip-provider-identity")) {
     await ensureProviderIdentity();
   }
@@ -152,32 +154,11 @@ async function main(): Promise<void> {
     return;
   }
 
-  const services = selectServices(await listActiveServices());
-  await bootstrapServiceRegistry();
-  const failures: string[] = [];
-
-  // Phase 1 — broadcast every service's splitter deployments up front so
-  // all of them share ONE finality window instead of paying it per service.
-  for (const service of services) {
-    try {
-      const result = await registerServiceWithGateway(gateway, service, 1, "broadcast");
-      process.stdout.write(`${JSON.stringify(result)}\n`);
-    } catch (error) {
-      failures.push(`${service.slug} broadcast: ${describe(error)}`);
-    }
-  }
-
-  // Phase 2 — confirm deployments, submit evidence, and activate. One
-  // service's failure (including an AMBIGUOUS receipt) never blocks the
-  // others; an incomplete service is reported, never activated.
-  for (const service of services) {
-    try {
-      const result = await registerServiceWithGateway(gateway, service);
-      process.stdout.write(`${JSON.stringify(result)}\n`);
-    } catch (error) {
-      failures.push(`${service.slug} activation: ${describe(error)}`);
-    }
-  }
+  const failures = await registerSelectedServices({
+    gateway,
+    select: selectServices,
+    report: (outcome) => process.stdout.write(`${JSON.stringify(outcome)}\n`),
+  });
   if (failures.length > 0) {
     throw new Error(`registration incomplete:\n${failures.join("\n")}`);
   }

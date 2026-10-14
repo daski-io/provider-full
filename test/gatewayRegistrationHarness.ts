@@ -625,6 +625,8 @@ export class FakeGateway {
 export class FakeChain {
   head = 1_000n;
   agentWallet: Address = providerAccount.address;
+  /** The finalized ServiceRegistry serviceURI. */
+  serviceUri = `${PROVIDER_ORIGIN}/agent-cards/${SERVICE_SLUG}.json`;
   readonly reads: string[] = [];
 
   async getBlockNumber(): Promise<bigint> {
@@ -656,7 +658,7 @@ export class FakeChain {
           serviceId: SERVICE_ID,
           serviceSlug: SERVICE_SLUG,
           version: "1",
-          serviceURI: `${PROVIDER_ORIGIN}/agent-cards/${SERVICE_SLUG}.json`,
+          serviceURI: this.serviceUri,
           serviceWallet: ZERO,
           active: true,
         };
