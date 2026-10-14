@@ -7,6 +7,7 @@ import {
   getBlockingProviderNonceGap,
   getProviderWrite,
   insertProviderWrite,
+  markProviderWriteResent,
   rebindReplacementProviderWrite,
   suggestedProviderNonce,
   updateProviderWriteStatus,
@@ -443,7 +444,9 @@ async function broadcastStoredTransaction(
   if (submitted.toLowerCase() !== expectedHash.toLowerCase()) {
     throw new Error("Rebroadcast hash did not match persisted signed transaction");
   }
-  if (providerWriteId) await updateProviderWriteStatus(providerWriteId, "broadcast");
+  // Resends run outside the signer lease: a write the nonce-gap recovery
+  // replaced, or a settlement closed, meanwhile is never reopened.
+  if (providerWriteId) await markProviderWriteResent(providerWriteId);
   return submitted;
 }
 

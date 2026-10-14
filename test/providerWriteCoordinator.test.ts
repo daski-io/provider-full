@@ -129,12 +129,21 @@ const queryApi = vi.hoisted(() => ({
     }
   }),
   rebind: vi.fn(async () => state.rebinds),
+  resent: vi.fn(async (id: string) => {
+    state.updates.push({ id, status: "resent" });
+    const row = state.rows.get(id);
+    if (!row || !["prepared", "broadcast"].includes(row.status)) return false;
+    row.status = "broadcast";
+    row.last_error_code = null;
+    return true;
+  }),
 }));
 vi.mock("../src/core/db/queries/providerChainWrites.js", () => ({
   suggestedProviderNonce: queryApi.suggested,
   advanceProviderCursor: queryApi.advance,
   insertProviderWrite: queryApi.insert,
   updateProviderWriteStatus: queryApi.update,
+  markProviderWriteResent: queryApi.resent,
   rebindReplacementProviderWrite: queryApi.rebind,
   getBlockingProviderNonceGap: vi.fn(async () => state.gap),
   getProviderWrite: vi.fn(async (id: string) => state.rows.get(id) ?? null),
@@ -383,6 +392,16 @@ describe("provider write recovery and terminal helpers", () => {
     state.rows.set("write-1", writeRow({ status: "attention" }));
     await expect(replaceProviderWriteWithBoundedFee("write-1"))
       .resolves.toMatchObject({ hash: REPLACEMENT_HASH });
+  });
+
+  it("never reopens a write that was replaced or settled while its bytes were resent", async () => {
+    state.rows.set("write-1", writeRow({ status: "replaced" }));
+    await expect(rebroadcastProviderWrite("write-1")).resolves.toBe(HASH);
+    expect(state.rows.get("write-1")!.status).toBe("replaced");
+
+    state.rows.set("write-1", writeRow({ status: "prepared" }));
+    await expect(rebroadcastProviderWrite("write-1")).resolves.toBe(HASH);
+    expect(state.rows.get("write-1")!.status).toBe("broadcast");
   });
 
   it("rebroadcasts retained bytes and rejects missing or mismatched records", async () => {

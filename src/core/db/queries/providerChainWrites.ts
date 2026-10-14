@@ -207,6 +207,26 @@ export async function updateProviderWriteStatus(
   );
 }
 
+/**
+ * Record that a still-open write's retained bytes were sent again. A write
+ * another path settled or replaced in the meantime keeps that outcome.
+ */
+export async function markProviderWriteResent(
+  id: string,
+  db: Queryable = pool,
+): Promise<boolean> {
+  const result = await db.query(
+    `UPDATE provider_chain_writes
+        SET status = 'broadcast',
+            broadcast_at = COALESCE(broadcast_at, now()),
+            last_error_code = NULL,
+            updated_at = now()
+      WHERE id = $1 AND status IN ('prepared','broadcast')`,
+    [id],
+  );
+  return result.rowCount === 1;
+}
+
 export async function getBlockingProviderNonceGap(
   scope: ProviderWriteScope,
   finalizedNonce: bigint,

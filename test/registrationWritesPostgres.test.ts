@@ -13,7 +13,10 @@ vi.mock("../src/core/db/pool.js", () => ({
   },
 }));
 
-import { listOpenProviderWrites } from "../src/core/db/queries/providerChainWrites.js";
+import {
+  listOpenProviderWrites,
+  markProviderWriteResent,
+} from "../src/core/db/queries/providerChainWrites.js";
 import { createMigratedTestDatabase, type MigratedTestDatabase } from "./postgresTestDatabase.js";
 
 const scope = { chainId: 84532, walletAddress: "0x2222222222222222222222222222222222222222" };
@@ -58,5 +61,18 @@ describe("open provider writes for a target", { timeout: 30_000 }, () => {
     });
     expect(open.map((row) => row.id)).toEqual([earlier, later, review]);
     expect(open.map((row) => row.status)).toEqual(["prepared", "broadcast", "attention"]);
+  });
+
+  it("marks a resent write broadcast only while it is still open", async () => {
+    const target = randomUUID();
+    const pending = await journal(21, "prepared", "service_registration", target);
+    const replaced = await journal(22, "replaced", "service_registration", target);
+    const status = async (id: string) =>
+      (await database.pool.query("SELECT status FROM provider_chain_writes WHERE id=$1", [id])).rows[0]!.status;
+
+    await expect(markProviderWriteResent(pending)).resolves.toBe(true);
+    await expect(markProviderWriteResent(replaced)).resolves.toBe(false);
+    expect(await status(pending)).toBe("broadcast");
+    expect(await status(replaced)).toBe("replaced");
   });
 });
