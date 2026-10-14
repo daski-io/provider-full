@@ -24,7 +24,10 @@ import {
   registerSelectedServices,
 } from "./core/gatewayRegistration/registrationRun.js";
 import { retireGatewayService } from "./core/gatewayRegistration/retirement.js";
-import { normalizedGatewayOrigin } from "./core/gatewayRegistration/wire.js";
+import {
+  forbidGatewayWrites,
+  normalizedGatewayOrigin,
+} from "./core/gatewayRegistration/wire.js";
 import { redactSensitiveText } from "./core/security/redaction.js";
 
 const SERVICE_ID = /^0x[0-9a-fA-F]{64}$/;
@@ -87,9 +90,11 @@ function selectServices(active: ServiceRow[]): ServiceRow[] {
 // Read-only forecast of what a registration run would do per service. No
 // migration, identity script, ServiceRegistry bootstrap, signature,
 // broadcast, gateway mutation or database write: every database session is
-// read-only and gateway access is GET only.
+// read-only and any gateway request other than GET is refused before it is
+// sent.
 async function forecast(gateway: string): Promise<void> {
   activationPolling();
+  forbidGatewayWrites();
   enforceReadOnlySessions(pool);
   if (!await checkDatabase()) {
     throw new Error(

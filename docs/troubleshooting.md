@@ -320,8 +320,8 @@ The forecast performs the same chain, card, database and gateway reads and
 the same recovery decision, verification, promotion cross-check and
 deployment-evidence resolution as a run, then prints one JSON line per active
 service. It runs no migration, identity helper or ServiceRegistry bootstrap,
-opens only read-only database sessions, sends only gateway `GET` requests, and
-signs or broadcasts nothing. It exits non-zero when any service is `BLOCKED`
+opens only read-only database sessions, refuses any gateway request other than
+`GET` before it is sent, and signs or broadcasts nothing. It exits non-zero when any service is `BLOCKED`
 or a promotion would fail.
 
 | State | Meaning |

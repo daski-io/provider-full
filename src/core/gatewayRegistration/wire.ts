@@ -151,11 +151,26 @@ function rateLimitDelayMs(response: Response, attempt: number): number {
   );
 }
 
+let gatewayWritesForbidden = false;
+
+/**
+ * For the read-only forecast: from now on every registration request other
+ * than GET fails before it is sent, so a code path that regresses into a
+ * gateway mutation refuses instead of posting.
+ */
+export function forbidGatewayWrites(): void {
+  gatewayWritesForbidden = true;
+}
+
 async function fetchRegistration(url: string, init: RequestInit): Promise<Response> {
+  const method = (init.method ?? "GET").toUpperCase();
+  if (gatewayWritesForbidden && method !== "GET") {
+    throw new Error(`a read-only run refused to send a gateway ${method} request`);
+  }
   for (let attempt = 0; ; attempt += 1) {
     const response = await fetch(url, {
       ...init,
-      method: init.method ?? "GET",
+      method,
       redirect: "error",
       headers: { accept: "application/json", ...init.headers },
       signal: AbortSignal.timeout(10_000),
