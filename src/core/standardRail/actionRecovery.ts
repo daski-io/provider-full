@@ -2,7 +2,8 @@ import type { Address, Hex } from "viem";
 import { pool } from "../db/pool.js";
 import { consumeAssetEndpointRate } from "./assetRateLimit.js";
 import { assertExactKeys, canonicalHash } from "./canonical.js";
-import type { AssetActionExecutionRow } from "./actionStore.js";
+import { lockFenceForExecution, type AssetActionExecutionRow } from "./actionStore.js";
+import { admittedOwnerOf, assertAdmittedOwnerCurrent } from "./assetOwnerFence.js";
 import { regenerateEphemeralAssetActionResult } from "./actionExecution.js";
 import { releaseFinalResponse, requireCurrentExecutionArtifacts } from "./assetActionResponse.js";
 import { targetOf } from "./assetActionTarget.js";
@@ -133,7 +134,9 @@ async function authorizeRecovery(args: {
 }): Promise<AssetActionExecutionRow> {
   const client = await pool.connect();
   try {
-    await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
+    // Read committed like the claim: the owner read after the fence must see
+    // what committed before the fence was granted.
+    await client.query("BEGIN");
     await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
       `asset-action-${args.actionExecutionId.slice(2)}`,
     ]);
@@ -144,6 +147,7 @@ async function authorizeRecovery(args: {
       actionId: args.definition.actionId,
       limits: args.wallet.abuse,
     });
+    await lockFenceForExecution(client, args.actionExecutionId);
     const found = await client.query<AssetActionExecutionRow>(
       "SELECT * FROM standard_asset_action_executions WHERE execution_id=$1 FOR UPDATE",
       [bytes(args.actionExecutionId)],
@@ -161,6 +165,9 @@ async function authorizeRecovery(args: {
       Number(row.action_catalog_epoch) !== args.wallet.admission.actionCatalogEpoch ||
       hex(row.action_definition_hash) !== args.definition.actionDefinitionHash ||
       row.replay_policy !== args.definition.replayPolicy) throw new Error("asset action recovery denied");
+    // Only for the owner version the result was admitted under; a stale one
+    // is refused before anything is consumed.
+    await assertAdmittedOwnerCurrent(client, row.provider_asset_id, admittedOwnerOf(row));
     const prior = await client.query<{
       action_execution_id: Buffer;
       payer: string;

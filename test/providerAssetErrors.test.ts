@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { classifyProviderAssetError } from "../src/core/standardRail/routes.js";
+import { AssetOwnerChangedError } from "../src/core/standardRail/assetOwnerFence.js";
 
 describe("provider asset error boundary", () => {
   it("keeps validation failures bounded and non-retryable", () => {
@@ -41,6 +42,19 @@ describe("provider asset error boundary", () => {
       retryAfter: false,
       reasonClass: "request_rejected",
     });
+  });
+
+  it("refuses every changed or foreign asset owner definitively", () => {
+    for (const detail of [
+      undefined, "the wallet is not the asset's current owner", "the asset has no current owner",
+    ]) {
+      expect(classifyProviderAssetError(new AssetOwnerChangedError(detail))).toEqual({
+        status: 403,
+        code: "PROVIDER_ASSET_QUERY_REJECTED",
+        retryAfter: false,
+        reasonClass: "request_rejected",
+      });
+    }
   });
 
   it("lets rate limiting win over rejection phrasing", () => {

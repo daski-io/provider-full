@@ -3,7 +3,9 @@ import { encryptString } from "../chain/encryption.js";
 import { pool } from "../db/pool.js";
 import { getCurrentAssetOwner } from "../db/queries/assetOwnership.js";
 import type { Queryable } from "../db/queryable.js";
+import { persistAdapterResultUnderFence } from "../engine/taskFinalization.js";
 import type { DeferredTaskEmits } from "../engine/taskTransitions.js";
+import type { AdapterResult } from "../serviceRegistry/types.js";
 import { cancelLinkedAssetActionTransaction } from "./actionLifecycle.js";
 import {
   lockFenceForExecution,
@@ -15,7 +17,7 @@ import {
   assertAdmittedOwnerCurrent,
   AssetOwnerChangedError,
 } from "./assetOwnerFence.js";
-import { withholdStaleOwnerOutcome } from "./assetOwnerOutcome.js";
+import { ASSET_OWNER_CHANGED_RESULT, withholdStaleOwnerOutcome } from "./assetOwnerOutcome.js";
 
 const bytes = (value: Hex): Buffer => Buffer.from(value.slice(2), "hex");
 
@@ -28,20 +30,43 @@ export async function markAssetActionAttention(executionId: Hex): Promise<void> 
   if (result.rowCount !== 1) throw new Error("asset action attention transition lost its claim");
 }
 
-/**
- * Persist an execution's outcome: the result-persistence boundary. Under the
- * asset owner fence (taken before the row lock) the admitted owner must
- * still be current; when it is not, nothing of the result is persisted, the
- * execution and its task end failed with the redacted `asset_owner_changed`
- * marker in this same transaction, and AssetOwnerChangedError is thrown once
- * that has committed.
- */
-export async function completeAssetAction(args: {
+interface CompletionArgs {
   executionId: Hex;
   status: "completed" | "failed";
   result: Record<string, unknown> | null;
   errorClass: string | null;
+}
+
+/**
+ * Persist an executed action's outcome in one transaction: its task's
+ * service result (deliverables, messages, the task transition) and the
+ * execution's completion with its stored result. This is the
+ * result-persistence boundary: under the asset owner fence, taken before the
+ * execution row, the admitted owner must still be current. When it is not,
+ * nothing of the result is persisted, the execution and its task end failed
+ * with the redacted `asset_owner_changed` outcome in this same transaction,
+ * and AssetOwnerChangedError is thrown once that has committed.
+ */
+export async function settleAssetAction(args: CompletionArgs & {
+  taskId: string;
+  serviceId: string;
+  adapterResult: AdapterResult;
 }): Promise<void> {
+  await settle(args, { taskId: args.taskId, serviceId: args.serviceId, adapterResult: args.adapterResult });
+}
+
+/**
+ * Persist an execution's outcome whose task was already settled (a review
+ * rejection): the same owner-fenced boundary, for the execution only.
+ */
+export async function completeAssetAction(args: CompletionArgs): Promise<void> {
+  await settle(args, null);
+}
+
+async function settle(
+  args: CompletionArgs,
+  task: { taskId: string; serviceId: string; adapterResult: AdapterResult } | null,
+): Promise<void> {
   const client = await pool.connect();
   const deferred: DeferredTaskEmits = [];
   let withheld = false;
@@ -60,6 +85,8 @@ export async function completeAssetAction(args: {
     } catch (error) {
       if (!(error instanceof AssetOwnerChangedError)) throw error;
       withheld = true;
+    }
+    if (withheld) {
       await withholdStaleOwnerOutcome(client, {
         assetId: row.provider_asset_id,
         taskId: `asset-action-${args.executionId.slice(2)}`,
@@ -67,11 +94,18 @@ export async function completeAssetAction(args: {
         admitted,
         current: await getCurrentAssetOwner(row.provider_asset_id, client),
         phase: "persistence",
-        failTask: true,
+        failTask: task === null,
         deferred,
       });
+      if (task) {
+        await persistAdapterResultUnderFence(client, task.taskId, ASSET_OWNER_CHANGED_RESULT, task.serviceId, deferred);
+      }
+    } else {
+      if (task) {
+        await persistAdapterResultUnderFence(client, task.taskId, task.adapterResult, task.serviceId, deferred);
+      }
+      await persistCompletion(client, row, args);
     }
-    if (!withheld) await persistCompletion(client, row, args);
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
@@ -84,7 +118,7 @@ export async function completeAssetAction(args: {
 async function persistCompletion(
   client: Queryable,
   row: AssetActionExecutionRow,
-  args: Parameters<typeof completeAssetAction>[0],
+  args: CompletionArgs,
 ): Promise<void> {
   if (args.status === "completed" && row.replay_policy !== "regenerate-ephemeral") {
     if (!args.result) throw new Error("recoverable action result is missing");
@@ -112,10 +146,29 @@ async function persistCompletion(
   }
 }
 
+/**
+ * Expire lapsed staged actions, park overdue executions for attention and
+ * redact lapsed results in one transaction; then, separately, purge spent
+ * nonces, rate buckets and expired recovery results. The purge never runs
+ * in the transaction that holds execution rows: a claim or confirmation
+ * takes its rate buckets before the fence and its execution row, so holding
+ * rows while waiting on buckets could deadlock with it.
+ */
 export async function expireDestructiveAssetActions(): Promise<{
   expired: number;
   attention: number;
 }> {
+  const swept = await sweepExecutions();
+  for (const purge of [
+    "DELETE FROM standard_asset_action_recovery_results WHERE expires_at<=now()",
+    "DELETE FROM standard_wallet_action_nonces WHERE consumed_at<now()-interval '10 minutes'",
+    "DELETE FROM standard_provider_grant_nonces WHERE consumed_at<now()-interval '10 minutes'",
+    "DELETE FROM standard_asset_rate_buckets WHERE window_started_at<now()-interval '2 minutes'",
+  ]) await pool.query(purge);
+  return swept;
+}
+
+async function sweepExecutions(): Promise<{ expired: number; attention: number }> {
   const client = await pool.connect();
   const deferred: DeferredTaskEmits = [];
   let result: { expired: number; attention: number } | undefined;
@@ -134,18 +187,6 @@ export async function expireDestructiveAssetActions(): Promise<{
       `UPDATE standard_asset_action_executions
           SET sanitized_result=NULL,result_redacted_at=COALESCE(result_redacted_at,now()),updated_at=now()
         WHERE state='completed' AND result_redacted_at IS NULL AND result_valid_before<=now()`,
-    );
-    await client.query(
-      "DELETE FROM standard_asset_action_recovery_results WHERE expires_at<=now()",
-    );
-    await client.query(
-      "DELETE FROM standard_wallet_action_nonces WHERE consumed_at<now()-interval '10 minutes'",
-    );
-    await client.query(
-      "DELETE FROM standard_provider_grant_nonces WHERE consumed_at<now()-interval '10 minutes'",
-    );
-    await client.query(
-      "DELETE FROM standard_asset_rate_buckets WHERE window_started_at<now()-interval '2 minutes'",
     );
     const ids = [...expired.rows, ...attention.rows].map((row) => row.execution_id);
     for (const row of expired.rows) {

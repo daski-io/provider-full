@@ -2,7 +2,7 @@ import type { AssetRow } from "../db/queries/assets.js";
 import { executeAdapter } from "../engine/adapterExecution.js";
 import { processAdapterResult } from "../engine/taskFinalization.js";
 import { compileProviderSchema, validateProviderRequest } from "./schema.js";
-import { completeAssetAction, markAssetActionAttention } from "./actionCompletion.js";
+import { completeAssetAction, markAssetActionAttention, settleAssetAction } from "./actionCompletion.js";
 import type { AssetActionDefinitionV1 } from "./walletConfig.js";
 import type { Hex } from "viem";
 import { revealStandardActionArtifacts } from "../a2a/responseBuilder.js";
@@ -90,8 +90,8 @@ async function currentTarget(args: {
 /**
  * Execute an admitted asset action. The target is loaded for the review and
  * checked again immediately before the supplier call (the consequential
- * execution), and the result passes the persistence boundaries of
- * processAdapterResult and completeAssetAction. A stale owner throws
+ * execution), and the outcome settles the task and the execution together
+ * at the owner-fenced persistence boundary. A stale owner throws
  * AssetOwnerChangedError with the withheld outcome already recorded; an
  * asset that is no longer an eligible target fails the action definitively
  * without supplier work.
@@ -166,16 +166,18 @@ export async function executeAssetAction(args: {
       await markAssetActionAttention(args.executionId);
       return { status: "attention", result: null, errorClass: null };
     }
-    await processAdapterResult(args.taskId, adapterResult, args.service.id);
+    const settled = { executionId: args.executionId, taskId: args.taskId, serviceId: args.service.id, adapterResult };
     if (adapterResult.status !== "completed") {
       const errorClass = adapterResult.status === "input-required" ? "input_required" : "provider_failed";
-      await completeAssetAction({ executionId: args.executionId, status: "failed", result: null, errorClass });
+      await settleAssetAction({ ...settled, status: "failed", result: null, errorClass });
       return { status: "failed", result: null, errorClass };
     }
+    // The answer is built and checked before anything is persisted, then the
+    // task and the execution settle together under the owner fence.
     const result = await sanitizedResult(args.taskId, adapterResult);
     validateProviderRequest(compileProviderSchema(args.definition.responseSchema), result, "Response");
-    await completeAssetAction({
-      executionId: args.executionId,
+    await settleAssetAction({
+      ...settled,
       status: "completed",
       result: args.persistResult ? result : null,
       errorClass: null,
@@ -202,12 +204,19 @@ async function failUnavailableTarget(args: {
   taskId: string;
   service: ServiceRow;
 }): Promise<{ status: "failed"; result: null; errorClass: string }> {
-  await processAdapterResult(args.taskId, {
+  await settleAssetAction({
+    executionId: args.executionId,
+    taskId: args.taskId,
+    serviceId: args.service.id,
+    adapterResult: {
+      status: "failed",
+      failureClass: "terminal",
+      error: "asset_unavailable",
+      message: "The asset is no longer available for this action.",
+    },
     status: "failed",
-    failureClass: "terminal",
-    error: "asset_unavailable",
-    message: "The asset is no longer available for this action.",
-  }, args.service.id);
-  await completeAssetAction({ executionId: args.executionId, status: "failed", result: null, errorClass: "asset_unavailable" });
+    result: null,
+    errorClass: "asset_unavailable",
+  });
   return { status: "failed", result: null, errorClass: "asset_unavailable" };
 }

@@ -19,6 +19,7 @@ vi.mock("../src/core/engine/taskFinalization.js", () => ({
 vi.mock("../src/core/standardRail/actionCompletion.js", () => ({
   completeAssetAction: mocks.completeAssetAction,
   markAssetActionAttention: mocks.markAssetActionAttention,
+  settleAssetAction: vi.fn(),
 }));
 vi.mock("../src/core/standardRail/assetActionTarget.js", () => ({
   AssetActionTargetDeniedError: class extends Error {},

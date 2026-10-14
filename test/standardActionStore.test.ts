@@ -998,25 +998,40 @@ describe("standard asset action store", () => {
       const audit = only("INSERT INTO events");
       expect(audit.values[1]).toBe(expiredTaskId);
       expect(audit.values[6]).toBe("asset_action.expired");
-      only("DELETE FROM standard_asset_action_recovery_results");
-      only("DELETE FROM standard_wallet_action_nonces");
-      only("DELETE FROM standard_provider_grant_nonces");
-      only("DELETE FROM standard_asset_rate_buckets");
-      expect(statements().at(-1)).toBe("COMMIT");
+      // The purge of spent nonces, rate buckets and expired results runs
+      // only after the transaction that held execution rows committed.
+      const commit = statements().indexOf("COMMIT");
+      for (const purge of [
+        "DELETE FROM standard_asset_action_recovery_results",
+        "DELETE FROM standard_wallet_action_nonces",
+        "DELETE FROM standard_provider_grant_nonces",
+        "DELETE FROM standard_asset_rate_buckets",
+      ]) {
+        only(purge);
+        expect(statements().findIndex((text) => text.includes(purge))).toBeGreaterThan(commit);
+      }
     });
 
     it("sweeps cleanly when nothing is due", async () => {
       await expect(expireDestructiveAssetActions()).resolves.toEqual({ expired: 0, attention: 0 });
       expect(issued("ANY($1::bytea[])")).toHaveLength(0);
-      expect(statements().at(-1)).toBe("COMMIT");
+      expect(statements()).toContain("COMMIT");
     });
 
     it("rethrows the sweep failure even when the rollback itself fails", async () => {
-      harness.state.failFragment = "DELETE FROM standard_asset_action_recovery_results";
+      harness.state.failFragment = "SET state='expired'";
       harness.state.failRollback = true;
       await expect(expireDestructiveAssetActions()).rejects.toThrow("simulated statement failure");
       expect(statements().at(-1)).toBe("ROLLBACK");
       expect(harness.state.releases).toBe(1);
+      expect(issued("DELETE FROM standard_asset_rate_buckets")).toHaveLength(0);
+    });
+
+    it("rethrows a purge failure without undoing the committed sweep", async () => {
+      harness.state.failFragment = "DELETE FROM standard_wallet_action_nonces";
+      await expect(expireDestructiveAssetActions()).rejects.toThrow("simulated statement failure");
+      expect(statements()).toContain("COMMIT");
+      expect(statements()).not.toContain("ROLLBACK");
     });
   });
 });

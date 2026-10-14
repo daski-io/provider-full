@@ -1,5 +1,5 @@
 import { pool } from "../db/pool.js";
-import { getAssetById, type AssetRow } from "../db/queries/assets.js";
+import { getAssetById, normalizeIdentifier, type AssetRow } from "../db/queries/assets.js";
 import { inTransaction } from "../db/queryable.js";
 import { getService } from "../serviceRegistry/registry.js";
 import type { AssetActionExecutionRow } from "./actionStore.js";
@@ -53,7 +53,8 @@ function assertTarget(
   if (
     asset.service_id !== serviceId || asset.type !== definition.assetType ||
     !expected.statuses.includes(asset.status) ||
-    (expected.identifier !== null && expected.identifier !== asset.identifier)
+    // Compared in the canonical form the asset's identifier is stored in.
+    (expected.identifier !== null && normalizeIdentifier(asset.type, expected.identifier) !== asset.identifier)
   ) throw new AssetActionTargetDeniedError();
 }
 

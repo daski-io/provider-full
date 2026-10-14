@@ -5,7 +5,12 @@ import { decryptString, encryptString } from "../chain/encryption.js";
 import type { Address, Hex } from "viem";
 import type { ProviderWalletConfig } from "./walletConfig.js";
 import { consumeAssetEndpointRate } from "./assetRateLimit.js";
-import { admitAssetOwner, lockAssetOwnerFence } from "./assetOwnerFence.js";
+import {
+  admitAssetOwner,
+  admittedOwnerOf,
+  assertAdmittedOwnerCurrent,
+  lockAssetOwnerFence,
+} from "./assetOwnerFence.js";
 
 const bytes = (value: Hex): Buffer => Buffer.from(value.slice(2), "hex");
 const hex = (value: Buffer): Hex => `0x${value.toString("hex")}`;
@@ -124,6 +129,9 @@ export async function claimAssetAction(args: ClaimArgs): Promise<{
         hex(existing.action_definition_hash) !== args.actionDefinitionHash ||
         existing.replay_policy !== args.replayPolicy
       ) throw new Error("asset action replay mismatch");
+      // A replay is answered only while its admitted owner is current; a
+      // stale one is refused here, before anything is consumed.
+      await assertAdmittedOwnerCurrent(client, existing.provider_asset_id, admittedOwnerOf(existing));
       await consumeGrant(client, args.grantNonce, args.grantHash, args.payer);
       await client.query("COMMIT");
       return { row: existing, taskId, replayed: true };

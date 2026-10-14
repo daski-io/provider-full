@@ -70,7 +70,8 @@ export function registerProtectedAssetIdentifier(
   protectedIdentifierSchemes.set(assetType, scheme);
 }
 
-function normalizeIdentifier(type: string, identifier: string): string {
+/** The canonical form an asset identifier of this type is stored in. */
+export function normalizeIdentifier(type: string, identifier: string): string {
   const normalize = protectedIdentifierSchemes.get(type)?.normalize;
   return normalize ? normalize(identifier) : identifier;
 }

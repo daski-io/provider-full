@@ -146,14 +146,20 @@ export async function processAdapterResult(
         withheld = true;
       }
     }
-    return persistAdapterResult(db, taskId, persisted, serviceId, deferred);
+    return persistAdapterResultUnderFence(db, taskId, persisted, serviceId, deferred);
   });
   for (const emit of deferred) emit();
   if (withheld) throw new AssetOwnerChangedError();
   return task;
 }
 
-async function persistAdapterResult(
+/**
+ * Persist a service result inside the caller's transaction. Only for a
+ * caller that already compared the task's admitted owner under the asset
+ * owner fence in that same transaction (processAdapterResult, or an asset
+ * action settling its execution and task together).
+ */
+export async function persistAdapterResultUnderFence(
   db: Queryable,
   taskId: string,
   result: AdapterResult,

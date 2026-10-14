@@ -10,7 +10,7 @@ import {
   type AssetActionExecutionRow,
 } from "./actionStore.js";
 import { consumeAssetEndpointRate } from "./assetRateLimit.js";
-import { admitAssetOwner } from "./assetOwnerFence.js";
+import { admitAssetOwner, admittedOwnerOf, assertAdmittedOwnerCurrent } from "./assetOwnerFence.js";
 import type { ProviderWalletConfig } from "./walletConfig.js";
 
 const bytes = (value: Hex): Buffer => Buffer.from(value.slice(2), "hex");
@@ -118,6 +118,9 @@ export async function authorizeStagedAction(args: {
         !["executing", "completed", "failed", "attention"].includes(row.state)) ||
       (existing && args.operation === "cancel" && row.state !== "canceled")
     ) throw new Error("staged action unavailable");
+    // A replayed follow-up is answered only while its admitted owner is
+    // current; a stale one is refused before anything is consumed.
+    if (existing) await assertAdmittedOwnerCurrent(client, row.provider_asset_id, admittedOwnerOf(row));
     if (!existing) {
       await client.query(
         `INSERT INTO standard_wallet_action_nonces

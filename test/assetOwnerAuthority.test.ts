@@ -262,6 +262,11 @@ describe("stale owner version (F-T08)", () => {
     const replay = await actions().perform(await regrant(body)) as { payload: Record<string, unknown> };
     expect(replay.payload).toMatchObject({ status: "completed", result: first.payload.result });
     await harness.changeOwner(note, payerA, 1);
+    const consumed = async () => [
+      await count("standard_provider_grant_nonces"), await count("standard_wallet_action_nonces"),
+      await count("standard_asset_action_recovery_executions"),
+    ];
+    const before = await consumed();
     const refused = await rejection(actions().perform(await regrant(body)));
     expect(refused).toBeInstanceOf(AssetOwnerChangedError);
     expect(classifyProviderAssetError(refused).status).toBe(403);
@@ -270,9 +275,40 @@ describe("stale owner version (F-T08)", () => {
       input: { operation: "recover-action", actionExecutionId: first.payload.actionExecutionId, originalInput: {} },
     })));
     expect(recovery).toBeInstanceOf(AssetOwnerChangedError);
+    // Both definite refusals happen before anything is consumed.
+    expect(await consumed()).toEqual(before);
     expect(executed).toHaveLength(1);
     expect(await executions()).toMatchObject([{ state: "completed" }]);
-    expect(await audits("asset_owner.release_withheld")).toHaveLength(2);
+  });
+
+  it("settles nothing of a result that does not match the response schema", async () => {
+    const note = await harness.ownedNote(payerA);
+    onExecute = async () => ({ status: "completed", artifacts: [{ name: "note_receipt", data: { receipt: 7 } }] });
+    const refused = await rejection(actions().perform(await signedAction({
+      action: ACTIONS.touch, providerAssetId: note, input: {},
+    })));
+    expect(refused.message).toBe("asset action unavailable");
+    // Neither the task nor the execution settled: both wait for reconciliation.
+    expect(await executions()).toMatchObject([{ state: "attention" }]);
+    expect(await actionTasks()).toMatchObject([{ status: "working" }]);
+    expect(await rows("SELECT 1 FROM events WHERE type='transaction.artifact.created'")).toHaveLength(0);
+    expect(await count("standard_asset_action_recovery_results")).toBe(0);
+  });
+
+  it("compares an input identifier in the canonical form the asset is stored in", async () => {
+    const { registerProtectedAssetIdentifier } = await import("../src/core/db/queries/assets.js");
+    const { assertAssetActionTarget } = await import("../src/core/standardRail/assetActionTarget.js");
+    registerProtectedAssetIdentifier("cased-note", {
+      normalize: (identifier) => identifier.toLowerCase(),
+      buildContext: (assetId) => ({ purpose: "asset-identifier", table: "assets", recordId: assetId, field: "identifier" }),
+    });
+    const target = (note: string) => assertAssetActionTarget({
+      definition: { ...ACTIONS.touch, assetType: "cased-note" }, serviceId: harness.serviceId,
+      asset: { service_id: harness.serviceId, type: "cased-note", identifier: "note-mixed", status: "active" },
+      input: { note },
+    });
+    await expect(target("Note-MIXED")).resolves.toBeUndefined();
+    await expect(target("note-other")).rejects.toThrow("asset action denied");
   });
 
   it("withholds an owner-only paid order's deliverable when its admitted owner went stale", async () => {
@@ -397,8 +433,10 @@ describe("replayed destructive request (F-T08)", () => {
   it("withholds a replayed confirmation's outcome from a later owner version", async () => {
     const { note, confirmBody } = await confirmedRemoval();
     await harness.changeOwner(note, payerA, 1);
+    const grants = await count("standard_provider_grant_nonces");
     const refused = await rejection(actions().perform(await regrant(confirmBody)));
     expect(refused).toBeInstanceOf(AssetOwnerChangedError);
+    expect(await count("standard_provider_grant_nonces")).toBe(grants);
     expect(executed).toHaveLength(1);
   });
 });

@@ -437,6 +437,7 @@ fence.
 | A follow-up naming another asset than its staged row | `403`, nothing consumed |
 | The asset stopped being an eligible target after admission | signed `failed` with `errorClass: "asset_unavailable"`, no supplier call |
 | The owner version changed before the result was persisted or released | `403`; the result is withheld from both owners and the execution ends `failed` with `asset_owner_changed` |
+| A replay, follow-up replay or recovery for a later owner version | `403`, nothing consumed |
 | A replay of a finished action | its stored (or regenerated) answer, released under the fence; never a second execution |
 
 Owner-only paid orders are linked to their asset at dispatch under the same

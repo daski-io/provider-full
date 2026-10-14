@@ -186,9 +186,12 @@ All notable changes to this project will be documented here.
   dispatch, buyer input and reviewed execution. The supplier call, result
   persistence and every signed asset-action response compare that version
   with the current owner under the fence; a stale owner's result is withheld
-  from both owners and ends `failed` with `asset_owner_changed`. Fenced
-  wallet-action transactions now run read committed so a read after the
-  fence sees what committed before it.
+  from both owners and ends `failed` with `asset_owner_changed`; a stale
+  owner's replay or recovery is refused before any nonce is consumed, and an
+  asset action's task result and execution settle in one transaction.
+  Fenced wallet-action transactions now run read committed so a read after
+  the fence sees what committed before it, and the expiry sweep purges spent
+  nonces and rate buckets apart from the rows it updates.
 - Each AgentCard publishes the payer account policy exactly as the verifier
   enforces it (`auth.payerAccounts`, never counterfactual accounts),
   `PAYER_ACCOUNT_TYPES` with `contract` is refused at boot in mock chain

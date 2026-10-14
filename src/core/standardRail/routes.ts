@@ -12,6 +12,7 @@ import type { ProviderStandardRailConfig } from "./config.js";
 import type { ProviderWalletConfig } from "./walletConfig.js";
 import { ProviderAssetQueryService } from "./assetQuery.js";
 import { ProviderAssetActionService } from "./assetAction.js";
+import { AssetOwnerChangedError } from "./assetOwnerFence.js";
 import { createStatusFailureBudget, sendSignedJson } from "./transport.js";
 
 export function createStandardRailRouter(
@@ -121,8 +122,9 @@ export function classifyProviderAssetError(error: unknown): {
   const database = error as { code?: string };
   const message = error instanceof Error ? error.message : "provider asset request rejected";
   const rateLimited = /rate limit|capacity exceeded/i.test(message);
-  const explicitlyRejected = /denied|invalid|mismatch|expired|stale|malformed|unsupported|required/i
-    .test(message);
+  // A changed or foreign asset owner is a definite refusal, whatever its detail.
+  const explicitlyRejected = error instanceof AssetOwnerChangedError ||
+    /denied|invalid|mismatch|expired|stale|malformed|unsupported|required/i.test(message);
   const unavailable = !rateLimited && (!explicitlyRejected || database.code?.startsWith("08") === true ||
     database.code === "57P01" || /unavailable|runtime fence|servicing/i.test(message));
   const code = unavailable || rateLimited

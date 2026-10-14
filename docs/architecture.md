@@ -312,9 +312,10 @@ staging, a destructive confirmation, the resumption of an action after review,
 the dispatch link of an owner-only paid order and its resumption after buyer
 input or a review, and a delivery admission. The lock order is fixed: a
 request's own advisory lock and endpoint rate buckets, then the fence, then
-the execution row, then its transaction. These transactions run read
-committed, so a read after the fence sees what committed before it was
-granted. A fence holder uses only its own connection and never waits on a
+the execution row, then its transaction; the expiry sweep purges spent
+nonces and rate buckets apart from the transaction that holds execution rows.
+These transactions run read committed, so a read after the fence sees what
+committed before it was granted. A fence holder uses only its own connection and never waits on a
 network call.
 
 The admitted owner is compared with the current one at three boundaries:
@@ -323,15 +324,19 @@ The admitted owner is compared with the current one at three boundaries:
   supplier call, which also re-checks that the asset is still an eligible
   target (an ineligible asset fails the action with `asset_unavailable`
   without supplier work);
-- result persistence: `processAdapterResult` and `completeAssetAction`
-  persist no deliverable for a stale owner; the work ends failed with the
-  redacted `asset_owner_changed` outcome, its protected artifact fields are
-  purged, and an `asset_owner.result_withheld` audit row is written, all in
-  the same transaction;
-- result release: every signed final asset-action response (fresh,
-  replayed, recovered or regenerated) is signed inside the fence transaction
-  that compared the version, so no owner change commits between the check
-  and the signature. A stale owner gets `403` with nothing loaded or signed.
+- result persistence: an asset action settles its task's result and its
+  execution in one fenced transaction (`settleAssetAction`), and
+  `processAdapterResult` guards owner-only paid orders and later service
+  results. Neither persists a deliverable for a stale owner: the work ends
+  failed with the redacted `asset_owner_changed` outcome, its protected
+  artifact fields are purged, and an `asset_owner.result_withheld` audit row
+  is written, all in the same transaction;
+- result release: a replay, a destructive follow-up replay or a recovery is
+  refused for a stale owner before any nonce is consumed, and every signed
+  final asset-action response (fresh, replayed, recovered or regenerated) is
+  signed inside the fence transaction that compared the version, so no owner
+  change commits between the check and the signature. A stale owner gets
+  `403` with nothing loaded or signed.
 
 ### Asset delivery admissions
 
