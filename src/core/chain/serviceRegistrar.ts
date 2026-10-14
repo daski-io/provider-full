@@ -17,11 +17,14 @@ import {
   revertProviderWrite,
 } from "./providerWriteCoordinator.js";
 import {
+  finalityWaitBudgetMs,
   finalizedReadBlockNumber,
   waitForCanonicalFinalReceipt,
 } from "./finality.js";
 import { redactSensitiveText } from "../security/redaction.js";
 import { logWarn } from "../logger.js";
+import { RegistrationCycleBudget } from "./registrationCycleBudget.js";
+import { isServiceAlreadyRegisteredRevert } from "./registrationReverts.js";
 
 function safeRegistrationError(error: unknown): string {
   return redactSensitiveText((error as Error).message)
@@ -50,6 +53,35 @@ interface BootstrapResult {
   registered: number;
   already_on_chain: number;
   skipped_missing_data: number;
+}
+
+/** How one reconcile cycle observes the bootstrap it runs. */
+interface ReconcileCycle {
+  /** False once the cycle was superseded or abandoned; work then stops early. */
+  isCurrent(): boolean;
+  /**
+   * Await a transaction this cycle broadcast. The cycle's deadline pauses
+   * for the duration so a pending receipt is never abandoned; the wait
+   * itself is bounded by finalityWaitBudgetMs.
+   */
+  awaitBroadcast<T>(wait: () => Promise<T>): Promise<T>;
+}
+
+const detachedCycle: ReconcileCycle = {
+  isCurrent: () => true,
+  awaitBroadcast: (wait) => wait(),
+};
+
+function awaitFinalReceipt(cycle: ReconcileCycle, hash: Hex) {
+  return cycle.awaitBroadcast(() =>
+    waitForCanonicalFinalReceipt(hash, { timeoutMs: finalityWaitBudgetMs() }));
+}
+
+/** Checked under the signer lease: an abandoned cycle never broadcasts. */
+function assertCycleCurrent(cycle: ReconcileCycle): void {
+  if (!cycle.isCurrent()) {
+    throw new Error("service registration reconcile cycle was abandoned before broadcast");
+  }
 }
 
 export interface ServiceRegistrationHealth {
@@ -106,7 +138,18 @@ export function getServiceRegistrationAuthorization(service: ServiceRow): {
   return { ok: true, reason: null };
 }
 
-export async function bootstrapServiceRegistry(): Promise<BootstrapResult> {
+/**
+ * Register or verify every active service on the ServiceRegistry. A
+ * reconcile cycle passes its observer: once the cycle was abandoned by its
+ * budget or superseded, the detached work stops at the next step and can no
+ * longer overwrite a newer cycle's verdict, so a late success never turns a
+ * newer failure into a ready state.
+ */
+export async function bootstrapServiceRegistry(
+  cycleOverrides: Partial<ReconcileCycle> = {},
+): Promise<BootstrapResult> {
+  const cycle: ReconcileCycle = { ...detachedCycle, ...cycleOverrides };
+  const { isCurrent } = cycle;
   const services = await listActiveServices();
   const result: BootstrapResult = {
     registered: 0,
@@ -114,12 +157,15 @@ export async function bootstrapServiceRegistry(): Promise<BootstrapResult> {
     skipped_missing_data: 0,
   };
 
+  if (!isCurrent()) return result;
   if (CHAIN_MODE_MOCK) {
     for (const service of services) {
+      if (!isCurrent()) return result;
       const mockId = mockServiceId(service);
       if (!service.on_chain_id || !service.on_chain_id.equals(hexToBuffer(mockId))) {
         await setServiceOnChainId(service.id, hexToBuffer(mockId));
       }
+      if (!isCurrent()) return result;
       verifiedServices.set(service.id, {
         onChainId: mockId.toLowerCase(),
         serviceWallet: expectedServiceWallet(service),
@@ -127,21 +173,24 @@ export async function bootstrapServiceRegistry(): Promise<BootstrapResult> {
       });
       result.already_on_chain++;
     }
-    registrationHealth = { ok: true, checkedAt: new Date(), error: null };
+    if (isCurrent()) registrationHealth = { ok: true, checkedAt: new Date(), error: null };
     return result;
   }
 
   for (const service of services) {
+    if (!isCurrent()) return result;
     const before = service.on_chain_id;
     let onChainId: Hex;
     try {
-      onChainId = await registerOne(service);
+      onChainId = await registerOne(service, cycle);
+      if (!isCurrent()) return result;
       verifiedServices.set(service.id, {
         onChainId: onChainId.toLowerCase(),
         serviceWallet: expectedServiceWallet(service),
         checkedAt: new Date(), ok: true, error: null,
       });
     } catch (error) {
+      if (!isCurrent()) throw error;
       verifiedServices.set(service.id, {
         onChainId: before ? `0x${before.toString("hex")}`.toLowerCase() : "",
         serviceWallet: expectedServiceWallet(service),
@@ -155,6 +204,7 @@ export async function bootstrapServiceRegistry(): Promise<BootstrapResult> {
     } else {
       result.already_on_chain++;
     }
+    if (!isCurrent()) return result;
     await emitEvent({
       serviceId: service.id,
       source: "chain",
@@ -169,7 +219,7 @@ export async function bootstrapServiceRegistry(): Promise<BootstrapResult> {
     });
   }
 
-  registrationHealth = { ok: true, checkedAt: new Date(), error: null };
+  if (isCurrent()) registrationHealth = { ok: true, checkedAt: new Date(), error: null };
   return result;
 }
 
@@ -187,7 +237,7 @@ function mockServiceId(service: ServiceRow): Hex {
   );
 }
 
-async function registerOne(service: ServiceRow): Promise<Hex> {
+async function registerOne(service: ServiceRow, cycle: ReconcileCycle): Promise<Hex> {
   // 1. Compute the expected serviceId without any state change.
   const expected = (await publicClient.readContract({
     address: config.SERVICE_REGISTRY_ADDRESS as Hex,
@@ -209,7 +259,7 @@ async function registerOne(service: ServiceRow): Promise<Hex> {
   })) as boolean;
 
   if (exists) {
-    await reconcileRegisteredService(service, expected, finalizedBlock);
+    await reconcileRegisteredService(service, expected, finalizedBlock, cycle);
     return expected;
   }
 
@@ -235,6 +285,7 @@ async function registerOne(service: ServiceRow): Promise<Hex> {
         serviceWallet,
       ],
       preflight: async () => {
+        assertCycleCurrent(cycle);
         const blockNumber = await finalizedReadBlockNumber();
         const nowExists = await publicClient.readContract({
           address: config.SERVICE_REGISTRY_ADDRESS as Hex,
@@ -251,13 +302,33 @@ async function registerOne(service: ServiceRow): Promise<Hex> {
       persist: async () => true,
     });
   } catch (error) {
-    if (!(error instanceof PeerRegistrationObserved) || peerRegistrationBlock === null) {
-      throw error;
+    if (error instanceof PeerRegistrationObserved && peerRegistrationBlock !== null) {
+      await reconcileRegisteredService(service, expected, peerRegistrationBlock, cycle);
+      return expected;
     }
-    await reconcileRegisteredService(service, expected, peerRegistrationBlock);
-    return expected;
+    // The registry already holds the id although the finalized-depth reads
+    // above could not see it: it was mined fewer than
+    // CHAIN_WRITE_FINALITY_CONFIRMATIONS blocks ago, typically by the detached
+    // continuation of a cycle a previous boot abandoned. Adopt what the chain
+    // has at the latest block; only a registration that is not there either
+    // makes the revert an error.
+    if (isServiceAlreadyRegisteredRevert(error)) {
+      const latestBlock = await publicClient.getBlockNumber() as bigint;
+      const visible = await publicClient.readContract({
+        address: config.SERVICE_REGISTRY_ADDRESS as Hex,
+        abi: serviceRegistryAbi,
+        functionName: "exists",
+        args: [expected],
+        blockNumber: latestBlock,
+      }) as boolean;
+      if (visible) {
+        await reconcileRegisteredService(service, expected, latestBlock, cycle);
+        return expected;
+      }
+    }
+    throw error;
   }
-  const receipt = await waitForCanonicalFinalReceipt(write.hash);
+  const receipt = await awaitFinalReceipt(cycle, write.hash);
   if (receipt.status !== "success") {
     await revertProviderWrite(write.id, "canonical_receipt_reverted");
     throw new Error(`registerService tx reverted: ${write.hash}`);
@@ -324,6 +395,7 @@ async function reconcileRegisteredService(
   service: ServiceRow,
   expected: Hex,
   blockNumber: bigint,
+  cycle: ReconcileCycle,
 ): Promise<void> {
   const registered = await readRegisteredService(expected, blockNumber);
   const canonicalUri = serviceUriFor(service);
@@ -338,9 +410,10 @@ async function reconcileRegisteredService(
       abi: serviceRegistryAbi,
       functionName: "updateServiceURI",
       callArgs: [expected, canonicalUri],
+      preflight: async () => assertCycleCurrent(cycle),
       persist: async () => true,
     });
-    const receipt = await waitForCanonicalFinalReceipt(write.hash);
+    const receipt = await awaitFinalReceipt(cycle, write.hash);
     if (receipt.status !== "success") {
       await revertProviderWrite(write.id, "canonical_receipt_reverted");
       throw new Error(`updateServiceURI tx reverted: ${write.hash}`);
@@ -384,43 +457,41 @@ async function assertRegisteredService(
   }
 }
 
-// Deadline for one reconcile cycle. Kept under the reconciler's 60s interval
-// so a hung cycle frees the in-flight slot before the next tick fires: the
-// chain reads, receipt waits, and the signer lease inside a cycle have no
-// overall bound of their own, and one hung cycle would otherwise freeze
-// reconciliationInFlight forever — readiness (and, via verification
+// Budget for one reconcile cycle's chain reads, signer lease, and local
+// writes. Kept under the reconciler's 60s interval so a hung cycle frees the
+// in-flight slot before the next tick fires; one hung cycle would otherwise
+// freeze reconciliationInFlight forever — readiness (and, via verification
 // staleness, every paid purchase) then fails closed with no recovery path
-// until a restart. Observed live on v0.6.2, 2026-07-16.
+// until a restart. Receipt waits for transactions the cycle broadcast do not
+// count against it: the budget pauses while one is pending (see
+// RegistrationCycleBudget) and each wait is bounded by finalityWaitBudgetMs,
+// so a first boot fits however many services it must register, and a
+// failure still surfaces as an explicit unhealthy verdict.
 const RECONCILE_DEADLINE_MS = 45_000;
 let reconcileAttempt = 0;
 
 export function reconcileServiceRegistrations(): Promise<BootstrapResult> {
   if (reconciliationInFlight) return reconciliationInFlight;
   const attempt = ++reconcileAttempt;
-  const work = bootstrapServiceRegistry();
-  let deadlineTimer: NodeJS.Timeout | null = null;
   let timedOut = false;
-  const deadline = new Promise<never>((_, reject) => {
-    deadlineTimer = setTimeout(() => {
-      timedOut = true;
-      reject(new Error(
-        `service registration reconcile exceeded ${RECONCILE_DEADLINE_MS}ms; `
-        + "a chain read/write or the signer lease is not completing",
-      ));
-    }, RECONCILE_DEADLINE_MS);
-    deadlineTimer.unref();
+  const budget = new RegistrationCycleBudget(RECONCILE_DEADLINE_MS, () => {
+    timedOut = true;
+  });
+  const work = bootstrapServiceRegistry({
+    isCurrent: () => attempt === reconcileAttempt && !timedOut,
+    awaitBroadcast: (wait) => budget.awaitBroadcast(wait),
   });
   // A timed-out cycle keeps running detached. Absorb its eventual outcome so
   // it can neither become an unhandled rejection nor go unnoticed.
   void work.then(
     () => {
-      if (deadlineTimer) clearTimeout(deadlineTimer);
+      budget.cancel();
       if (timedOut) {
         logWarn("Timed-out service registration reconcile eventually completed", {});
       }
     },
     (error) => {
-      if (deadlineTimer) clearTimeout(deadlineTimer);
+      budget.cancel();
       if (timedOut) {
         logWarn("Timed-out service registration reconcile eventually failed", {
           error: safeRegistrationError(error),
@@ -428,7 +499,7 @@ export function reconcileServiceRegistrations(): Promise<BootstrapResult> {
       }
     },
   );
-  reconciliationInFlight = Promise.race([work, deadline])
+  reconciliationInFlight = Promise.race([work, budget.expired])
     .catch((error) => {
       // The attempt guard keeps a superseded cycle from overwriting a newer
       // cycle's verdict or clearing a newer cycle's in-flight slot.

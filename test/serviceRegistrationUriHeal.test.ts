@@ -51,6 +51,7 @@ vi.mock("../src/core/chain/providerWriteCoordinator.js", () => ({
   revertProviderWrite: vi.fn(),
 }));
 vi.mock("../src/core/chain/finality.js", () => ({
+  finalityWaitBudgetMs: () => 84_000,
   finalizedReadBlockNumber: h.finalizedBlock,
   waitForCanonicalFinalReceipt: h.waitReceipt,
 }));
@@ -126,6 +127,8 @@ describe("service registry URI healing (live chain path)", () => {
 
     expect(h.writeContract).toHaveBeenCalledTimes(1);
     expect(h.lease).toHaveBeenCalledTimes(1);
+    // The heal's receipt wait is bounded by the finality budget.
+    expect(h.waitReceipt).toHaveBeenCalledWith("0xtxhash", { timeoutMs: 84_000 });
     expect(uri).toBe(CANONICAL_URI);
   });
 

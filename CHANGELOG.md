@@ -46,6 +46,10 @@ All notable changes to this project will be documented here.
 - The provider-write reconciler stays ready while another replica's live
   session holds its cycle lease, reports a lease stuck for five minutes, and
   jitters its schedule so replicas cannot phase-lock.
+- A first boot that registers several services fits the reconcile budget: the
+  45-second budget pauses while a broadcast receipt is awaited, each receipt
+  wait is bounded, a duplicate-registration revert is adopted from the latest
+  block, and an abandoned cycle can no longer overwrite a newer verdict.
 
 ### Removed
 

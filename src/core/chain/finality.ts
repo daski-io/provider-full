@@ -80,10 +80,34 @@ export async function assertCanonicalFinalReceipt(
   );
 }
 
-export async function waitForCanonicalFinalReceipt(hash: Hex): Promise<CanonicalReceipt> {
+/** Base seals a block every two seconds. */
+export const BASE_BLOCK_TIME_MS = 2_000;
+
+/**
+ * How long a caller should allow a broadcast transaction to reach the
+ * configured finality depth: inclusion, CHAIN_WRITE_FINALITY_CONFIRMATIONS
+ * blocks, and the receipt poll interval, plus a margin for a slow sequencer
+ * or RPC. Twelve confirmations on Base come to about 24 seconds of blocks.
+ */
+export function finalityWaitBudgetMs(marginMs = 60_000): number {
+  return config.CHAIN_WRITE_FINALITY_CONFIRMATIONS * BASE_BLOCK_TIME_MS + marginMs;
+}
+
+/**
+ * Wait for the transaction's receipt at the configured finality depth and
+ * assert it canonical. `timeoutMs` bounds the receipt wait (viem raises
+ * WaitForTransactionReceiptTimeoutError); the transaction may still be mined
+ * later, so a caller that times out must reconcile chain truth on its next
+ * cycle rather than treat the write as failed.
+ */
+export async function waitForCanonicalFinalReceipt(
+  hash: Hex,
+  options: { timeoutMs?: number } = {},
+): Promise<CanonicalReceipt> {
   const receipt = await publicClient.waitForTransactionReceipt({
     hash,
     confirmations: config.CHAIN_WRITE_FINALITY_CONFIRMATIONS,
+    ...(options.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
   }) as CanonicalReceipt;
   await assertCanonicalFinalReceipt(receipt, hash);
   return receipt;

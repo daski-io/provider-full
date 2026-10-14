@@ -220,6 +220,19 @@ Fund only the dedicated Base Sepolia wallet with bounded Testnet assets. Verify
 the canonical Testnet USDC and wait for configured confirmations. Do not reduce
 finality to make a slow or reorganized transaction appear complete.
 
+### Boot fails during service registration reconciliation
+
+Boot verifies or registers every active service on the ServiceRegistry before
+it listens. The 45-second reconcile budget covers chain reads, the signer
+lease and local writes; it pauses while a transaction the cycle broadcast is
+awaited, and each receipt wait is bounded by the configured confirmations at
+Base's block time plus a margin. A first boot that must register several
+services therefore fits, while a hung read or lease still fails boot with an
+explicit `service registration reconcile exceeded 45000ms` error. A broadcast
+refused as `service already registered` is adopted from the latest block
+after its identity is verified. An abandoned cycle can never mark a later,
+failed reconciliation healthy.
+
 ## Service, API, and MCP integration
 
 ### Service folder is not registered

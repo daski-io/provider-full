@@ -47,6 +47,7 @@ vi.mock("../src/core/chain/providerWriteCoordinator.js", () => ({
   revertProviderWrite: vi.fn(),
 }));
 vi.mock("../src/core/chain/finality.js", () => ({
+  finalityWaitBudgetMs: () => 84_000,
   finalizedReadBlockNumber: h.finalizedBlock,
   waitForCanonicalFinalReceipt: vi.fn(),
 }));
