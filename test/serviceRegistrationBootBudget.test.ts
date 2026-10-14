@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TransactionReceiptNotFoundError } from "viem";
 
 // A first boot registers every service on the ServiceRegistry, and each
 // receipt waits CHAIN_WRITE_FINALITY_CONFIRMATIONS blocks. Raced against a
@@ -22,6 +23,9 @@ const h = vi.hoisted(() => ({
   openWrites: vi.fn(),
   waitReceipt: vi.fn(),
   logWarn: vi.fn(),
+  nonceAt: vi.fn(),
+  gapPass: vi.fn(),
+  replace: vi.fn(),
 }));
 
 vi.mock("../src/core/chain/client.js", () => ({
@@ -30,6 +34,7 @@ vi.mock("../src/core/chain/client.js", () => ({
     readContract: h.readContract,
     getBlockNumber: h.getBlockNumber,
     getTransactionReceipt: h.getReceipt,
+    getTransactionCount: h.nonceAt,
   },
   walletClient: {},
 }));
@@ -57,6 +62,8 @@ vi.mock("../src/core/chain/providerWriteCoordinator.js", () => ({
   rebroadcastProviderWrite: h.rebroadcast,
   confirmProviderWrite: h.confirm,
   revertProviderWrite: h.revert,
+  replaceProviderWrite: h.replace,
+  reconcileProviderNonceGap: h.gapPass,
   providerWriteScope: { chainId: 84532, walletAddress: "0x2222222222222222222222222222222222222222" },
 }));
 vi.mock("../src/core/db/queries/providerChainWrites.js", () => ({
@@ -155,6 +162,7 @@ beforeEach(() => {
   h.finalizedBlock.mockResolvedValue(100n);
   h.getBlockNumber.mockResolvedValue(111n);
   h.openWrites.mockResolvedValue([]);
+  h.gapPass.mockResolvedValue("clear");
   unregisteredChain();
 });
 
@@ -460,31 +468,54 @@ describe("journaled registration writes", () => {
   const pendingHash = `0x${"cc".repeat(32)}` as const;
   const journaled = (status: string, id = "journaled-write", hash: string = pendingHash) =>
     ({ id, status, transaction_hash: hash, nonce: "7" });
+  const notFound = (hash: string) =>
+    new TransactionReceiptNotFoundError({ hash: hash as `0x${string}` });
 
-  beforeEach(() => {
-    h.listServices.mockImplementation(async () => services().slice(0, 1));
-  });
+  /** A journal holding `rows` for registrations; settled rows leave it. */
+  function journal(rows: Array<ReturnType<typeof journaled>>) {
+    let open = rows;
+    const close = async (id: string) => { open = open.filter((row) => row.id !== id); };
+    h.openWrites.mockImplementation(async (_scope: unknown, purpose: string) =>
+      purpose === "service_registration" ? open : []);
+    h.confirm.mockImplementation(close);
+    h.revert.mockImplementation(close);
+    h.replace.mockImplementation(close);
+  }
 
-  it("resumes a pending registration write instead of signing another", async () => {
-    let mined = false;
+  /** The registry holds the service once `mined()` says so. */
+  function chainOnceMined(mined: () => boolean) {
     h.readContract.mockImplementation(async ({ functionName, args }: {
       functionName: string; args: unknown[];
     }) => {
       if (functionName === "computeServiceId") return serviceId("sample-alpha");
-      if (functionName === "exists") return mined;
+      if (functionName === "exists") return mined();
       if (functionName === "getService") return record(args[0] as string);
       throw new Error(`unexpected read ${functionName}`);
     });
-    h.openWrites.mockResolvedValue([journaled("broadcast")]);
-    h.waitReceipt.mockImplementation(async () => {
+  }
+
+  beforeEach(() => {
+    h.listServices.mockImplementation(async () => services().slice(0, 1));
+    // The wallet's finalized nonce: the journaled nonce 7 is still unused.
+    h.nonceAt.mockResolvedValue(7);
+  });
+
+  it("resumes a pending registration write instead of signing another", async () => {
+    let mined = false;
+    chainOnceMined(() => mined);
+    journal([journaled("broadcast")]);
+    h.getReceipt.mockImplementation(async ({ hash }: { hash: string }) => {
+      if (!mined) throw notFound(hash);
+      return { status: "success", blockNumber: 90n };
+    });
+    h.gapPass.mockImplementation(async () => {
       mined = true;
-      return { status: "success" };
+      return "clear";
     });
 
     await expect(reconcileServiceRegistrations()).resolves.toMatchObject({ registered: 1 });
     expect(h.broadcast).not.toHaveBeenCalled();
     expect(h.rebroadcast).not.toHaveBeenCalled();
-    expect(h.waitReceipt).toHaveBeenCalledWith(pendingHash, { timeoutMs: 84_000 });
     expect(h.confirm).toHaveBeenCalledWith("journaled-write");
     expect(h.openWrites).toHaveBeenCalledWith(
       expect.anything(),
@@ -494,39 +525,108 @@ describe("journaled registration writes", () => {
   });
 
   it("resends a write that never reached the network with its original signed bytes", async () => {
-    h.openWrites.mockResolvedValue([journaled("prepared")]);
-    h.waitReceipt.mockResolvedValue({ status: "success" });
-    h.readContract.mockImplementation(async ({ functionName, args }: {
-      functionName: string; args: unknown[];
-    }) => {
-      if (functionName === "computeServiceId") return serviceId("sample-alpha");
-      if (functionName === "exists") return false;
-      if (functionName === "getService") return record(args[0] as string);
-      throw new Error(`unexpected read ${functionName}`);
+    let mined = false;
+    chainOnceMined(() => mined);
+    journal([journaled("prepared")]);
+    h.getReceipt.mockImplementation(async ({ hash }: { hash: string }) => {
+      if (!mined) throw notFound(hash);
+      return { status: "success", blockNumber: 90n };
     });
+    h.rebroadcast.mockImplementation(async () => { mined = true; });
 
     await expect(reconcileServiceRegistrations()).resolves.toMatchObject({ registered: 1 });
     expect(h.rebroadcast).toHaveBeenCalledWith("journaled-write");
     expect(h.broadcast).not.toHaveBeenCalled();
+    expect(h.replace).not.toHaveBeenCalled();
+  });
+
+  it("fee-replaces a stuck registration from the boot cycle instead of waiting on it forever", async () => {
+    // The write never mines (underpriced or dropped), and boot runs before
+    // the provider-write reconciler starts.
+    let mined = false;
+    chainOnceMined(() => mined);
+    journal([journaled("broadcast")]);
+    h.getReceipt.mockImplementation(async ({ hash }: { hash: string }) => {
+      throw notFound(hash);
+    });
+    h.gapPass.mockImplementation(async () => {
+      // The same-nonce fee replacement is mined.
+      mined = true;
+      return "replacement_broadcast";
+    });
+
+    await expect(reconcileServiceRegistrations()).resolves.toMatchObject({ registered: 1 });
+    expect(h.gapPass).toHaveBeenCalledOnce();
+    expect(h.waitReceipt).not.toHaveBeenCalled();
+    expect(h.broadcast).not.toHaveBeenCalled();
+  });
+
+  it("replaces a write whose nonce another transaction used, then registers anew", async () => {
+    let registered = false;
+    chainOnceMined(() => registered);
+    journal([journaled("prepared")]);
+    h.getReceipt.mockImplementation(async ({ hash }: { hash: string }) => {
+      throw notFound(hash);
+    });
+    // The identity helper, sharing the wallet, used nonce 7 at finalized depth.
+    h.nonceAt.mockResolvedValue(8);
+    h.broadcast.mockImplementation(async () => {
+      registered = true;
+      return { id: "fresh-write", hash: `0x${"aa".repeat(32)}` };
+    });
+    h.waitReceipt.mockResolvedValue({ status: "success" });
+
+    await expect(reconcileServiceRegistrations()).resolves.toMatchObject({ registered: 1 });
+    expect(h.replace).toHaveBeenCalledWith("journaled-write", null, "nonce_consumed");
+    expect(h.rebroadcast).not.toHaveBeenCalled();
+    expect(h.broadcast).toHaveBeenCalledOnce();
+    expect(h.confirm).toHaveBeenCalledWith("fresh-write");
+  });
+
+  it("resumes a registration another registrar journaled while it waited for the signer lease", async () => {
+    let mined = false;
+    chainOnceMined(() => mined);
+    let calls = 0;
+    const peer = journaled("broadcast", "peer-write", `0x${"dd".repeat(32)}`);
+    h.openWrites.mockImplementation(async (_scope: unknown, purpose: string) => {
+      if (purpose !== "service_registration") return [];
+      calls += 1;
+      // Empty at settlement and before signing; the peer's write is
+      // journaled by the time the signer lease is held.
+      return calls <= 2 || mined ? [] : [peer];
+    });
+    h.getReceipt.mockImplementation(async ({ hash }: { hash: string }) => {
+      if (!mined) throw notFound(hash);
+      return { status: "success", blockNumber: 90n };
+    });
+    const signed: string[] = [];
+    h.broadcast.mockImplementation(async (write: {
+      callArgs: unknown[]; preflight?: () => Promise<void>;
+    }) => {
+      await write.preflight?.();
+      signed.push(write.callArgs[1] as string);
+      return { id: "duplicate", hash: `0x${"aa".repeat(32)}` };
+    });
+    h.gapPass.mockImplementation(async () => {
+      mined = true;
+      return "clear";
+    });
+
+    await expect(reconcileServiceRegistrations()).resolves.toMatchObject({ registered: 1 });
+    expect(signed).toEqual([]);
+    expect(h.gapPass).toHaveBeenCalledOnce();
   });
 
   it("leaves a write under nonce review to its review instead of signing over it", async () => {
-    h.openWrites.mockResolvedValue([journaled("attention")]);
+    journal([journaled("attention")]);
     await expect(reconcileServiceRegistrations()).rejects.toThrow(/awaits review of its blocked nonce/);
     expect(h.broadcast).not.toHaveBeenCalled();
     expect(h.waitReceipt).not.toHaveBeenCalled();
   });
 
   it("settles journaled writes whose receipts are final once the service exists", async () => {
-    h.readContract.mockImplementation(async ({ functionName, args }: {
-      functionName: string; args: unknown[];
-    }) => {
-      if (functionName === "computeServiceId") return serviceId("sample-alpha");
-      if (functionName === "exists") return true;
-      if (functionName === "getService") return record(args[0] as string);
-      throw new Error(`unexpected read ${functionName}`);
-    });
-    h.openWrites.mockResolvedValue([
+    chainOnceMined(() => true);
+    journal([
       journaled("broadcast", "mined-write", `0x${"01".repeat(32)}`),
       journaled("broadcast", "reverted-duplicate", `0x${"02".repeat(32)}`),
       journaled("broadcast", "not-final", `0x${"03".repeat(32)}`),
@@ -536,12 +636,14 @@ describe("journaled registration writes", () => {
       if (hash === `0x${"01".repeat(32)}`) return { status: "success", blockNumber: 90n };
       if (hash === `0x${"02".repeat(32)}`) return { status: "reverted", blockNumber: 95n };
       if (hash === `0x${"03".repeat(32)}`) return { status: "success", blockNumber: 105n };
-      throw new Error("transaction receipt not found");
+      throw new Error("RPC unavailable");
     });
 
     await expect(reconcileServiceRegistrations()).resolves.toMatchObject({ registered: 1 });
     expect(h.confirm.mock.calls).toEqual([["mined-write"]]);
     expect(h.revert.mock.calls).toEqual([["reverted-duplicate", "canonical_receipt_reverted"]]);
+    // A receipt that cannot be read says nothing about the nonce.
+    expect(h.replace).not.toHaveBeenCalled();
     expect(h.broadcast).not.toHaveBeenCalled();
   });
 

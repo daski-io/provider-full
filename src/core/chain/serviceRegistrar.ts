@@ -10,13 +10,9 @@ import { emitEvent } from "../events/emitter.js";
 import { redactSensitiveText } from "../security/redaction.js";
 import { logWarn } from "../logger.js";
 import { RegistrationCycleBudget } from "./registrationCycleBudget.js";
-import {
-  detachedCycle,
-  expectedServiceWallet,
-  registerOne,
-  serviceUriFor,
-  type ReconcileCycle,
-} from "./serviceRegistration.js";
+import { detachedCycle, type ReconcileCycle } from "./reconcileCycle.js";
+import { expectedServiceWallet, serviceUriFor } from "./registeredService.js";
+import { registerOne } from "./serviceRegistration.js";
 
 function safeRegistrationError(error: unknown): string {
   return redactSensitiveText((error as Error).message)

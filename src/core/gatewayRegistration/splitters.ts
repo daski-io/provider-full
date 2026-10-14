@@ -52,6 +52,19 @@ async function deployListingSplitter(registration: RegistrationRef, listing: Pre
   });
 }
 
+// Resend a journaled deployment whose first send was not confirmed, with its
+// original signed bytes. A node that already has it, or already mined it,
+// refuses the resend ("already known", "nonce too low"); the receipt wait
+// decides then.
+async function resend(writeId: string): Promise<boolean> {
+  try {
+    await rebroadcastProviderWrite(writeId);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Broadcast-only pass: submit every missing splitter deployment without
  * waiting for confirmations, so all services' deployments can share one
@@ -77,8 +90,7 @@ export async function ensureSplitterBroadcasts(
       // original send never reached the mempool. Confirmation belongs to
       // the activation phase.
       const row = await loadProviderWrite(persisted.provider_write_id);
-      if (row?.status === "prepared") {
-        await rebroadcastProviderWrite(persisted.provider_write_id);
+      if (row?.status === "prepared" && await resend(persisted.provider_write_id)) {
         broadcast += 1;
       }
       continue;
@@ -97,7 +109,7 @@ async function confirmExistingWrite(
 ): Promise<Hex> {
   const row = await loadProviderWrite(writeId);
   if (!row) throw new Error(`provider write ${writeId} is missing`);
-  if (row.status === "prepared") await rebroadcastProviderWrite(writeId);
+  if (row.status === "prepared") await resend(writeId);
   if (row.status === "reverted") throw new Error(`splitter write ${writeId} reverted`);
   const receipt = await waitForCanonicalFinalReceipt(transactionHash);
   if (receipt.status !== "success") {

@@ -579,6 +579,21 @@ describe("activation evidence recovery", { timeout: 30_000 }, () => {
   });
 });
 
+describe("splitter deployments", { timeout: 30_000 }, () => {
+  it("confirm a deployment whose unconfirmed send already reached the network", async () => {
+    await registerServiceWithGateway(GATEWAY, await service(), 1, "broadcast");
+    // The send timed out after the node accepted it: the journal says
+    // prepared, and every resend is refused as already known.
+    await database.pool.query("UPDATE provider_chain_writes SET status='prepared'");
+    vi.spyOn(h.coordinator!, "rebroadcastProviderWrite")
+      .mockRejectedValue(new Error("already known"));
+
+    await expect(registerServiceWithGateway(GATEWAY, await service()))
+      .resolves.toMatchObject({ state: "ACTIVE" });
+    expect((await splitterWrites())[0]).toMatchObject({ state: "CONFIRMED" });
+  });
+});
+
 describe("skill availability", { timeout: 30_000 }, () => {
   function pauseSkill(skillId: string): void {
     gateway.skills = gateway.skills.map((skill) =>

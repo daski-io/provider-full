@@ -267,13 +267,19 @@ awaited, and each receipt wait is bounded by the configured confirmations at
 Base's block time plus a margin. A first boot that must register several
 services therefore fits, while a hung read or lease still fails boot with an
 explicit `service registration reconcile exceeded 45000ms` error. A
-registration this provider already journaled is resumed while its transaction
-is pending, never signed a second time, and journaled writes are marked
-settled once their receipts are final. A broadcast refused as `service already
-registered`, or a duplicate that reverted because another replica registered
-first, is adopted only after the entry reaches the finalized depth and its
-identity is verified there. An abandoned cycle persists and broadcasts
-nothing, and can never mark a later, failed reconciliation healthy.
+registration or URI update this provider already journaled, also one another
+replica journaled while this one waited for the signer lease, is resumed
+until its effect is final and never signed a second time. Resuming runs one
+pass of the nonce-gap recovery, which boot needs because the provider-write
+reconciler starts only after the gate, so a write stuck at its nonce
+(underpriced or dropped) is fee-replaced rather than awaited on every boot.
+A journaled write is marked settled once its receipt is final, or replaced
+once another transaction used its nonce at the finalized depth; a new write is
+signed only then. A broadcast refused as `service already registered`, or a
+duplicate that reverted because another replica registered first, is adopted
+only after the entry reaches the finalized depth and its identity is verified
+there. An abandoned cycle persists and broadcasts nothing, and can never mark
+a later, failed reconciliation healthy.
 
 ## Gateway registration recovery
 
@@ -340,7 +346,9 @@ evidence was accepted: an expired persisted envelope, or one refused once as
 `EVIDENCE_AUTH_INVALID`, is re-signed over the same registration, preparation
 and original splitter transaction hashes and persisted before it is posted.
 Recovery never redeploys or re-signs a splitter transaction; a journaled write
-that never reached the mempool is resent with its original signed bytes.
+whose send was not confirmed is resent with its original signed bytes, and a
+resend the node refuses because it already has or mined the transaction is
+left to the receipt wait.
 
 Activation polling defaults to every 20 seconds, and gateway `429` answers are
 retried with bounded backoff that honors `Retry-After`. See
