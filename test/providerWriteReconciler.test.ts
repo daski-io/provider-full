@@ -219,4 +219,27 @@ describe("provider write reconciler schedule", () => {
     expect(h.heartbeatWorker).not.toHaveBeenCalled();
     release("clear");
   });
+
+  it("reports its own hung cycle not ready once peers stop vouching for its lease", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    let release!: (value: string) => void;
+    h.withCycleLease.mockImplementation(() => new Promise((resolve) => { release = resolve; }));
+
+    startProviderWriteReconciler();
+    try {
+      await vi.advanceTimersByTimeAsync(PEER_LEASE_TRUST_MS);
+      expect(h.failWorker).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(h.failWorker).toHaveBeenCalledWith(WORKER);
+      expect(h.logWarn).toHaveBeenCalledTimes(1);
+      expect(h.logWarn).toHaveBeenCalledWith(
+        "Provider write reconciliation cycle has not finished",
+        { runningForMs: expect.any(Number) },
+      );
+      expect(h.withCycleLease).toHaveBeenCalledTimes(1);
+    } finally {
+      release("clear");
+    }
+  });
 });

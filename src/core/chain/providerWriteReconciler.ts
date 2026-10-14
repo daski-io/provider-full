@@ -17,6 +17,8 @@ export const RECONCILE_JITTER_MS = 5_000;
 export const PEER_LEASE_TRUST_MS = 5 * 60_000;
 let timer: NodeJS.Timeout | null = null;
 let inFlight: Promise<void> | null = null;
+let inFlightSince = 0;
+let hangReported = false;
 let leaseBusySince: number | null = null;
 let stalePeerReported = false;
 // The outcome of this replica's own last cycle; null until it ran one.
@@ -83,7 +85,23 @@ export function startProviderWriteReconciler(): void {
   }
   setWorkerStatus(WORKER, false);
   const run = () => {
-    if (inFlight) return;
+    if (inFlight) {
+      // A cycle that has held the lease this long is the stuck peer the
+      // other replicas stop vouching for: report it here too, so the
+      // replica that is stuck is never the last one reported ready.
+      if (Date.now() - inFlightSince > PEER_LEASE_TRUST_MS) {
+        failWorker(WORKER);
+        if (!hangReported) {
+          hangReported = true;
+          logWarn("Provider write reconciliation cycle has not finished", {
+            runningForMs: Date.now() - inFlightSince,
+          });
+        }
+      }
+      return;
+    }
+    inFlightSince = Date.now();
+    hangReported = false;
     inFlight = runProviderWriteReconciliation();
     void inFlight.catch((error) => {
       failWorker(WORKER);

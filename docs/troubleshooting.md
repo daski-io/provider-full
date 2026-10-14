@@ -439,7 +439,9 @@ rolling deploy stays ready, and ticks are jittered so replicas cannot
 phase-lock. A lease observed busy for more than five minutes is treated as a
 stuck peer and reported not ready, as are a failed cycle and active nonce-gap
 recovery. A busy lease never clears a failure or nonce gap this replica saw in
-its own last cycle; only its own next clear cycle does.
+its own last cycle; only its own next clear cycle does. A replica whose own
+cycle has run for more than five minutes reports itself not ready as well, so
+the replica holding a stuck lease is never the last one left ready.
 
 ## HTTP, proxy, and health behavior
 
