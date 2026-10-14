@@ -7,7 +7,6 @@ import {
   type Chain,
   type Hex,
 } from "viem";
-import { privateKeyToAccount } from "viem/accounts";
 import { pool } from "../db/pool.js";
 import { getActiveAssetByIdentifier, getAssetByIdentifierWithStatuses, type AssetRow } from "../db/queries/assets.js";
 import { getServiceBySlug } from "../db/queries/services.js";
@@ -35,7 +34,7 @@ import type {
 import { compileProviderSchema, validateProviderRequest } from "./schema.js";
 import type { ValidateFunction } from "ajv";
 import type { SupplierCostCeiling } from "../serviceRegistry/types.js";
-import { fetchStandardTaskResponse } from "../a2a/responseBuilder.js";
+import { signedDispatchSnapshot, type DispatchSnapshotV1 } from "./dispatchResponse.js";
 import { admitStandardEvidence } from "./evidenceAdmissions.js";
 import { recordStandardSecurityIncident } from "./incidents.js";
 import { STANDARD_DISPATCH_PAYLOAD_KEYS } from "./dispatchContract.js";
@@ -72,7 +71,7 @@ export class StandardDispatchService {
     }
   }
 
-  async status(envelope: SignedEnvelope<DispatchStatusQueryV1>): Promise<Record<string, unknown>> {
+  async status(envelope: SignedEnvelope<DispatchStatusQueryV1>): Promise<DispatchSnapshotV1> {
     assertExactKeys(envelope, SIGNED_ENVELOPE_KEYS, "dispatch status envelope");
     assertExactKeys(envelope.payload, [
       "orderId", "dispatchHash", "issuedAt", "validBefore",
@@ -97,7 +96,11 @@ export class StandardDispatchService {
       !claim?.transaction_id ||
       `0x${claim.dispatch_hash.toString("hex")}` !== envelope.payload.dispatchHash
     ) throw new Error("Dispatch status is unavailable");
-    return this.signedResponse(claim.transaction_id, envelope.payload.dispatchHash, claim.state);
+    return signedDispatchSnapshot(this.config, {
+      gatewayAudience: this.config.gatewayAudience,
+      orderId: envelope.payload.orderId,
+      dispatchHash: envelope.payload.dispatchHash,
+    });
   }
 
   async accept(args: {
@@ -105,7 +108,7 @@ export class StandardDispatchService {
     quote: SignedEnvelope<QuoteV1>;
     request: Record<string, unknown>;
     evidenceBundle: StandardEvidenceBundleV2;
-  }): Promise<{ taskId: string; dispatchHash: Hex; signature: Hex; state: string; terminalAttestation?: { payload: Record<string, unknown>; signature: Hex } }> {
+  }): Promise<DispatchSnapshotV1> {
     await this.verifyDispatch(args.dispatch, args.request, true);
     const dispatch = args.dispatch.payload;
     const dispatchHash = canonicalHash(args.dispatch);
@@ -121,7 +124,7 @@ export class StandardDispatchService {
         });
         throw new Error("Changed dispatch replay rejected");
       }
-      return this.signedResponse(existing.transaction_id, dispatchHash, existing.state);
+      return this.snapshot(dispatch, dispatchHash);
     }
     const outcome = [...this.config.outcomes.values()].find((item) =>
       item.listingManifestHash === dispatch.listingManifestHash &&
@@ -188,7 +191,7 @@ export class StandardDispatchService {
       providerQuoteHash: admittedQuote.quoteHash,
     });
     if (claimed.existing) {
-      return this.signedResponse(claimed.taskId, dispatchHash, claimed.state);
+      return this.snapshot(dispatch, dispatchHash);
     }
 
     const adapter = getAdapter(service.adapter_name);
@@ -227,7 +230,7 @@ export class StandardDispatchService {
            WHERE gateway_audience=$1 AND order_id=$2`,
           [dispatch.gatewayAudience, dispatch.orderId, bytes(canonicalHash(decision))],
         );
-        return this.signedResponse(claimed.taskId, dispatchHash, state);
+        return this.snapshot(dispatch, dispatchHash);
       }
       if (decision.action === "escalate") {
         const escalated = await markEscalated(claimed.taskId, decision.reviewQuestion, {
@@ -242,7 +245,7 @@ export class StandardDispatchService {
            WHERE gateway_audience=$1 AND order_id=$4`,
           [dispatch.gatewayAudience, state, bytes(canonicalHash(decision)), dispatch.orderId],
         );
-        return this.signedResponse(claimed.taskId, dispatchHash, state);
+        return this.snapshot(dispatch, dispatchHash);
       }
       const started = await pool.query(
         `UPDATE transactions SET status='working',updated_at=now(),
@@ -291,7 +294,7 @@ export class StandardDispatchService {
         [dispatch.gatewayAudience, dispatch.orderId],
       );
     }
-    return this.signedResponse(claimed.taskId, dispatchHash, state);
+    return this.snapshot(dispatch, dispatchHash);
   }
 
   private async verifyDispatch(
@@ -534,35 +537,12 @@ export class StandardDispatchService {
     }
   }
 
-  private async signedResponse(taskId: string, dispatchHash: Hex, state: string) {
-    const task = await pool.query<{ status: string; completed_at: Date | null }>(
-      "SELECT status,completed_at FROM transactions WHERE id=$1 AND standard_order_id IS NOT NULL",
-      [taskId],
-    );
-    const resolvedState = task.rows[0]?.status ?? state;
-    const responseHash = canonicalHash({ taskId, dispatchHash, state: resolvedState });
-    const signature = await privateKeyToAccount(this.config.providerAuthorityPrivateKey).signMessage({
-      message: { raw: responseHash },
-    });
-    const terminal = resolvedState === "completed" || resolvedState === "failed" || resolvedState === "canceled";
-    if (terminal && !task.rows[0]?.completed_at) throw new Error("Terminal task completion time is missing");
-    const terminalResult = terminal
-      ? await fetchStandardTaskResponse({ id: taskId, status: resolvedState as "completed" | "failed" | "canceled" })
-      : null;
-    const terminalPayload = terminal ? {
-      taskId,
+  private snapshot(dispatch: StandardRailDispatchV2, dispatchHash: Hex): Promise<DispatchSnapshotV1> {
+    return signedDispatchSnapshot(this.config, {
+      gatewayAudience: dispatch.gatewayAudience,
+      orderId: dispatch.orderId,
       dispatchHash,
-      state: resolvedState,
-      resultHash: canonicalHash(terminalResult),
-      completedAt: Math.floor(task.rows[0]!.completed_at!.getTime() / 1_000),
-    } : null;
-    const terminalAttestation = terminalPayload ? {
-      payload: terminalPayload,
-      signature: await privateKeyToAccount(this.config.terminalAttestationPrivateKey).signMessage({
-        message: { raw: canonicalHash(terminalPayload) },
-      }),
-    } : undefined;
-    return { taskId, dispatchHash, signature, state: resolvedState, terminalAttestation };
+    });
   }
 
   private async resolveAsset(args: {

@@ -129,7 +129,9 @@ A paid order crosses several independent bindings:
    atomically claims replay state.
 7. Core materializes the transaction and invokes the service adapter.
 8. Results, artifacts, asset ownership, status, and terminal evidence are
-   persisted.
+   persisted. Every dispatch and status answer re-reads the task state and
+   the persisted operations projection, stamps the database time and is
+   signed for that request; no signed body is cached.
 9. The provider writes a replay-safe terminal reputation outcome.
 
 The adapter never receives authority to reinterpret payment evidence.

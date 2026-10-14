@@ -106,6 +106,37 @@ or from reviewed service text, never from submitted values.
 (`service_unavailable`, `capacity`, `readiness_unavailable`, `price`,
 `unavailable`).
 
+## Dispatch and status answers
+
+`POST /standard-rail/dispatch` and `POST /standard-rail/dispatch/status`
+answer with exactly `taskId`, `dispatchHash`, `signature`, `state` and
+`operations`, plus `terminalAttestation` only for `completed`, `failed` and
+`canceled`. `state` is one of `dispatching`, `submitted`, `working`,
+`input-required`, `completed`, `failed`, `canceled`; no inline `result` is
+returned.
+
+- `signature` is EIP-191 by the provider authority key over the canonical
+  hash of `{taskId, dispatchHash, state, operations}`.
+- `operations` is `{schemaVersion: 1, revision, observedAt, fulfillment,
+  support, recovery}`. The semantic projection and its revision are persisted
+  with the claim (core migration 004); `fulfillment` and `recovery` are always
+  `null` in this starter, and all-null content keeps revision 0 forever. A
+  database trigger requires a higher revision for any content change and
+  refuses a revision change without one.
+- `observedAt` is the database clock at the moment of the read. Every answer
+  is built and signed for its request: the gateway accepts observations at
+  most 300 s old and 30 s in the future, so a cached signed body goes stale.
+- `terminalAttestation` is `{payload: {taskId, dispatchHash, state,
+  resultHash, completedAt}, signature}` signed by the terminal attestation
+  key over the canonical payload hash; `completedAt` is the task's completion
+  time.
+
+A status read is one SELECT plus signing: it writes nothing, calls no
+product, and rebuilds no history for a pending order. The terminal
+`resultHash` is still derived from the task projection today; the frozen
+terminal-result store replaces that single seam
+(`src/core/standardRail/terminalResult.ts`).
+
 ## ERC-8004 identity
 
 `PROVIDER_AGENT_ID` identifies the provider in the canonical per-chain

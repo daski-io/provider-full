@@ -1,5 +1,6 @@
 import { getAddress, recoverMessageAddress, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
+import { z } from "zod";
 import { canonicalHash } from "../src/core/standardRail/canonical.js";
 import { assertStrictJsonText } from "../src/core/standardRail/strictJson.js";
 import type { SignedEnvelope } from "../src/core/standardRail/types.js";
@@ -189,4 +190,110 @@ export async function acceptIntakeResponse(value: unknown, expected: {
   const signer = await recoverMessageAddress({ message: { raw: canonicalHash(payload) }, signature: signature as Hex });
   if (getAddress(signer) !== getAddress(expected.providerAuthorityKey)) throw new Error("Invalid intake signer");
   return payload;
+}
+
+/*
+ * providerDispatch.ts validateDispatchResponse + terminalEvidence,
+ * operationsSchema.ts and operationsStore.ts persistOperations rules. The
+ * gateway-defined fulfillment-wait section is only ever null from this
+ * starter, so the port models it as null.
+ */
+const time = z.number().int().nonnegative();
+const id = z.string().min(1).max(128);
+const resultHashPattern = z.string().regex(/^0x[0-9a-f]{64}$/);
+export const gatewayOperationsSchema = z.object({
+  schemaVersion: z.literal(1), revision: time, observedAt: time,
+  fulfillment: z.null(),
+  support: z.object({
+    reviewId: id, status: z.enum(["open", "closed"]),
+    lastAcceptedRequest: z.object({ requestId: id, messageId: id, acceptedAt: time }).strict(),
+    lastReply: z.object({ messageId: id, repliedAt: time, message: z.string().min(1).max(4_000) }).strict().optional(),
+  }).strict().nullable(),
+  recovery: z.object({
+    recoveryId: id, reviewId: id,
+    state: z.enum(["queued", "pending", "running", "attention", "completed", "stopped"]),
+    originalTerminal: z.object({ state: z.literal("failed"), completedAt: time, resultHash: resultHashPattern }).strict(),
+    startedAt: time.nullable(), completedAt: time.nullable(), resultHash: resultHashPattern.nullable(),
+  }).strict().nullable(),
+}).strict();
+
+const DISPATCH_STATES = ["dispatching", "submitted", "working", "input-required", "completed", "failed", "canceled"];
+
+export interface AcceptedDispatchResponse {
+  body: Record<string, unknown> & { taskId: string; state: string };
+  responseHash: Hex;
+  terminal: boolean;
+  operations: z.infer<typeof gatewayOperationsSchema>;
+  evidence: { payload: Record<string, unknown>; signature: string } | null;
+}
+
+export async function acceptDispatchResponse(value: unknown, expected: {
+  dispatchHash: Hex;
+  providerAuthorityKey: Hex;
+  terminalAttestationKey: Hex;
+  now: number;
+}): Promise<AcceptedDispatchResponse> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("provider_dispatch_response_malformed");
+  const body = value as Record<string, unknown> & { taskId: string; state: string };
+  const terminal = ["completed", "failed", "canceled"].includes(String(body.state));
+  const keys = terminal
+    ? ["taskId", "dispatchHash", "signature", "state", "operations", "terminalAttestation"]
+    : ["taskId", "dispatchHash", "signature", "state", "operations"];
+  if (Object.keys(body).sort().join() !== keys.sort().join()) throw new Error("provider dispatch response fields are invalid");
+  if (
+    typeof body.taskId !== "string" || body.taskId.length === 0 || body.taskId.length > 128 ||
+    body.dispatchHash !== expected.dispatchHash || typeof body.signature !== "string" ||
+    !DISPATCH_STATES.includes(String(body.state))
+  ) throw new Error("provider_dispatch_response_malformed");
+  const operations = gatewayOperationsSchema.parse(body.operations);
+  const responseHash = canonicalHash({ taskId: body.taskId, dispatchHash: expected.dispatchHash, state: body.state, operations });
+  const signer = await recoverMessageAddress({ message: { raw: responseHash }, signature: body.signature as Hex });
+  if (getAddress(signer) !== getAddress(expected.providerAuthorityKey)) {
+    throw new Error("provider_dispatch_response_signature_invalid");
+  }
+  if (operations.observedAt > expected.now + 30 || operations.observedAt < expected.now - 300) {
+    throw new Error("provider_operations_observation_stale");
+  }
+  let evidence: AcceptedDispatchResponse["evidence"] = null;
+  if (terminal) {
+    const attestation = body.terminalAttestation as { payload?: Record<string, unknown>; signature?: unknown } | undefined;
+    if (!attestation?.payload || typeof attestation.signature !== "string") throw new Error("provider_terminal_attestation_missing");
+    if (Object.keys(attestation).sort().join() !== "payload,signature" ||
+        Object.keys(attestation.payload).sort().join() !== "completedAt,dispatchHash,resultHash,state,taskId") {
+      throw new Error("provider terminal attestation fields are invalid");
+    }
+    const completedAt = attestation.payload.completedAt;
+    if (typeof completedAt !== "number" || !Number.isSafeInteger(completedAt) || completedAt <= 0 ||
+        completedAt > expected.now + 30 || typeof attestation.payload.resultHash !== "string" ||
+        !/^0x[0-9a-fA-F]{64}$/.test(attestation.payload.resultHash)) {
+      throw new Error("provider_terminal_attestation_time_invalid");
+    }
+    const terminalSigner = await recoverMessageAddress({
+      message: { raw: canonicalHash(attestation.payload) }, signature: attestation.signature as Hex,
+    });
+    if (getAddress(terminalSigner) !== getAddress(expected.terminalAttestationKey) ||
+        attestation.payload.taskId !== body.taskId || attestation.payload.dispatchHash !== expected.dispatchHash ||
+        attestation.payload.state !== body.state) {
+      throw new Error("provider_terminal_attestation_invalid");
+    }
+    evidence = { payload: attestation.payload, signature: attestation.signature };
+  }
+  return { body, responseHash, terminal, operations, evidence };
+}
+
+/** persistOperations: one revision names one projection; older reads are ignored. */
+export function gatewayOperationsDecision(
+  stored: { revision: number; observedAt: number; projectionHash: Hex } | null,
+  next: z.infer<typeof gatewayOperationsSchema>,
+): "store" | "ignore" | "conflict" {
+  const { observedAt: _observedAt, ...semantic } = next;
+  const projectionHash = canonicalHash(semantic);
+  if (stored && next.revision === stored.revision && projectionHash !== stored.projectionHash) return "conflict";
+  if (stored && (next.revision < stored.revision || next.observedAt < stored.observedAt)) return "ignore";
+  return "store";
+}
+
+export function semanticOperationsHash(operations: z.infer<typeof gatewayOperationsSchema>): Hex {
+  const { observedAt: _observedAt, ...semantic } = operations;
+  return canonicalHash(semantic);
 }

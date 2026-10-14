@@ -60,6 +60,10 @@ All notable changes to this project will be documented here.
   (core migration 003) and `runSupplierOperation({ spend })` refuses a
   planned supplier operation above it, for another supplier or currency, or
   without an admitted ceiling before the supplier is called.
+- Dispatch and status answers carry a signed `operations` observation from
+  a persisted semantic projection and revision (core migration 004, all-null
+  at revision 0), freshly stamped with the database clock and signed per
+  request; terminal answers keep the attestation and inline results are gone.
 - Dispatch now verifies the persisted, nonzero provider quote for both
   pricing modes, including payer, request, listing, price and window
   coverage, and no longer caps how long after its quote a timely-paid order
