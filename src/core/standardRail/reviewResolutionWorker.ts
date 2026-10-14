@@ -28,11 +28,11 @@ import { errorExtra, logError } from "../logger.js";
 import { assetActionHandler, contractHandler } from "../serviceRegistry/retainedHandlers.js";
 import { admittedActionDefinition } from "./actionDefinitions.js";
 import { executeAssetAction } from "./actionExecution.js";
-import {
-  completeAssetAction,
-  loadAssetActionForTask,
-  transitionAssetAction,
-} from "./actionStore.js";
+import { completeAssetAction } from "./actionCompletion.js";
+import { admitAssetActionResumption, loadAssetActionForTask } from "./actionStore.js";
+import { targetOf } from "./assetActionTarget.js";
+import { admittedOwnerOf, AssetOwnerChangedError } from "./assetOwnerFence.js";
+import { recordStaleOwnerExecution } from "./assetOwnerOutcome.js";
 import { assertProviderWalletAvailable, type ProviderWalletConfig } from "./walletConfig.js";
 import type { ProviderStandardRailConfig } from "./config.js";
 import { listingVersion } from "./listingVersions.js";
@@ -120,28 +120,46 @@ async function resolveStandardAction(
     throw new Error("reviewed service, skill, or asset changed after snapshot");
   }
   const executionId = hex(execution.execution_id);
-  if (!await transitionAssetAction(executionId, "attention", "executing", task.id)) {
-    throw new Error("standard action review lost its execution claim");
-  }
-  if (row.reviewer_decision === "rejected") {
-    await transitionTask(task.id, "failed", "Human reviewer rejected the protected request.", "terminal");
-    await completeAssetAction({ executionId, status: "failed", result: null, errorClass: "review_rejected" });
-  } else {
-    const result = await executeAssetAction({
-      definition,
-      executionId,
-      taskId: task.id,
-      service,
-      skill,
-      input,
-      asset,
-      persistResult: definition.replayPolicy !== "regenerate-ephemeral",
-      safetyReviewed: true,
+  // Resuming is a new admission under the asset owner fence: the execution's
+  // payer must still own the asset, or its outcome is withheld.
+  let resumed;
+  try {
+    resumed = await admitAssetActionResumption(executionId, task.id);
+  } catch (error) {
+    if (!(error instanceof AssetOwnerChangedError)) throw error;
+    await recordStaleOwnerExecution({
+      assetId: execution.provider_asset_id, taskId: task.id, executionId, admitted: admittedOwnerOf(execution),
     });
-    if (result.status === "attention") {
-      await markResolutionAttention(row.id, "Reviewed action needs reconciliation before it can be retried");
-      return;
+    if (!await finalizeStandardActionResolution(row.id, row.reviewer_decision)) {
+      throw new Error("standard action review finalization claim was lost");
     }
+    return;
+  }
+  if (!resumed) throw new Error("standard action review lost its execution claim");
+  try {
+    if (row.reviewer_decision === "rejected") {
+      await transitionTask(task.id, "failed", "Human reviewer rejected the protected request.", "terminal");
+      await completeAssetAction({ executionId, status: "failed", result: null, errorClass: "review_rejected" });
+    } else {
+      const result = await executeAssetAction({
+        definition,
+        executionId,
+        taskId: task.id,
+        service,
+        skill,
+        input,
+        target: targetOf(resumed),
+        persistResult: definition.replayPolicy !== "regenerate-ephemeral",
+        safetyReviewed: true,
+      });
+      if (result.status === "attention") {
+        await markResolutionAttention(row.id, "Reviewed action needs reconciliation before it can be retried");
+        return;
+      }
+    }
+  } catch (error) {
+    // A stale owner's outcome is recorded and withheld; the review is done.
+    if (!(error instanceof AssetOwnerChangedError)) throw error;
   }
   if (!await finalizeStandardActionResolution(row.id, row.reviewer_decision)) {
     throw new Error("standard action review finalization claim was lost");

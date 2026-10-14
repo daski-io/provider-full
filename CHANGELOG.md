@@ -177,6 +177,24 @@ All notable changes to this project will be documented here.
   refused, and a verification outage stays retryable instead of looking like
   a wrong signature. Asset actions and queries verify the gateway grant
   before the payer signature, so an ungranted request never spends RPC.
+- Asset ownership has one authority (core migration 012): an owner override
+  when one committed, otherwise the payer of the most recent linked standard
+  order at version 0, and the architecture gate refuses any other
+  derivation. Owner-only work is admitted under a per-asset owner fence that
+  records the owner's version: asset-action claims, staging, destructive
+  confirmations and post-review resumptions, and owner-only paid orders at
+  dispatch, buyer input and reviewed execution. The supplier call, result
+  persistence and every signed asset-action response compare that version
+  with the current owner under the fence; a stale owner's result is withheld
+  from both owners and ends `failed` with `asset_owner_changed`. Fenced
+  wallet-action transactions now run read committed so a read after the
+  fence sees what committed before it.
+- Wallet actions act only on an asset of their service and type in a state
+  the service admits for the action (`assets.assetLookupStatuses`, active
+  only by default) and with the identifier their input names; a destructive
+  follow-up acts only on the staged row of the asset it names. An asset that
+  stops being eligible before execution fails the action with
+  `asset_unavailable` without supplier work.
 - Buyer input and cancellation are durably idempotent (core migration 008):
   each is identified by its task and content, claimed under a lease before
   the service is called and committed with the task state it produced, so a

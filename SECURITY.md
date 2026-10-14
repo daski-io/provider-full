@@ -42,7 +42,8 @@ free reads may be called anonymously.
 | Gateway authority | Verify the configured gateway signer and independently signed provider grant. |
 | Payment | Verify finalized standard dispatch and release evidence bound to provider, service, skill, payer, amount, recipe, and order. |
 | Replay | Atomically consume wallet, provider-grant, dispatch, and envelope nonces in PostgreSQL. |
-| Ownership | Resolve the normalized payer wallet from stored ownership; never trust caller ownership metadata. |
+| Ownership | Resolve the current owner only through the single owner authority (`assetOwnership.ts`); admit owner-only work under the asset owner fence with that owner's version and compare it at execution, result persistence and release; never trust caller or cached ownership metadata. |
+| Owner change | None ships. A fork that adds one must follow the fencing sequence in `docs/architecture.md`; the architecture gate refuses any other write to `asset_owner_overrides`. |
 | Consequential action | Require an admitted owner-only action from the signed catalog. |
 | Destructive action | Require a delayed, separately signed confirm/cancel step bound to the exact preview and request. |
 
@@ -136,8 +137,10 @@ For every new paid or owner-only path, test at least:
 6. signer/identity lookup failure;
 7. concurrent attempts with exactly one winner;
 8. ambiguous supplier and chain outcomes;
-9. cancellation after each irreversible boundary; and
-10. public error/log redaction.
+9. cancellation after each irreversible boundary;
+10. public error/log redaction; and
+11. for owner-only work, a wrong target and an owner version that changes
+    before execution, persistence and release.
 
 Destructive actions additionally require delay, second-authorization,
 confirm/cancel race, mismatch, expiry, and replay cases.

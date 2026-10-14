@@ -1,11 +1,11 @@
 import { pool } from "../db/pool.js";
 import { upsertCustomer } from "../db/queries/customers.js";
+import type { Queryable } from "../db/queryable.js";
 import { decryptString, encryptString } from "../chain/encryption.js";
 import type { Address, Hex } from "viem";
 import type { ProviderWalletConfig } from "./walletConfig.js";
 import { consumeAssetEndpointRate } from "./assetRateLimit.js";
-import type { DeferredTaskEmits } from "../engine/taskTransitions.js";
-import { cancelLinkedAssetActionTransaction } from "./actionLifecycle.js";
+import { admitAssetOwner, lockAssetOwnerFence } from "./assetOwnerFence.js";
 
 const bytes = (value: Hex): Buffer => Buffer.from(value.slice(2), "hex");
 const hex = (value: Buffer): Hex => `0x${value.toString("hex")}`;
@@ -34,6 +34,9 @@ export interface AssetActionExecutionRow {
   result_redacted_at: Date | null;
   sanitized_result: Record<string, unknown> | null;
   error_class: string | null;
+  /** The owner the execution was admitted (or last re-admitted) under. */
+  admitted_owner: string;
+  admitted_owner_version: number;
 }
 
 interface ClaimArgs {
@@ -68,7 +71,7 @@ interface ClaimArgs {
   };
 }
 
-const payloadContext = (executionId: Hex) => ({
+export const payloadContext = (executionId: Hex) => ({
   purpose: "destructive-asset-action",
   table: "standard_destructive_action_payloads",
   recordId: executionId,
@@ -76,7 +79,7 @@ const payloadContext = (executionId: Hex) => ({
   recordVersion: 1,
 } as const);
 
-const recoveryResultContext = (row: AssetActionExecutionRow) => ({
+export const recoveryResultContext = (row: AssetActionExecutionRow) => ({
   purpose: "asset-action-recovery-result",
   table: "standard_asset_action_recovery_results",
   recordId: `${hex(row.execution_id)}:${row.payer}:${row.provider_asset_id}:${hex(row.action_hash)}`,
@@ -92,7 +95,11 @@ export async function claimAssetAction(args: ClaimArgs): Promise<{
   const client = await pool.connect();
   const taskId = `asset-action-${args.executionId.slice(2)}`;
   try {
-    await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
+    // Read committed: every decision below is made under a lock (the
+    // execution's own, the stage cap, the asset owner fence) and must see
+    // what committed before that lock was granted, whereas a serializable
+    // snapshot is taken before the first wait.
+    await client.query("BEGIN");
     await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [taskId]);
     await consumeAssetEndpointRate({
       db: client, gatewaySigner: args.gatewaySigner, payer: args.payer,
@@ -139,6 +146,9 @@ export async function claimAssetAction(args: ClaimArgs): Promise<{
         Number(counts.provider_count) >= args.abuse.destructiveOutstandingGlobal
       ) throw new Error("destructive action capacity exceeded");
     }
+    // Admitted under the asset owner fence: the acting payer must be the
+    // current owner, and the execution and its task record that owner.
+    const owner = await admitAssetOwner(client, args.providerAssetId, args.payer);
     const customer = await upsertCustomer(args.payer, client);
     await client.query(
       `INSERT INTO standard_wallet_action_nonces
@@ -151,20 +161,21 @@ export async function claimAssetAction(args: ClaimArgs): Promise<{
     await client.query(
       `INSERT INTO transactions
         (id,customer_id,asset_id,service_id,skill_id,status,metadata,canonical_request_hash,
-         standard_payer,standard_action_execution_id)
-       VALUES ($1,$2,$3,$4,$5,'working','{}'::jsonb,$6,$7,$8)`,
+         standard_payer,standard_action_execution_id,admitted_owner,admitted_owner_version)
+       VALUES ($1,$2,$3,$4,$5,'working','{}'::jsonb,$6,$7,$8,$9,$10)`,
       [taskId, customer.id, args.providerAssetId, args.serviceId, args.skillId,
-        bytes(args.requestHash), args.payer, bytes(args.executionId)],
+        bytes(args.requestHash), args.payer, bytes(args.executionId), owner.payer, owner.version],
     );
     const inserted = await client.query<AssetActionExecutionRow>(
       `INSERT INTO standard_asset_action_executions
         (execution_id,payer,provider_asset_id,action_hash,request_hash,wallet_authorization_hash,
          grant_hash,provider_control_profile_hash,servicing_admission_hash,action_catalog_hash,
          action_catalog_schema_hash,action_catalog_epoch,action_definition_hash,state,effect_summary,
-         replay_policy,confirmation_hash,earliest_execution_at,stage_valid_before,result_valid_before)
+         replay_policy,confirmation_hash,earliest_execution_at,stage_valid_before,result_valid_before,
+         admitted_owner,admitted_owner_version)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
                to_timestamp($18::double precision),to_timestamp($19::double precision),
-               to_timestamp($20::double precision))
+               to_timestamp($20::double precision),$21,$22)
        RETURNING *`,
       [bytes(args.executionId), args.payer, args.providerAssetId, bytes(args.actionHash),
         bytes(args.requestHash), bytes(args.walletAuthorizationHash), bytes(args.grantHash),
@@ -175,7 +186,7 @@ export async function claimAssetAction(args: ClaimArgs): Promise<{
         args.replayPolicy,
         args.destructive ? bytes(args.destructive.confirmationHash) : null,
         args.destructive?.earliestExecutionAt ?? null, args.destructive?.stageValidBefore ?? null,
-        args.resultValidBefore],
+        args.resultValidBefore, owner.payer, owner.version],
     );
     if (args.destructive) {
       await client.query(
@@ -194,8 +205,8 @@ export async function claimAssetAction(args: ClaimArgs): Promise<{
   } finally { client.release(); }
 }
 
-async function consumeGrant(
-  db: { query: (text: string, values?: unknown[]) => Promise<unknown> },
+export async function consumeGrant(
+  db: Queryable,
   nonce: Hex,
   grantHash: Hex,
   payer: Hex,
@@ -207,148 +218,19 @@ async function consumeGrant(
   );
 }
 
-export async function loadDestructiveInput(executionId: Hex): Promise<Record<string, unknown>> {
-  const result = await pool.query<{ encrypted_input: string; expires_at: Date }>(
-    "SELECT encrypted_input,expires_at FROM standard_destructive_action_payloads WHERE execution_id=$1",
+/**
+ * Take the asset owner fence of an execution before its row lock, the one
+ * lock order every path shares with an owner change (which takes the fence
+ * and then locks staged rows). An execution's asset never changes, so it is
+ * read without a lock.
+ */
+export async function lockFenceForExecution(db: Queryable, executionId: Hex): Promise<void> {
+  const located = await db.query<{ provider_asset_id: string }>(
+    "SELECT provider_asset_id FROM standard_asset_action_executions WHERE execution_id=$1",
     [bytes(executionId)],
   );
-  const row = result.rows[0];
-  if (!row || row.expires_at <= new Date()) throw new Error("staged action expired");
-  const parsed: unknown = JSON.parse(decryptString(row.encrypted_input, payloadContext(executionId)));
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("staged input invalid");
-  return parsed as Record<string, unknown>;
-}
-
-export async function authorizeStagedAction(args: {
-  followupExecutionId: Hex;
-  executionId: Hex;
-  payer: Hex;
-  confirmationHash: Hex;
-  operation: "confirm" | "cancel";
-  actionId: string;
-  actionHash: Hex;
-  requestHash: Hex;
-  walletAuthorizationHash: Hex;
-  walletNonce: Hex;
-  grantHash: Hex;
-  grantNonce: Hex;
-  providerControlProfileHash: Hex;
-  servicingAdmissionHash: Hex;
-  actionCatalogHash: Hex;
-  actionCatalogSchemaHash: Hex;
-  actionCatalogEpoch: number;
-  actionDefinitionHash: Hex;
-  gatewaySigner: Address;
-  abuse: ProviderWalletConfig["abuse"];
-}): Promise<{ row: AssetActionExecutionRow; taskId: string; replayed: boolean }> {
-  const client = await pool.connect();
-  const taskId = `asset-action-${args.executionId.slice(2)}`;
-  const deferred: DeferredTaskEmits = [];
-  let result: { row: AssetActionExecutionRow; taskId: string; replayed: boolean } | undefined;
-  try {
-    await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
-    await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [taskId]);
-    await consumeAssetEndpointRate({
-      db: client, gatewaySigner: args.gatewaySigner, payer: args.payer,
-      actionId: args.actionId, limits: args.abuse,
-    });
-    const found = await client.query<AssetActionExecutionRow>(
-      "SELECT * FROM standard_asset_action_executions WHERE execution_id=$1 FOR UPDATE",
-      [bytes(args.executionId)],
-    );
-    const row = found.rows[0];
-    const prior = await client.query<{
-      action_execution_id: Buffer;
-      payer: string;
-      operation: "confirm" | "cancel";
-      confirmation_hash: Buffer;
-      wallet_authorization_hash: Buffer;
-      request_hash: Buffer;
-    }>(
-      `SELECT * FROM standard_destructive_followup_executions
-        WHERE followup_execution_id=$1 FOR UPDATE`,
-      [bytes(args.followupExecutionId)],
-    );
-    const existing = prior.rows[0];
-    if (existing && (
-      hex(existing.action_execution_id) !== args.executionId ||
-      existing.payer.toLowerCase() !== args.payer.toLowerCase() ||
-      existing.operation !== args.operation ||
-      hex(existing.confirmation_hash) !== args.confirmationHash ||
-      hex(existing.wallet_authorization_hash) !== args.walletAuthorizationHash ||
-      hex(existing.request_hash) !== args.requestHash
-    )) throw new Error("staged action replay mismatch");
-    if (
-      !row || row.payer.toLowerCase() !== args.payer.toLowerCase() ||
-      hex(row.provider_control_profile_hash) !== args.providerControlProfileHash ||
-      hex(row.servicing_admission_hash) !== args.servicingAdmissionHash ||
-      hex(row.action_catalog_hash) !== args.actionCatalogHash ||
-      hex(row.action_catalog_schema_hash) !== args.actionCatalogSchemaHash ||
-      Number(row.action_catalog_epoch) !== args.actionCatalogEpoch ||
-      hex(row.action_definition_hash) !== args.actionDefinitionHash ||
-      !row.confirmation_hash || hex(row.confirmation_hash) !== args.confirmationHash ||
-      (!existing && (!row.stage_valid_before || row.stage_valid_before <= new Date())) ||
-      (!existing && args.operation === "confirm" &&
-        (!row.earliest_execution_at || row.earliest_execution_at > new Date())) ||
-      (!existing && row.state !== "staged") ||
-      (existing && args.operation === "confirm" &&
-        !["executing", "completed", "failed", "attention"].includes(row.state)) ||
-      (existing && args.operation === "cancel" && row.state !== "canceled")
-    ) throw new Error("staged action unavailable");
-    if (!existing) {
-      await client.query(
-        `INSERT INTO standard_wallet_action_nonces
-          (payer,nonce,action_hash,request_hash,wallet_authorization_hash)
-         VALUES ($1,$2,$3,$4,$5)`,
-        [args.payer, bytes(args.walletNonce), bytes(args.actionHash), bytes(args.requestHash),
-          bytes(args.walletAuthorizationHash)],
-      );
-      await client.query(
-        `INSERT INTO standard_destructive_followup_executions
-          (followup_execution_id,action_execution_id,payer,operation,confirmation_hash,
-           wallet_authorization_hash,request_hash)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-        [bytes(args.followupExecutionId), bytes(args.executionId), args.payer, args.operation,
-          bytes(args.confirmationHash), bytes(args.walletAuthorizationHash), bytes(args.requestHash)],
-      );
-    }
-    await consumeGrant(client, args.grantNonce, args.grantHash, args.payer);
-    if (!existing) {
-      row.state = args.operation === "confirm" ? "executing" : "canceled";
-      await client.query(
-        `UPDATE standard_asset_action_executions SET state=$2,
-            reconciliation_identity=CASE WHEN $2='executing' THEN COALESCE(reconciliation_identity,$3)
-              ELSE reconciliation_identity END,updated_at=now() WHERE execution_id=$1`,
-        [bytes(args.executionId), row.state, taskId],
-      );
-      if (row.state === "canceled") {
-        await client.query("DELETE FROM standard_destructive_action_payloads WHERE execution_id=$1", [
-          bytes(args.executionId),
-        ]);
-      }
-      if (row.state === "executing") {
-        await client.query(
-          "UPDATE standard_destructive_action_payloads SET expires_at=$2 WHERE execution_id=$1",
-          [bytes(args.executionId), row.result_valid_before],
-        );
-      }
-    }
-    if (row.state === "canceled") {
-      await cancelLinkedAssetActionTransaction({
-        db: client,
-        taskId,
-        reason: "wallet_canceled",
-        deferred,
-      });
-    }
-    await client.query("COMMIT");
-    result = { row, taskId, replayed: existing !== undefined };
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally { client.release(); }
-  for (const emit of deferred) emit();
-  return result!;
+  const assetId = located.rows[0]?.provider_asset_id;
+  if (assetId) await lockAssetOwnerFence(db, assetId);
 }
 
 export async function transitionAssetAction(
@@ -367,6 +249,50 @@ export async function transitionAssetAction(
     await pool.query("DELETE FROM standard_destructive_action_payloads WHERE execution_id=$1", [bytes(executionId)]);
   }
   return result.rowCount === 1;
+}
+
+/**
+ * Resume an execution parked in `attention` (after a human review): it is
+ * re-admitted under the asset owner fence, so its payer must still own the
+ * asset, and the execution and its task record the current owner version.
+ * Null when the execution is no longer in attention.
+ */
+export async function admitAssetActionResumption(
+  executionId: Hex,
+  reconciliationIdentity: string,
+): Promise<AssetActionExecutionRow | null> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await lockFenceForExecution(client, executionId);
+    const row = (await client.query<AssetActionExecutionRow>(
+      "SELECT * FROM standard_asset_action_executions WHERE execution_id=$1 AND state='attention' FOR UPDATE",
+      [bytes(executionId)],
+    )).rows[0];
+    if (!row) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+    const owner = await admitAssetOwner(client, row.provider_asset_id, row.payer);
+    const resumed = (await client.query<AssetActionExecutionRow>(
+      `UPDATE standard_asset_action_executions
+          SET state='executing',reconciliation_identity=COALESCE(reconciliation_identity,$2),
+              admitted_owner=$3,admitted_owner_version=$4,updated_at=now()
+        WHERE execution_id=$1 AND state='attention'
+        RETURNING *`,
+      [bytes(executionId), reconciliationIdentity, owner.payer, owner.version],
+    )).rows[0]!;
+    await client.query(
+      `UPDATE transactions SET admitted_owner=$2,admitted_owner_version=$3,updated_at=now()
+        WHERE standard_action_execution_id=$1`,
+      [bytes(executionId), owner.payer, owner.version],
+    );
+    await client.query("COMMIT");
+    return resumed;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally { client.release(); }
 }
 
 export async function loadAssetActionExecution(executionId: Hex): Promise<AssetActionExecutionRow> {
@@ -403,67 +329,13 @@ export async function loadAssetActionStatesForTasks(
   return new Map(result.rows.map((row) => [row.task_id, row.state]));
 }
 
-export async function markAssetActionAttention(executionId: Hex): Promise<void> {
-  const result = await pool.query(
-    `UPDATE standard_asset_action_executions SET state='attention',updated_at=now()
-      WHERE execution_id=$1 AND state IN ('claimed','executing','attention')`,
-    [bytes(executionId)],
-  );
-  if (result.rowCount !== 1) throw new Error("asset action attention transition lost its claim");
-}
-
-export async function completeAssetAction(args: {
-  executionId: Hex;
-  status: "completed" | "failed";
-  result: Record<string, unknown> | null;
-  errorClass: string | null;
-}): Promise<void> {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const found = await client.query<AssetActionExecutionRow>(
-      `SELECT * FROM standard_asset_action_executions
-        WHERE execution_id=$1 AND state IN ('claimed','executing','attention') FOR UPDATE`,
-      [bytes(args.executionId)],
-    );
-    const row = found.rows[0];
-    if (!row) throw new Error("asset action completion lost its claim");
-    if (args.status === "completed" && row.replay_policy !== "regenerate-ephemeral") {
-      if (!args.result) throw new Error("recoverable action result is missing");
-      await client.query(
-        `INSERT INTO standard_asset_action_recovery_results(execution_id,encrypted_result,expires_at)
-         VALUES ($1,$2,$3)`,
-        [bytes(args.executionId), encryptString(JSON.stringify(args.result), recoveryResultContext(row)),
-          row.result_valid_before],
-      );
-    }
-    const updated = await client.query(
-      `UPDATE standard_asset_action_executions
-          SET state=$2,sanitized_result=NULL,error_class=$3,updated_at=now()
-        WHERE execution_id=$1 AND state IN ('claimed','executing','attention')`,
-      [bytes(args.executionId), args.status, args.errorClass],
-    );
-    if (updated.rowCount !== 1) throw new Error("asset action completion lost its claim");
-    await client.query("DELETE FROM standard_destructive_action_payloads WHERE execution_id=$1", [
-      bytes(args.executionId),
-    ]);
-    if (args.status === "completed" && row.replay_policy === "redacted-after-window") {
-      await client.query("DELETE FROM artifact_secrets WHERE transaction_id=$1", [
-        `asset-action-${args.executionId.slice(2)}`,
-      ]);
-    }
-    await client.query("COMMIT");
-  } catch (error) {
-    await client.query("ROLLBACK").catch(() => undefined);
-    throw error;
-  } finally { client.release(); }
-}
-
+/** The stored result of a completed execution; a fence holder passes its own connection. */
 export async function loadAssetActionRecoveryResult(
   row: AssetActionExecutionRow,
+  db: Queryable = pool,
 ): Promise<Record<string, unknown>> {
   if (row.result_valid_before <= new Date()) throw new Error("asset action recovery expired");
-  const result = await pool.query<{ encrypted_result: string; expires_at: Date }>(
+  const result = await db.query<{ encrypted_result: string; expires_at: Date }>(
     `SELECT encrypted_result,expires_at FROM standard_asset_action_recovery_results
       WHERE execution_id=$1`,
     [row.execution_id],
@@ -475,64 +347,4 @@ export async function loadAssetActionRecoveryResult(
     throw new Error("asset action recovery result invalid");
   }
   return parsed as Record<string, unknown>;
-}
-
-export async function expireDestructiveAssetActions(): Promise<{
-  expired: number;
-  attention: number;
-}> {
-  const client = await pool.connect();
-  const deferred: DeferredTaskEmits = [];
-  let result: { expired: number; attention: number } | undefined;
-  try {
-    await client.query("BEGIN");
-    const expired = await client.query<{ execution_id: Buffer }>(
-      `UPDATE standard_asset_action_executions SET state='expired',updated_at=now()
-        WHERE state='staged' AND stage_valid_before<=now() RETURNING execution_id`,
-    );
-    const attention = await client.query<{ execution_id: Buffer }>(
-      `UPDATE standard_asset_action_executions SET state='attention',updated_at=now(),
-          error_class=NULL,sanitized_result=NULL
-        WHERE state='executing' AND result_valid_before<=now() RETURNING execution_id`,
-    );
-    await client.query(
-      `UPDATE standard_asset_action_executions
-          SET sanitized_result=NULL,result_redacted_at=COALESCE(result_redacted_at,now()),updated_at=now()
-        WHERE state='completed' AND result_redacted_at IS NULL AND result_valid_before<=now()`,
-    );
-    await client.query(
-      "DELETE FROM standard_asset_action_recovery_results WHERE expires_at<=now()",
-    );
-    await client.query(
-      "DELETE FROM standard_wallet_action_nonces WHERE consumed_at<now()-interval '10 minutes'",
-    );
-    await client.query(
-      "DELETE FROM standard_provider_grant_nonces WHERE consumed_at<now()-interval '10 minutes'",
-    );
-    await client.query(
-      "DELETE FROM standard_asset_rate_buckets WHERE window_started_at<now()-interval '2 minutes'",
-    );
-    const ids = [...expired.rows, ...attention.rows].map((row) => row.execution_id);
-    for (const row of expired.rows) {
-      await cancelLinkedAssetActionTransaction({
-        db: client,
-        taskId: `asset-action-${row.execution_id.toString("hex")}`,
-        reason: "confirmation_expired",
-        deferred,
-      });
-    }
-    if (ids.length > 0) {
-      await client.query(
-        "DELETE FROM standard_destructive_action_payloads WHERE execution_id=ANY($1::bytea[])",
-        [ids],
-      );
-    }
-    await client.query("COMMIT");
-    result = { expired: expired.rowCount ?? 0, attention: attention.rowCount ?? 0 };
-  } catch (error) {
-    await client.query("ROLLBACK").catch(() => undefined);
-    throw error;
-  } finally { client.release(); }
-  for (const emit of deferred) emit();
-  return result!;
 }

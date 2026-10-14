@@ -9,10 +9,13 @@ import type {
   SignedEnvelope,
 } from "./types.js";
 import type { AssetActionDefinitionV1, ProviderWalletConfig } from "./walletConfig.js";
-import type { AssetActionExecutionRow } from "./actionStore.js";
+import { loadAssetActionRecoveryResult, type AssetActionExecutionRow } from "./actionStore.js";
 import { signProviderResponse } from "./providerResponse.js";
+import { pool } from "../db/pool.js";
+import { admittedOwnerOf, AssetOwnerChangedError, releaseUnderOwnerFence } from "./assetOwnerFence.js";
+import { recordWithheldRelease } from "./assetOwnerOutcome.js";
 
-interface ResponseContext {
+export interface ResponseContext {
   standard: ProviderStandardRailConfig;
   wallet: ProviderWalletConfig;
   chainId: number;
@@ -112,4 +115,46 @@ export function signFinalResponse(
     standard: context.standard, wallet: context.wallet, chainId: context.chainId,
     grantDeadline: context.grant.validBefore,
   });
+}
+
+/**
+ * The result-release boundary of an asset action. Under the asset owner
+ * fence, with the admitted owner still current, a stored result is loaded
+ * through the fenced connection (or the in-memory one is used) and the final
+ * response is signed before the fence is released, so an owner change
+ * cannot commit between the check and the signature. A stale owner gets
+ * nothing loaded or signed: the refusal is audited and AssetOwnerChangedError
+ * thrown.
+ */
+export async function releaseFinalResponse(args: {
+  row: AssetActionExecutionRow;
+  definition: AssetActionDefinitionV1;
+  context: ResponseContext;
+  /** Load the stored recovery result under the fence instead of using `result`. */
+  stored: boolean;
+  result?: Record<string, unknown> | null;
+}): Promise<SignedEnvelope<ProviderAssetActionResponseV1>> {
+  const admitted = admittedOwnerOf(args.row);
+  try {
+    return await releaseUnderOwnerFence({
+      assetId: args.row.provider_asset_id,
+      admitted,
+      release: async (db) => signFinalResponse(
+        args.row,
+        args.definition,
+        args.context,
+        args.stored ? await loadAssetActionRecoveryResult(args.row, db) : args.result,
+      ),
+    });
+  } catch (error) {
+    if (error instanceof AssetOwnerChangedError) {
+      await recordWithheldRelease(pool, {
+        assetId: args.row.provider_asset_id,
+        taskId: `asset-action-${args.row.execution_id.toString("hex")}`,
+        executionId: args.row.execution_id,
+        admitted,
+      });
+    }
+    throw error;
+  }
 }

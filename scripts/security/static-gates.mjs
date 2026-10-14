@@ -256,6 +256,41 @@ for (const file of sourceFiles) {
     failures.push(`${path} verifies a typed-data signature outside the bounded payer verifier`);
   }
 }
+// Asset ownership resolves only through the single owner authority, and
+// owner-only work is admitted, and its results persisted and released,
+// under the asset owner fence. No owner-changing path ships: a fork that
+// adds one replaces the override gate below with the complete fencing
+// sequence in docs/architecture.md.
+const ownerResolver = "src/core/db/queries/assetOwnership.ts";
+const ownerDerivation = /standard_payer[\s\S]{0,600}?ORDER BY\s+(?:\w+\.)?created_at\s+DESC/;
+for (const file of sourceFiles) {
+  const path = projectPath(file);
+  if (!file.endsWith(".ts") || path.includes("/tests/")) continue;
+  const source = readFileSync(file, "utf8");
+  if (path !== ownerResolver && ownerDerivation.test(source)) {
+    failures.push(`${path} derives an asset owner outside the owner authority`);
+  }
+  if (/UPDATE\s+transactions\b[\s\S]{0,200}?\bSET\b[\s\S]{0,200}?\bstandard_payer\s*=/i.test(source)) {
+    failures.push(`${path} rewrites a standard order's payer`);
+  }
+  if (/\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+asset_owner_overrides\b/i.test(source)) {
+    failures.push(`${path} changes an asset owner, which the starter never does`);
+  }
+  if (path !== "src/core/standardRail/assetActionResponse.ts" && /\bsignFinalResponse\s*\(/.test(source)) {
+    failures.push(`${path} signs an asset-action result outside the owner-fenced release`);
+  }
+}
+for (const [file, required] of [
+  ["src/core/standardRail/actionStore.ts", "admitAssetOwner"],
+  ["src/core/standardRail/actionStaged.ts", "admitAssetOwner"],
+  ["src/core/standardRail/actionCompletion.ts", "assertAdmittedOwnerCurrent"],
+  ["src/core/standardRail/assetActionResponse.ts", "releaseUnderOwnerFence"],
+  ["src/core/standardRail/assetActionTarget.ts", "assertAdmittedOwnerCurrent"],
+  ["src/core/standardRail/dispatchExecution.ts", "admitPaidTaskForAsset"],
+  ["src/core/engine/taskFinalization.ts", "assertAdmittedOwnerCurrent"],
+]) {
+  if (!read(file).includes(required)) failures.push(`${file} must use ${required}`);
+}
 const actionStore = read("src/core/standardRail/actionStore.ts");
 for (const ledger of [
   "standard_wallet_action_nonces",

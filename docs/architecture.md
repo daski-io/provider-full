@@ -281,12 +281,71 @@ derive the canonical identifier and which statuses are eligible.
 
 Owner-only reads and mutations use the standard wallet authorization plus an
 independent gateway provider grant. The current servicing admission and signed
-action catalog must contain the exact action definition.
+action catalog must contain the exact action definition. A wallet action acts
+only on an asset of the action's service and type that the grant-attested
+payer currently owns, in a lifecycle state the service admits for the action
+(`assets.assetLookupStatuses`, active only by default), and with the
+identifier its input names when the service derives one.
 
 A destructive action adds a delayed second authorization. Confirmation binds a
-safe preview to the original request; cancel and confirm race through
-conditional database transitions. A service must not create its own
-authorization scheme.
+safe preview to the original request; a follow-up acts only on the staged row
+of the asset its request names; cancel and confirm race through conditional
+database transitions. A service must not create its own authorization scheme.
+
+### One owner authority
+
+`src/core/db/queries/assetOwnership.ts` is the only owner resolver: an
+`asset_owner_overrides` row when one committed (core migration 012), otherwise
+the payer of the most recent standard order linked to the asset, at version
+0. Wallet listings and actions, owner-only paid orders and services all read
+it, and the architecture gate refuses any other derivation of an owner from
+`transactions.standard_payer`. A request body, an order id, an execution's
+`payer` or any other cached owner field is never a second source of
+ownership.
+
+### Asset owner fence
+
+Every transition that starts or resumes owner-only work takes
+`pg_advisory_xact_lock(hashtextextended('asset-owner:' || asset_id, 0))` and
+records the owner it admitted, with its version: an asset-action claim or
+staging, a destructive confirmation, the resumption of an action after review,
+the dispatch link of an owner-only paid order and its resumption after buyer
+input or a review, and a delivery admission. The lock order is fixed: a
+request's own advisory lock and endpoint rate buckets, then the fence, then
+the execution row, then its transaction. These transactions run read
+committed, so a read after the fence sees what committed before it was
+granted. A fence holder uses only its own connection and never waits on a
+network call.
+
+The admitted owner is compared with the current one at three boundaries:
+
+- consequential execution: a short fenced check immediately before the
+  supplier call, which also re-checks that the asset is still an eligible
+  target (an ineligible asset fails the action with `asset_unavailable`
+  without supplier work);
+- result persistence: `processAdapterResult` and `completeAssetAction`
+  persist no deliverable for a stale owner; the work ends failed with the
+  redacted `asset_owner_changed` outcome, its protected artifact fields are
+  purged, and an `asset_owner.result_withheld` audit row is written, all in
+  the same transaction;
+- result release: every signed final asset-action response (fresh,
+  replayed, recovered or regenerated) is signed inside the fence transaction
+  that compared the version, so no owner change commits between the check
+  and the signature. A stale owner gets `403` with nothing loaded or signed.
+
+### Owner changes
+
+The starter ships no path that changes an owner, and the architecture gate
+refuses writes to `asset_owner_overrides`. A fork that adds one must not
+bypass these guards: in one transaction under the asset fence (and any
+compliance lease the deployment uses) it re-checks the expected owner and
+version, refuses while owner-only work is active (an execution in `claimed`,
+`executing` or `attention`; an owner-only paid order that is not terminal; an
+open review or an unresolved supplier operation for the asset; a live
+delivery admission), writes the next version, cancels staged destructive
+actions, revokes open delivery admissions and audits the change. Telling the
+gateway, notifying both owners and handing the asset over are part of the
+same reviewed design, not an afterthought.
 
 ## Supplier mutations and durability
 

@@ -3,7 +3,7 @@ import { purgeExpiredSessions } from "../db/queries/sessions.js";
 import { logError } from "../logger.js";
 import { failWorker, heartbeatWorker, setWorkerStatus } from "../health.js";
 import { classifyStaleConfirmationExecutions } from "../db/queries/confirmationIntents.js";
-import { expireDestructiveAssetActions } from "../standardRail/actionStore.js";
+import { expireDestructiveAssetActions } from "../standardRail/actionCompletion.js";
 
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 let timer: ReturnType<typeof setInterval> | null = null;

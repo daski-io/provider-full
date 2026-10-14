@@ -20,6 +20,10 @@ import {
 import { processAdapterResult } from "../engine/taskFinalization.js";
 import { claimSupplierMutation } from "../engine/taskTransitions.js";
 import { admittedSupplierCostCeiling } from "../serviceRegistry/supplierCostCeiling.js";
+import type { AdapterResult } from "../serviceRegistry/types.js";
+import { readmitPaidTaskOwner } from "./assetOwnerAdmission.js";
+import { AssetOwnerChangedError } from "./assetOwnerFence.js";
+import { ASSET_OWNER_CHANGED_RESULT } from "./assetOwnerOutcome.js";
 import { canonicalHash } from "./canonical.js";
 
 interface CurrentContext {
@@ -76,8 +80,19 @@ export async function finishReviewedPaidOrder(row: PreExecuteEscalationRow): Pro
   if (row.status !== "resolution_result_ready" || !row.reviewer_decision) {
     throw new Error("reviewed paid result is not ready");
   }
-  const result = openAdapterResult(row);
-  const task = await processAdapterResult(row.transaction_id!, result, row.snapshot_service_id);
+  let result: AdapterResult = openAdapterResult(row);
+  let task: TransactionRow;
+  try {
+    task = await processAdapterResult(row.transaction_id!, result, row.snapshot_service_id);
+  } catch (error) {
+    // The asset's owner changed meanwhile: the result was withheld and the
+    // order ended failed in the same transaction.
+    if (!(error instanceof AssetOwnerChangedError)) throw error;
+    result = ASSET_OWNER_CHANGED_RESULT;
+    const failed = await getTransactionById(row.transaction_id!);
+    if (!failed) throw new Error("reviewed paid task disappeared");
+    task = failed;
+  }
   await persistDispatchState(task, result, task.status);
   if (!await finalizeResolution(row.id, row.reviewer_decision)) {
     const current = await getPreExecuteResolution(row.id);
@@ -115,6 +130,19 @@ export async function resolveReviewedPaidOrder(args: {
     return;
   }
   let task = context.task;
+  // Owner-only work resumes only for the asset's current owner; otherwise
+  // the order fails definitively, before any supplier work.
+  try {
+    await readmitPaidTaskOwner(task.id);
+  } catch (error) {
+    if (!(error instanceof AssetOwnerChangedError)) throw error;
+    const failed = await processAdapterResult(task.id, ASSET_OWNER_CHANGED_RESULT, context.service.id);
+    await persistDispatchState(failed, ASSET_OWNER_CHANGED_RESULT, failed.status);
+    if (!await finalizeResolution(args.row.id, args.row.reviewer_decision!)) {
+      throw new Error("paid review finalization claim was lost");
+    }
+    return;
+  }
   // Parsed before the mutation claim: a reviewed re-execution spends under
   // the same admitted ceiling as the original attempt, never a new one.
   const supplierCostCeiling = admittedSupplierCostCeiling(task.metadata);

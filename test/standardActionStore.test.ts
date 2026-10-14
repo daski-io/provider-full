@@ -3,7 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Address, Hex } from "viem";
 
 /// Unit coverage for the standard-rail action store at the database
-/// boundary: a fake pool captures every statement (whitespace-normalized)
+/// boundary (actionStore, actionStaged, actionCompletion): a fake pool
+/// captures every statement (whitespace-normalized)
 /// with its bound parameters and answers from per-test seed state the way
 /// RETURNING * / FOR UPDATE would. Encryption, customer upsert, and the
 /// endpoint rate limiter run for real so the captured parameters are the
@@ -24,6 +25,8 @@ const harness = vi.hoisted(() => {
     payloadRow: null as { encrypted_input: string; expires_at: Date } | null,
     recoveryRow: null as { encrypted_result: string; expires_at: Date } | null,
     stagedCounts: { payer_count: "0", provider_count: "0" },
+    /** What the single owner authority answers for the asset. */
+    owner: { payer: `0x${"aa".repeat(20)}`, version: 0 } as { payer: string; version: number } | null,
     rateCount: 1,
     transitionRowCount: 1,
     attentionRowCount: 1,
@@ -50,6 +53,7 @@ const harness = vi.hoisted(() => {
     earliest_execution_at: toDate(v[17]), stage_valid_before: toDate(v[18]),
     result_valid_before: toDate(v[19]),
     result_redacted_at: null, sanitized_result: null, error_class: null,
+    admitted_owner: v[20], admitted_owner_version: v[21],
   });
   async function query(rawText: string, values: unknown[] = []) {
     const text = rawText.replace(/\s+/g, " ").trim();
@@ -63,6 +67,14 @@ const harness = vi.hoisted(() => {
     const ok = (rowCount: number) => ({ rows: [], rowCount });
     if (text.startsWith("BEGIN") || text === "COMMIT" || text === "ROLLBACK") return ok(0);
     if (text.includes("pg_advisory_xact_lock")) return ok(0);
+    if (text.includes("FROM asset_owner_overrides aoo") && text.includes("FROM assets a WHERE a.id = $1::uuid")) {
+      return one(state.owner);
+    }
+    if (text.startsWith("SELECT provider_asset_id FROM standard_asset_action_executions")) {
+      return one(state.executionRow && { provider_asset_id: state.executionRow.provider_asset_id });
+    }
+    if (text.startsWith("UPDATE transactions SET admitted_owner=$2,admitted_owner_version=$3")) return ok(1);
+    if (text.includes("SET state='failed',error_class=$2,sanitized_result=NULL")) return ok(1);
     if (text.includes("INSERT INTO standard_asset_rate_buckets")) {
       return rows([{ request_count: state.rateCount }]);
     }
@@ -163,20 +175,22 @@ const harness = vi.hoisted(() => {
 vi.mock("../src/core/db/pool.js", () => ({ pool: harness.pool }));
 
 import {
-  authorizeStagedAction,
   claimAssetAction,
-  completeAssetAction,
-  expireDestructiveAssetActions,
   loadAssetActionExecution,
   loadAssetActionForTask,
   loadAssetActionStatesForTasks,
   loadAssetActionRecoveryResult,
-  loadDestructiveInput,
-  markAssetActionAttention,
   transitionAssetAction,
   type AssetActionExecutionRow,
 } from "../src/core/standardRail/actionStore.js";
+import { authorizeStagedAction, loadDestructiveInput } from "../src/core/standardRail/actionStaged.js";
+import {
+  completeAssetAction,
+  expireDestructiveAssetActions,
+  markAssetActionAttention,
+} from "../src/core/standardRail/actionCompletion.js";
 import { decryptString, encryptString } from "../src/core/chain/encryption.js";
+import { AssetOwnerChangedError } from "../src/core/standardRail/assetOwnerFence.js";
 
 /// node-pg's own wire serializer: what a JSONB binding actually becomes.
 const requireCjs = createRequire(import.meta.url);
@@ -244,6 +258,7 @@ function authorizeArgs(overrides: Partial<AuthorizeArgs> = {}): AuthorizeArgs {
     followupExecutionId: h32("90"),
     executionId: EXECUTION_ID,
     payer: PAYER,
+    providerAssetId: ASSET_ID,
     confirmationHash: h32("77"),
     operation: "confirm",
     actionId: "delete-item",
@@ -291,6 +306,8 @@ function seededRow(overrides: Partial<AssetActionExecutionRow> = {}): AssetActio
     result_redacted_at: null,
     sanitized_result: null,
     error_class: null,
+    admitted_owner: PAYER,
+    admitted_owner_version: 0,
     ...overrides,
   };
 }
@@ -365,7 +382,7 @@ beforeEach(() => {
 
 describe("standard asset action store", () => {
   describe("claimAssetAction", () => {
-    it("claims a fresh non-destructive action inside one serializable transaction", async () => {
+    it("claims a fresh non-destructive action under the asset owner fence in one transaction", async () => {
       const result = await claimAssetAction(claimArgs());
 
       expect(result.replayed).toBe(false);
@@ -375,11 +392,15 @@ describe("standard asset action store", () => {
       expect(result.row.result_valid_before).toEqual(new Date((NOW_S + 3_600) * 1_000));
 
       const texts = statements();
-      expect(texts[0]).toBe("BEGIN ISOLATION LEVEL SERIALIZABLE");
+      // Read committed: the owner read after the fence sees what committed
+      // before the fence was granted.
+      expect(texts[0]).toBe("BEGIN");
       expect(texts.at(-1)).toBe("COMMIT");
       expect(texts).not.toContain("ROLLBACK");
       expect(harness.state.releases).toBe(1);
-      expect(only("pg_advisory_xact_lock").values).toEqual([TASK_ID]);
+      // The execution's own lock, then the asset owner fence.
+      expect(issued("pg_advisory_xact_lock").map((call) => call.values[0])).toEqual([TASK_ID, ASSET_ID]);
+      expect(issued("asset-owner:")).toHaveLength(1);
       expect(issued("INSERT INTO standard_asset_rate_buckets")).toHaveLength(4);
       expect(only("INSERT INTO customers").values).toEqual([PAYER]);
       expect(only("INSERT INTO standard_wallet_action_nonces").values).toEqual([
@@ -392,7 +413,7 @@ describe("standard asset action store", () => {
       expect(transaction.text).toContain("'working'");
       expect(transaction.values).toEqual([
         TASK_ID, harness.customerId, ASSET_ID, SERVICE_ID, "update-item",
-        buf32("b1"), PAYER, buf32("e1"),
+        buf32("b1"), PAYER, buf32("e1"), PAYER, 0,
       ]);
       // Non-terminal insert: neither sanitized_result nor error_class may
       // appear (043/044 constraint branch for states outside completed/failed).
@@ -402,7 +423,7 @@ describe("standard asset action store", () => {
       expect(insert.values).toEqual([
         buf32("e1"), PAYER, ASSET_ID, buf32("a1"), buf32("b1"), buf32("c1"), buf32("d1"),
         buf32("f1"), buf32("a2"), buf32("b2"), buf32("c2"), 7, buf32("d2"),
-        "claimed", null, "stable-result", null, null, null, NOW_S + 3_600,
+        "claimed", null, "stable-result", null, null, null, NOW_S + 3_600, PAYER, 0,
       ]);
       expect(issued("count(*) FILTER")).toHaveLength(0);
       expect(issued("standard_destructive_action_payloads")).toHaveLength(0);
@@ -420,7 +441,7 @@ describe("standard asset action store", () => {
 
       expect(result.row.state).toBe("staged");
       expect(issued("pg_advisory_xact_lock").map((call) => call.values[0])).toEqual([
-        TASK_ID, "provider:destructive-stage-cap",
+        TASK_ID, "provider:destructive-stage-cap", ASSET_ID,
       ]);
       expect(only("count(*) FILTER").values).toEqual([PAYER]);
       const insert = only("INSERT INTO standard_asset_action_executions");
@@ -461,6 +482,22 @@ describe("standard asset action store", () => {
       expect(statements().at(-1)).toBe("ROLLBACK");
       expect(issued("INSERT INTO standard_provider_grant_nonces")).toHaveLength(0);
       expect(harness.state.releases).toBe(1);
+    });
+
+    it("refuses a claim whose payer is not the asset's current owner, consuming nothing", async () => {
+      harness.state.owner = { payer: `0x${"cd".repeat(20)}`, version: 1 };
+      await expect(claimAssetAction(claimArgs())).rejects.toBeInstanceOf(AssetOwnerChangedError);
+      expect(statements().at(-1)).toBe("ROLLBACK");
+      expect(issued("INSERT INTO standard_wallet_action_nonces")).toHaveLength(0);
+      expect(issued("INSERT INTO standard_provider_grant_nonces")).toHaveLength(0);
+      expect(issued("INSERT INTO standard_asset_action_executions")).toHaveLength(0);
+    });
+
+    it("records the current owner version an execution is admitted under", async () => {
+      harness.state.owner = { payer: PAYER, version: 3 };
+      const result = await claimAssetAction(claimArgs());
+      expect(result.row).toMatchObject({ admitted_owner: PAYER, admitted_owner_version: 3 });
+      expect(only("INSERT INTO transactions").values.slice(-2)).toEqual([PAYER, 3]);
     });
 
     it("refuses to stage past the outstanding destructive caps", async () => {
@@ -530,9 +567,15 @@ describe("standard asset action store", () => {
       expect(only("INSERT INTO standard_destructive_followup_executions").values).toEqual([
         buf32("90"), buf32("e1"), PAYER, "confirm", buf32("77"), buf32("91"), buf32("92"),
       ]);
+      // Confirmation re-admits the work under the fence for the current owner.
       expect(only("reconciliation_identity=CASE").values).toEqual([
-        buf32("e1"), "executing", TASK_ID,
+        buf32("e1"), "executing", TASK_ID, PAYER, 0,
       ]);
+      expect(only("UPDATE transactions SET admitted_owner=$2").values).toEqual([TASK_ID, PAYER, 0]);
+      const locks = issued("pg_advisory_xact_lock").map((call) => call.values[0]);
+      expect(locks).toEqual([TASK_ID, ASSET_ID, ASSET_ID]);
+      expect(statements().findIndex((text) => text.includes("asset-owner:")))
+        .toBeLessThan(statements().findIndex((text) => text.includes("FOR UPDATE")));
       expect(only("UPDATE standard_destructive_action_payloads SET expires_at=$2").values)
         .toEqual([buf32("e1"), row.result_valid_before]);
       expect(issued("DELETE FROM standard_destructive_action_payloads")).toHaveLength(0);
@@ -547,8 +590,9 @@ describe("standard asset action store", () => {
 
       expect(result.row.state).toBe("canceled");
       expect(only("reconciliation_identity=CASE").values).toEqual([
-        buf32("e1"), "canceled", TASK_ID,
+        buf32("e1"), "canceled", TASK_ID, PAYER, 0,
       ]);
+      expect(issued("UPDATE transactions SET admitted_owner=$2")).toHaveLength(0);
       expect(only("DELETE FROM standard_destructive_action_payloads").values).toEqual([buf32("e1")]);
       expect(issued("UPDATE standard_destructive_action_payloads SET expires_at=$2")).toHaveLength(0);
       expect(transaction.status).toBe("canceled");
@@ -642,6 +686,25 @@ describe("standard asset action store", () => {
       await expect(authorizeStagedAction(authorizeArgs())).rejects.toThrow(
         "staged action replay mismatch",
       );
+      expect(statements().at(-1)).toBe("ROLLBACK");
+    });
+
+    it("refuses a follow-up whose request names another asset than its staged row", async () => {
+      harness.state.executionRow = stagedRow();
+      await expect(authorizeStagedAction(authorizeArgs({
+        providerAssetId: "55555555-5555-4555-8555-555555555555",
+      }))).rejects.toThrow("staged action target mismatch");
+      expect(issued("INSERT INTO standard_wallet_action_nonces")).toHaveLength(0);
+      expect(issued("INSERT INTO standard_destructive_followup_executions")).toHaveLength(0);
+      expect(issued("INSERT INTO standard_provider_grant_nonces")).toHaveLength(0);
+      expect(statements().at(-1)).toBe("ROLLBACK");
+    });
+
+    it("refuses a confirmation from a wallet that no longer owns the asset", async () => {
+      harness.state.executionRow = stagedRow();
+      harness.state.owner = { payer: `0x${"cd".repeat(20)}`, version: 1 };
+      await expect(authorizeStagedAction(authorizeArgs())).rejects.toBeInstanceOf(AssetOwnerChangedError);
+      expect(issued("reconciliation_identity=CASE")).toHaveLength(0);
       expect(statements().at(-1)).toBe("ROLLBACK");
     });
 
@@ -794,6 +857,26 @@ describe("standard asset action store", () => {
       });
       only("INSERT INTO standard_asset_action_recovery_results");
       expect(only("DELETE FROM artifact_secrets").values).toEqual([TASK_ID]);
+    });
+
+    it("withholds a result admitted under a stale owner version and records the failure", async () => {
+      harness.state.executionRow = seededRow({ state: "executing" });
+      harness.state.owner = { payer: PAYER, version: 1 };
+      const transaction = transactionRow();
+      harness.state.transactionRows.set(TASK_ID, transaction);
+      await expect(completeAssetAction({
+        executionId: EXECUTION_ID, status: "completed", result: { receipt: "result-1" }, errorClass: null,
+      })).rejects.toBeInstanceOf(AssetOwnerChangedError);
+
+      expect(issued("INSERT INTO standard_asset_action_recovery_results")).toHaveLength(0);
+      expect(issued("sanitized_result=NULL,error_class=$3")).toHaveLength(0);
+      expect(only("SET state='failed',error_class=$2,sanitized_result=NULL").values)
+        .toEqual([buf32("e1"), "asset_owner_changed"]);
+      expect(only("DELETE FROM artifact_secrets").values).toEqual([TASK_ID]);
+      expect(transaction.status).toBe("failed");
+      const audits = issued("INSERT INTO events").map((call) => call.values[6]);
+      expect(audits).toContain("asset_owner.result_withheld");
+      expect(statements().at(-1)).toBe("COMMIT");
     });
 
     it("refuses to complete a recoverable action without its result", async () => {

@@ -416,10 +416,35 @@ ERC-8004 registry. The provider refuses startup unless the registry's verified
 
 ## Ownership and subsequent actions
 
-Standard dispatch records the payer and order identity on the task. Subsequent
-asset mutations use the provider's capability schemas and the identity bound
-to that standard order. A public task ID or transaction hash is never an
-authorization credential.
+Standard dispatch records the payer and order identity on the task. An asset's
+current owner comes from one authority (`src/core/db/queries/assetOwnership.ts`):
+an owner override when one committed, otherwise the payer of the most recent
+standard order linked to the asset, at version 0. A public task ID,
+transaction hash, order ID or asset ID is never an authorization credential.
+
+A wallet action acts only on an asset the grant-attested payer currently owns,
+of the action's service and type, in a lifecycle state the service admits for
+it (active by default) and with the identifier its input names. A destructive
+follow-up acts only on the staged row of the asset its request names. Every
+claim, confirmation and post-review resumption records the owner version it
+was admitted under; the supplier call, the persistence of the result and every
+signed final response compare it with the current one under the asset owner
+fence.
+
+| Situation | Answer |
+| --- | --- |
+| Not the current owner; wrong service, type, identifier or state | `403 PROVIDER_ASSET_QUERY_REJECTED`, nothing consumed |
+| A follow-up naming another asset than its staged row | `403`, nothing consumed |
+| The asset stopped being an eligible target after admission | signed `failed` with `errorClass: "asset_unavailable"`, no supplier call |
+| The owner version changed before the result was persisted or released | `403`; the result is withheld from both owners and the execution ends `failed` with `asset_owner_changed` |
+| A replay of a finished action | its stored (or regenerated) answer, released under the fence; never a second execution |
+
+Owner-only paid orders are linked to their asset at dispatch under the same
+fence, re-admitted before buyer input or a reviewed execution resumes (input
+for an asset that changed owner is `409 unsupported_action`), and checked
+again immediately before the supplier call. A result whose admitted owner went
+stale ends the order `failed` with `asset_owner_changed` instead of persisting
+its deliverable.
 
 ## Payer signatures
 

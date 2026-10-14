@@ -6,14 +6,18 @@ import {
   type AssetStatus,
 } from "../db/queries/assets.js";
 import { setTransactionAsset } from "../db/queries/transactions.js";
+import { assetOwnedBy } from "../db/queries/assetOwnership.js";
 import { pool } from "../db/pool.js";
 import type { Queryable } from "../db/queryable.js";
 
 // Asset lifecycle helpers. The `assets` table is per service; ownership is
-// derived from the most recent standard order linked to the asset.
+// resolved only through src/core/db/queries/assetOwnership.ts (an owner
+// override when one committed, else the most recent standard order linked
+// to the asset).
 //
-// Gateway-managed actions pass the verified standard payer wallet. The
-// current owner is derived from the latest standard order linked to the asset.
+// Gateway-managed actions pass the verified standard payer wallet. A
+// point-in-time ownership answer authorizes nothing by itself: owner-only
+// work is admitted under the asset owner fence (standardRail/assetOwnerFence.ts).
 
 export async function verifyStandardAssetOwnership(
   payer: string,
@@ -25,13 +29,7 @@ export async function verifyStandardAssetOwnership(
     ? await getAssetByIdentifierWithStatuses(serviceId, assetIdentifier, statuses)
     : await getActiveAssetByIdentifier(serviceId, assetIdentifier);
   if (!asset) return { authorized: false };
-  const result = await pool.query<{ standard_payer: string }>(
-    `SELECT standard_payer FROM transactions
-      WHERE asset_id=$1 AND standard_order_id IS NOT NULL AND standard_payer IS NOT NULL
-      ORDER BY created_at DESC,id DESC LIMIT 1`,
-    [asset.id],
-  );
-  return result.rows[0]?.standard_payer?.toLowerCase() === payer.toLowerCase()
+  return await assetOwnedBy(asset.id, payer)
     ? { authorized: true, asset }
     : { authorized: false };
 }

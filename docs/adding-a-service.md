@@ -298,6 +298,25 @@ Core links a new asset to the wallet-authorized payer. Do not accept an owner
 wallet in service input. For an existing asset, mutate it through a durable,
 authorized path and do not return a second provisioning block.
 
+### Owner-only assets
+
+An existing asset's owner has one authority: `getCurrentAssetOwner(assetId)`
+and `assetOwnedBy(assetId, payer)` in `src/core/db/queries/assetOwnership.ts`.
+Never derive an owner from `transactions.standard_payer`, an order id, a
+request field or a cached copy; the architecture gate refuses a second
+derivation. Core admits owner-only work (wallet actions and owner-only paid
+skills) under the asset owner fence, records the owner's version, and
+withholds a result whose owner changed before it was persisted or released,
+so an adapter does not repeat those checks. A service worker that finishes
+owner-only work later must persist the result through `processAdapterResult`
+too, and must not hold a database transaction across a supplier call.
+
+The `assets` facet binds wallet actions as well as paid lookups:
+`assetLookupStatuses(skillId)` names the lifecycle states an action may act
+on (active only when omitted), and when `assetIdentifierFromData(skillId,
+data)` returns an identifier, an action whose input names another one is
+refused. Return canonical identifiers.
+
 ### External supplier writes
 
 For non-convergent supplier mutations, use the core supplier-operation journal

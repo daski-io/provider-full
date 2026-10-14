@@ -1,14 +1,11 @@
 import type { Address, Hex } from "viem";
 import { pool } from "../db/pool.js";
-import { getAssetById } from "../db/queries/assets.js";
 import { consumeAssetEndpointRate } from "./assetRateLimit.js";
 import { assertExactKeys, canonicalHash } from "./canonical.js";
-import {
-  type AssetActionExecutionRow,
-  loadAssetActionRecoveryResult,
-} from "./actionStore.js";
+import type { AssetActionExecutionRow } from "./actionStore.js";
 import { regenerateEphemeralAssetActionResult } from "./actionExecution.js";
-import { requireCurrentExecutionArtifacts, signFinalResponse } from "./assetActionResponse.js";
+import { releaseFinalResponse, requireCurrentExecutionArtifacts } from "./assetActionResponse.js";
+import { targetOf } from "./assetActionTarget.js";
 import { compileProviderSchema, validateProviderRequest } from "./schema.js";
 import type { ProviderStandardRailConfig } from "./config.js";
 import type { ProviderWalletActionGrantV1, SignedEnvelope } from "./types.js";
@@ -93,21 +90,7 @@ export async function recoverAssetAction(args: {
     wallet: args.wallet,
   });
   requireCurrentExecutionArtifacts(row, args.definition, args.wallet);
-  let result: Record<string, unknown> | null = null;
-  if (["stable-result", "redacted-after-window"].includes(args.definition.replayPolicy)) {
-    result = await loadAssetActionRecoveryResult(row);
-  } else if (args.definition.replayPolicy === "regenerate-ephemeral") {
-    const asset = await getAssetById(row.provider_asset_id);
-    if (!asset) throw new Error("asset action recovery denied");
-    result = await regenerateEphemeralAssetActionResult({
-      definition: args.definition,
-      taskId: `asset-action-${hex(row.execution_id).slice(2)}`,
-      serviceId: args.serviceId,
-      input: originalInput,
-      asset,
-    });
-  }
-  return signFinalResponse(row, args.definition, {
+  const context = {
     standard: args.standard,
     wallet: args.wallet,
     chainId: args.chainId,
@@ -115,7 +98,20 @@ export async function recoverAssetAction(args: {
     walletHash: args.walletHash,
     grantHash: args.grantHash,
     requestHash: args.requestHash,
-  }, result);
+  };
+  // Released under the asset owner fence: a result admitted under an
+  // earlier owner version is withheld even from a payer-exact recovery.
+  if (args.definition.replayPolicy === "regenerate-ephemeral") {
+    const result = await regenerateEphemeralAssetActionResult({
+      definition: args.definition,
+      taskId: `asset-action-${hex(row.execution_id).slice(2)}`,
+      serviceId: args.serviceId,
+      input: originalInput,
+      target: targetOf(row),
+    });
+    return releaseFinalResponse({ row, definition: args.definition, context, stored: false, result });
+  }
+  return releaseFinalResponse({ row, definition: args.definition, context, stored: true });
 }
 
 async function authorizeRecovery(args: {

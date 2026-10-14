@@ -1,6 +1,5 @@
 import { getAddress, type Hex } from "viem";
 import { getStandardPayerAsset } from "../db/queries/assetOwnership.js";
-import { getAssetById } from "../db/queries/assets.js";
 import { getServiceBySlug } from "../db/queries/services.js";
 import { getSkillByServiceAndSkillId } from "../db/queries/skills.js";
 import { assertExactKeys } from "./canonical.js";
@@ -19,14 +18,10 @@ import {
   verifyWalletAuthorization,
   type WalletAuthorizationTransport,
 } from "./walletAuthorization.js";
-import {
-  claimAssetAction,
-  loadAssetActionExecution,
-  loadAssetActionRecoveryResult,
-  transitionAssetAction,
-} from "./actionStore.js";
-import { executeAssetAction, regenerateEphemeralAssetActionResult } from "./actionExecution.js";
-import { signFinalResponse, signStageResponse } from "./assetActionResponse.js";
+import { claimAssetAction } from "./actionStore.js";
+import { signStageResponse } from "./assetActionResponse.js";
+import { answerClaimedAssetAction } from "./assetActionClaimed.js";
+import { assertAssetActionTarget } from "./assetActionTarget.js";
 import { destructiveClaim, performDestructiveFollowUp } from "./destructiveAction.js";
 import { recoverAssetAction } from "./actionRecovery.js";
 import { assertProviderWalletAvailable } from "./walletConfig.js";
@@ -82,6 +77,8 @@ export class ProviderAssetActionService {
     });
     this.validateBindings(body, definition, walletHash, canonicalRequestHash, actionHash);
     const payer = getAddress(body.grant.payload.payer).toLowerCase() as Hex;
+    // The asset is resolved through the single owner authority for the
+    // grant-attested payer; the request's asset ID is never authority alone.
     const asset = await getStandardPayerAsset({ payer, providerAssetId: body.request.providerAssetId });
     if (!asset || asset.service_slug !== definition.serviceSlug || asset.type !== definition.assetType) {
       throw new Error("asset action denied");
@@ -89,6 +86,7 @@ export class ProviderAssetActionService {
     const service = await getServiceBySlug(definition.serviceSlug);
     const skill = service && await getSkillByServiceAndSkillId(service.id, definition.actionId);
     if (!service || !skill) throw new Error("asset action unavailable");
+    if (asset.service_id !== service.id) throw new Error("asset action denied");
     if (operation === "recover") {
       return recoverAssetAction({
         body, definition, walletHash, grantHash, actionHash,
@@ -104,6 +102,8 @@ export class ProviderAssetActionService {
       });
     }
     validateProviderRequest(compileProviderSchema(definition.requestSchema), body.request.input);
+    // A new action may act only on an eligible asset its input names.
+    await assertAssetActionTarget({ definition, serviceId: service.id, asset, input: body.request.input });
     const executionId = deriveActionExecutionId({
       walletAuthorizationHash: walletHash,
       providerAgentId: BigInt(this.wallet.providerAgentId),
@@ -141,53 +141,11 @@ export class ProviderAssetActionService {
       abuse: this.wallet.abuse,
       destructive,
     });
-    if (definition.destructive) {
-      return signStageResponse(claim.row, this.responseContext(body, walletHash, grantHash, canonicalRequestHash));
-    }
-    let current = claim.row;
-    let transientResult: Record<string, unknown> | null | undefined;
-    const ownsExecution = current.state === "claimed" &&
-      await transitionAssetAction(executionId, "claimed", "executing", claim.taskId);
-    if (ownsExecution) {
-      current.state = "executing";
-      const fullAsset = await getAssetById(asset.id);
-      if (!fullAsset) throw new Error("asset action denied");
-      const completed = await executeAssetAction({
-        definition, executionId, taskId: claim.taskId, service, skill,
-        input: body.request.input, asset: fullAsset,
-        persistResult: definition.replayPolicy !== "regenerate-ephemeral",
-      });
-      current.state = completed.status;
-      transientResult = completed.result;
-      current.error_class = completed.errorClass;
-    } else {
-      current = await loadAssetActionExecution(executionId);
-      if (["claimed", "executing", "attention"].includes(current.state)) {
-        throw new Error("asset action unavailable");
-      }
-    }
-    if (!ownsExecution && definition.replayPolicy === "regenerate-ephemeral" && current.state === "completed") {
-      if (current.result_valid_before <= new Date()) throw new Error("asset action recovery expired");
-      const fullAsset = await getAssetById(asset.id);
-      if (!fullAsset) throw new Error("asset action denied");
-      transientResult = await regenerateEphemeralAssetActionResult({
-        definition,
-        taskId: claim.taskId,
-        serviceId: service.id,
-        input: body.request.input,
-        asset: fullAsset,
-      });
-    } else if (!ownsExecution && ["stable-result", "redacted-after-window"].includes(definition.replayPolicy) &&
-      current.state === "completed") {
-      transientResult = await loadAssetActionRecoveryResult(current);
-    }
-    if (current.state === "attention") throw new Error("asset action unavailable");
-    return signFinalResponse(
-      current,
-      definition,
-      this.responseContext(body, walletHash, grantHash, canonicalRequestHash),
-      transientResult,
-    );
+    const context = this.responseContext(body, walletHash, grantHash, canonicalRequestHash);
+    if (definition.destructive) return signStageResponse(claim.row, context);
+    return answerClaimedAssetAction({
+      claim, executionId, definition, service, skill, input: body.request.input, context,
+    });
   }
 
   private parseBody(input: unknown): ActionBody {

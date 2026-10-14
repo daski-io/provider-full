@@ -1,22 +1,17 @@
 import { getAddress, type Hex } from "viem";
-import { getStandardPayerAsset } from "../db/queries/assetOwnership.js";
-import { getAssetById } from "../db/queries/assets.js";
 import { assertExactKeys, canonicalHash } from "./canonical.js";
 import type { ProviderStandardRailConfig } from "./config.js";
 import type { ProviderWalletActionGrantV1, SignedEnvelope } from "./types.js";
 import type { AssetActionDefinitionV1, ProviderWalletConfig } from "./walletConfig.js";
 import { deriveActionExecutionId, type WalletAuthorizationTransport } from "./walletAuthorization.js";
-import {
-  authorizeStagedAction,
-  loadAssetActionRecoveryResult,
-  loadDestructiveInput,
-} from "./actionStore.js";
+import { authorizeStagedAction, loadDestructiveInput } from "./actionStaged.js";
 import { executeAssetAction } from "./actionExecution.js";
 import {
+  releaseFinalResponse,
   requireCurrentExecutionArtifacts,
-  signFinalResponse,
   signStageResponse,
 } from "./assetActionResponse.js";
+import { targetOf } from "./assetActionTarget.js";
 import type { ServiceRow } from "../db/queries/services.js";
 import type { SkillRow } from "../db/queries/skills.js";
 import { compileProviderSchema, validateProviderRequest } from "./schema.js";
@@ -138,6 +133,8 @@ export async function performDestructiveFollowUp(args: {
     followupExecutionId,
     executionId: executionId as Hex,
     payer,
+    // The follow-up acts only on the staged row of the asset its request names.
+    providerAssetId: args.body.request.providerAssetId,
     confirmationHash: confirmationHash as Hex,
     operation: operation === "confirm-destructive" ? "confirm" : "cancel",
     actionId: args.definition.actionId,
@@ -164,17 +161,16 @@ export async function performDestructiveFollowUp(args: {
   };
   if (operation === "cancel-staged-action") return signStageResponse(authorized.row, context);
   if (authorized.replayed && ["completed", "failed"].includes(authorized.row.state)) {
-    const recovered = authorized.row.state === "completed" &&
-      ["stable-result", "redacted-after-window"].includes(args.definition.replayPolicy)
-      ? await loadAssetActionRecoveryResult(authorized.row)
-      : undefined;
-    return signFinalResponse(authorized.row, args.definition, context, recovered);
+    // A replayed confirmation receives the stored outcome, released under
+    // the asset owner fence; it never executes the staged input again.
+    return releaseFinalResponse({
+      row: authorized.row, definition: args.definition, context,
+      stored: authorized.row.state === "completed" &&
+        ["stable-result", "redacted-after-window"].includes(args.definition.replayPolicy),
+    });
   }
   if (authorized.replayed) throw new Error("asset action unavailable");
   const stagedInput = await loadDestructiveInput(executionId as Hex);
-  const asset = await getStandardPayerAsset({ payer, providerAssetId: authorized.row.provider_asset_id });
-  const fullAsset = asset && await getAssetById(asset.id);
-  if (!fullAsset) throw new Error("asset action denied");
   const completed = await executeAssetAction({
     definition: args.definition,
     executionId: executionId as Hex,
@@ -182,14 +178,12 @@ export async function performDestructiveFollowUp(args: {
     service: args.service,
     skill: args.skill,
     input: stagedInput,
-    asset: fullAsset,
+    target: targetOf(authorized.row),
     persistResult: true,
   });
-  authorized.row.state = completed.status;
-  if (args.definition.replayPolicy === "stable-result") {
-    authorized.row.sanitized_result = completed.result;
-  }
-  authorized.row.error_class = completed.errorClass;
   if (completed.status === "attention") throw new Error("asset action unavailable");
-  return signFinalResponse(authorized.row, args.definition, context, completed.result);
+  return releaseFinalResponse({
+    row: { ...authorized.row, state: completed.status, error_class: completed.errorClass },
+    definition: args.definition, context, stored: false, result: completed.result,
+  });
 }

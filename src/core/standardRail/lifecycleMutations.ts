@@ -20,6 +20,8 @@ import {
   type LifecycleActionClaim,
 } from "./lifecycleActions.js";
 import type { LifecycleCall } from "./lifecycleAuthorization.js";
+import { readmitPaidTaskOwner } from "./assetOwnerAdmission.js";
+import { AssetOwnerChangedError } from "./assetOwnerFence.js";
 import { lifecycleUnavailable, unsupportedAction, type LifecycleRefusal } from "./lifecycleErrors.js";
 import { STANDARD_TASK_COLUMNS, type StandardTaskRow } from "./lifecycleStore.js";
 import { listingVersion } from "./listingVersions.js";
@@ -274,6 +276,13 @@ export async function applyLifecycleInput(
     const data = call.request.data as Record<string, unknown>;
     assertInputMatchesCommittedRequest(task, data);
     const adapter = await adapterFor(config, task);
+    // Owner-only work resumes only for the asset's current owner.
+    await readmitPaidTaskOwner(task.id).catch((error: unknown) => {
+      if (error instanceof AssetOwnerChangedError) {
+        throw nothingChanged(unsupportedAction("The order's asset has a different owner now"));
+      }
+      throw error;
+    });
     const fenced = await claimLifecycleMutation(task);
     const result = await service.run(() => adapter.handleInput(
       serviceTask(fenced, claim),
