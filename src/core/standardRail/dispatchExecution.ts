@@ -145,6 +145,8 @@ export async function fulfillAdmittedDispatch(args: {
   const claimKey = [order.gatewayAudience, order.orderId];
   let asset: AssetRow | null;
   let decision: PreExecuteDecision;
+  /** Owner-only work on an existing asset, admitted under the asset owner fence. */
+  let ownerOnly = false;
   try {
     const resolved = await resolveAsset({
       service, skillId: args.skillId, request: args.request,
@@ -154,6 +156,7 @@ export async function fulfillAdmittedDispatch(args: {
     // Linked to its asset under the asset owner fence, only while the payer
     // is the current owner, recording the owner the work is admitted under.
     const owned = resolved.linkOwnership ? resolved.asset : null;
+    ownerOnly = owned !== null;
     if (owned) await ownerStep(() => admitPaidTaskForAsset({ taskId, assetId: owned.id, payer: order.payer }));
     decision = await consultPreExecuteAgent(service, skill, args.request, true, taskId, asset);
     if (decision.action === "escalate") {
@@ -176,11 +179,13 @@ export async function fulfillAdmittedDispatch(args: {
       responseHash: bytes(canonicalHash(decision)),
     }));
   }
-  try {
-    // The admitted owner is still current at the consequential call.
-    await ownerStep(() => checkPaidTaskOwner(taskId));
-  } catch (error) {
-    return refuseBeforeStart(error, { taskId, serviceId: service.id, order, lease });
+  if (ownerOnly) {
+    try {
+      // The admitted owner is still current at the consequential call.
+      await ownerStep(() => checkPaidTaskOwner(taskId));
+    } catch (error) {
+      return refuseBeforeStart(error, { taskId, serviceId: service.id, order, lease });
+    }
   }
   const fence = await claimStart(taskId, order.orderId, lease, { supplier_mutation_started: true });
   if (fence !== "started") return step(fence);
