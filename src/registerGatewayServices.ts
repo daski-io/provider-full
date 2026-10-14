@@ -19,7 +19,10 @@ import {
   checkServiceRegistration,
   forecastFails,
 } from "./core/gatewayRegistration/forecast.js";
-import { registerSelectedServices } from "./core/gatewayRegistration/registrationRun.js";
+import {
+  identityHelperArguments,
+  registerSelectedServices,
+} from "./core/gatewayRegistration/registrationRun.js";
 import { retireGatewayService } from "./core/gatewayRegistration/retirement.js";
 import { normalizedGatewayOrigin } from "./core/gatewayRegistration/wire.js";
 import { redactSensitiveText } from "./core/security/redaction.js";
@@ -48,18 +51,11 @@ function options(name: string): string[] {
 const describe = (error: unknown) =>
   redactSensitiveText(error instanceof Error ? error.message : String(error));
 
-// The identity script finds an existing agent on the canonical registry;
-// --agent-id pins it and --scan-blocks bounds the Transfer-event lookup.
+// The identity script verifies and binds PROVIDER_AGENT_ID, the agent every
+// service is registered under; see identityHelperArguments.
 async function ensureProviderIdentity(): Promise<void> {
   const script = fileURLToPath(new URL("../scripts/register-provider.mjs", import.meta.url));
-  const agentId = option("--agent-id");
-  const scanBlocks = option("--scan-blocks");
-  const args = [
-    script,
-    ...(process.argv.includes("--update-uri") ? ["--update-uri"] : []),
-    ...(agentId ? ["--agent-id", agentId] : []),
-    ...(scanBlocks ? ["--scan-blocks", scanBlocks] : []),
-  ];
+  const args = [script, ...identityHelperArguments(process.argv, config.PROVIDER_AGENT_ID)];
   await new Promise<void>((resolve, reject) => {
     const child = spawn(process.execPath, args, {
       env: process.env,

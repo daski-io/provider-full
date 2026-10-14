@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// One daski:register run: configuration and the selection are checked before
-// any chain write, and the gateway phases use the rows the ServiceRegistry
-// bootstrap left behind.
+// One daski:register run: the identity helper is pinned to the agent the
+// services are registered under, configuration and the selection are checked
+// before any chain write, and the gateway phases use the rows the
+// ServiceRegistry bootstrap left behind.
 
 const h = vi.hoisted(() => ({
   listActiveServices: vi.fn(),
@@ -18,7 +19,10 @@ vi.mock("../src/core/gatewayRegistration/client.js", () => ({
   registerServiceWithGateway: h.registerServiceWithGateway,
 }));
 
-import { registerSelectedServices } from "../src/core/gatewayRegistration/registrationRun.js";
+import {
+  identityHelperArguments,
+  registerSelectedServices,
+} from "../src/core/gatewayRegistration/registrationRun.js";
 import type { ServiceRow } from "../src/core/db/queries/services.js";
 
 const GATEWAY = "https://gateway.example";
@@ -37,6 +41,21 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+});
+
+describe("identity helper arguments", () => {
+  it("pin the helper to PROVIDER_AGENT_ID", () => {
+    expect(identityHelperArguments(["node", "register"], 42n)).toEqual(["--agent-id", "42"]);
+    expect(identityHelperArguments(["--update-uri", "--agent-id", "42"], 42n))
+      .toEqual(["--update-uri", "--agent-id", "42"]);
+  });
+
+  it("refuse another agent or an agent search before anything is sent", () => {
+    expect(() => identityHelperArguments(["--agent-id", "12"], 42n))
+      .toThrow(/--agent-id 12 differs from PROVIDER_AGENT_ID 42/);
+    expect(() => identityHelperArguments(["--scan-blocks", "1000"], 42n))
+      .toThrow(/--scan-blocks applies only to scripts\/register-provider\.mjs/);
+  });
 });
 
 describe("registration run", () => {

@@ -4,11 +4,39 @@ import { redactSensitiveText } from "../security/redaction.js";
 import { registerServiceWithGateway, type RegistrationOutcome } from "./client.js";
 import { activationPolling } from "./evidence.js";
 
-// One `daski:register` run after migrations and the identity helper: the
-// ServiceRegistry bootstrap and the two gateway registration phases.
+// One `daski:register` run, after migrations: the provider identity helper's
+// arguments, the ServiceRegistry bootstrap, and the two registration phases.
 
 const describe = (error: unknown) =>
   redactSensitiveText(error instanceof Error ? error.message : String(error));
+
+/**
+ * Arguments for scripts/register-provider.mjs. The run registers services
+ * under PROVIDER_AGENT_ID, so the helper is pinned to that agent: it claims
+ * the index entry and pays the listing fee for no other one, and never mints.
+ */
+export function identityHelperArguments(argv: readonly string[], providerAgentId: bigint): string[] {
+  const value = (name: string) => {
+    const index = argv.indexOf(name);
+    return index < 0 ? null : argv[index + 1] ?? "";
+  };
+  const agentId = value("--agent-id");
+  if (agentId !== null && agentId !== providerAgentId.toString()) {
+    throw new Error(
+      `--agent-id ${agentId} differs from PROVIDER_AGENT_ID ${providerAgentId}; services are registered under PROVIDER_AGENT_ID, so set it to the agent this provider registers with`,
+    );
+  }
+  if (value("--scan-blocks") !== null) {
+    throw new Error(
+      "--scan-blocks applies only to scripts/register-provider.mjs run directly; daski:register verifies PROVIDER_AGENT_ID instead of searching for an agent",
+    );
+  }
+  return [
+    ...(argv.includes("--update-uri") ? ["--update-uri"] : []),
+    "--agent-id",
+    providerAgentId.toString(),
+  ];
+}
 
 /**
  * Register the selected active services with the gateway. Configuration the

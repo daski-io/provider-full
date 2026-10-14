@@ -224,9 +224,10 @@ without sending anything. It also refuses to mint while any transaction from
 the wallet is not yet mined, and it signs a mint at the nonce it read with the
 zero balance, so an earlier registration and a new one can never both be
 mined. Re-run with `--agent-id <id>`; the id is verified with `ownerOf`
-against the provider wallet. `npm run daski:register` forwards `--agent-id`
-and `--scan-blocks` to the helper. Never mint a replacement to get past this
-message.
+against the provider wallet. `npm run daski:register` always pins the helper
+to `PROVIDER_AGENT_ID`, refuses a different `--agent-id`, and never searches
+for or mints an agent; run the helper directly to find or mint one. Never
+mint a replacement to get past this message.
 
 ### Identity helper reports no `agentWallet`
 
