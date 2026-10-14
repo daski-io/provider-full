@@ -238,7 +238,9 @@ Document the real ingress topology and verify the edge behavior.
 Signed `/standard-rail/dispatch/status` reads skip the global and A2A
 per-client limiters because the gateway polls them for the whole life of an
 order; `HTTP_MAX_CONCURRENCY`, `HTTP_MAX_CONCURRENCY_PER_IP`, the 16 KiB body
-bound and signature verification still apply. Quotes and dispatches stay
+bound and signature verification still apply, and a client that fails
+authentication 30 times in a minute is refused before signature recovery
+(bypass addresses excepted). Quotes and dispatches stay
 under the limiters; a limiter refusal of a dispatch is a definite
 pre-admission refusal the gateway retries with a new envelope.
 

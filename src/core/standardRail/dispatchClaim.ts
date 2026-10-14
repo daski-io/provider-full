@@ -62,8 +62,10 @@ export async function probeDispatchClaim(
   const client = await pool.connect();
   try {
     await client.query("BEGIN READ ONLY");
+    // Shared: concurrent probes never block each other, while an admission
+    // holding the exclusive lock still makes the probe report "busy".
     const lock = await client.query<{ acquired: boolean }>(
-      `SELECT pg_try_advisory_xact_lock(${LOCK_SQL}) AS acquired`, [key.gatewayAudience, key.orderId],
+      `SELECT pg_try_advisory_xact_lock_shared(${LOCK_SQL}) AS acquired`, [key.gatewayAudience, key.orderId],
     );
     if (lock.rows[0]?.acquired !== true) {
       await client.query("ROLLBACK");

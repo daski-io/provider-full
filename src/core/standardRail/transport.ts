@@ -43,20 +43,31 @@ export function isStrictlyParsedStandardRailJson(req: Request): boolean {
   return (req as StandardRailRequest).standardRailJson === true;
 }
 
+/**
+ * Media type and every charset parameter, parsed as leniently as the body
+ * parser itself (whitespace around `=`, quoted values), so no spelling can
+ * select a decoder other than the strict UTF-8 one the scan applies.
+ */
+function mediaTypeOf(header: string | undefined): { type: string; charsets: string[] } {
+  const [type = "", ...parameters] = (header ?? "").split(";");
+  const charsets = parameters.flatMap((parameter) => {
+    const separator = parameter.indexOf("=");
+    if (separator < 0 || parameter.slice(0, separator).trim().toLowerCase() !== "charset") return [];
+    return [parameter.slice(separator + 1).trim().replace(/^"(.*)"$/, "$1").trim().toLowerCase()];
+  });
+  return { type: type.trim().toLowerCase(), charsets };
+}
+
 function requireUncompressedJson(req: Request, res: Response, next: NextFunction): void {
   if (req.method !== "POST" && req.method !== "PUT") {
     next();
     return;
   }
-  const [mediaType, ...parameters] = (req.header("content-type") ?? "")
-    .split(";")
-    .map((part) => part.trim().toLowerCase());
-  const charset = parameters.find((part) => part.startsWith("charset="))
-    ?.slice("charset=".length).replace(/^"|"$/g, "");
+  const { type, charsets } = mediaTypeOf(req.header("content-type"));
   const encoding = req.header("content-encoding")?.trim().toLowerCase();
   if (
-    mediaType !== "application/json" ||
-    (charset !== undefined && charset !== "utf-8") ||
+    type !== "application/json" || charsets.length > 1 ||
+    (charsets.length === 1 && charsets[0] !== "utf-8") ||
     (encoding !== undefined && encoding !== "" && encoding !== "identity")
   ) {
     res.status(415).json({ error: "uncompressed_application_json_required" });
@@ -139,4 +150,49 @@ export function sendAmbiguousUnavailable(res: Response): void {
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("Retry-After", "10");
   res.status(503).end();
+}
+
+/** Authentication failures one client may spend on status reads per minute. */
+export const STATUS_AUTH_FAILURES_PER_MINUTE = 30;
+const STATUS_FAILURE_CLIENTS = 10_000;
+
+/**
+ * Status reads skip the per-client rate limiters, so unauthenticated callers
+ * get a separate process-local failure budget instead: once a client spends
+ * it, further status queries are refused before any signature recovery.
+ * Verified reads never consume it; reviewed bypass addresses are exempt.
+ */
+export function createStatusFailureBudget(options: {
+  bypassIps: string[];
+  failuresPerMinute?: number;
+  clientIp: (req: Request) => string;
+  matches: (ip: string, ranges: string[]) => boolean;
+}) {
+  const limit = options.failuresPerMinute ?? STATUS_AUTH_FAILURES_PER_MINUTE;
+  const failures = new Map<string, { count: number; resetAt: number }>();
+  const current = (ip: string, now: number) => {
+    const entry = failures.get(ip);
+    return entry && entry.resetAt > now ? entry : null;
+  };
+  return {
+    exhausted(req: Request, now = Date.now()): boolean {
+      const ip = options.clientIp(req);
+      return !options.matches(ip, options.bypassIps) && (current(ip, now)?.count ?? 0) >= limit;
+    },
+    recordFailure(req: Request, now = Date.now()): void {
+      const ip = options.clientIp(req);
+      if (options.matches(ip, options.bypassIps)) return;
+      const entry = current(ip, now) ?? { count: 0, resetAt: now + 60_000 };
+      entry.count += 1;
+      failures.set(ip, entry);
+      if (failures.size > STATUS_FAILURE_CLIENTS) {
+        for (const [key, value] of failures) if (value.resetAt <= now) failures.delete(key);
+        while (failures.size > STATUS_FAILURE_CLIENTS) {
+          const oldest = failures.keys().next().value as string | undefined;
+          if (oldest === undefined) break;
+          failures.delete(oldest);
+        }
+      }
+    },
+  };
 }

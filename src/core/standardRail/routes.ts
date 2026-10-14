@@ -74,7 +74,11 @@ export function createStandardRailRouter(
     } catch (error) { next(error); }
   });
 
-  mountProtocolRoutes(router, { quote, dispatch });
+  mountProtocolRoutes(router, {
+    quote,
+    dispatch,
+    rateLimitBypassIps: (core.RATE_LIMIT_BYPASS_IPS ?? "").split(",").map((ip) => ip.trim()).filter(Boolean),
+  });
 
   router.post("/lifecycle", async (req, res) => {
     try {

@@ -4,7 +4,8 @@ import type { DispatchRequest, StandardDispatchService } from "./dispatch.js";
 import { DispatchRejectedError, DispatchStatusError } from "./dispatchErrors.js";
 import type { StandardQuoteService } from "./quote.js";
 import { QuoteRefusedError } from "./quoteErrors.js";
-import { sendAmbiguousUnavailable, sendSignedJson } from "./transport.js";
+import { isIpInRanges, requestClientIp } from "../security/rateLimit.js";
+import { createStatusFailureBudget, sendAmbiguousUnavailable, sendSignedJson } from "./transport.js";
 
 const DISPATCH_BODY_KEYS = "dispatch,evidenceBundle,quote,request";
 
@@ -26,7 +27,13 @@ function exactBody(body: unknown, keys: string): body is Record<string, unknown>
 export function mountProtocolRoutes(router: Router, services: {
   quote: StandardQuoteService;
   dispatch: StandardDispatchService;
+  rateLimitBypassIps?: string[];
 }): void {
+  const statusFailures = createStatusFailureBudget({
+    bypassIps: services.rateLimitBypassIps ?? [],
+    clientIp: requestClientIp,
+    matches: isIpInRanges,
+  });
   router.post("/quote", async (req, res) => {
     try {
       if (!exactBody(req.body, "request")) throw new QuoteRefusedError(400, "envelope");
@@ -60,11 +67,17 @@ export function mountProtocolRoutes(router: Router, services: {
   });
 
   router.post("/dispatch/status", async (req, res) => {
+    if (statusFailures.exhausted(req)) {
+      res.setHeader("Retry-After", "60");
+      res.status(429).json({ error: "rate_limit_exceeded" });
+      return;
+    }
     try {
       if (!exactBody(req.body, "query")) throw DispatchStatusError.rejected(null);
       sendSignedJson(res, await services.dispatch.status(req.body.query));
     } catch (error) {
       const failure = error instanceof DispatchStatusError ? error : DispatchStatusError.unavailable();
+      if (failure.status === 400 || failure.status === 401) statusFailures.recordFailure(req);
       if (failure.status === 503) {
         logError("Standard dispatch status unavailable", { reason: failure.reason, errorClass: errorClass(error) });
       } else {

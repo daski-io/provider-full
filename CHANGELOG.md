@@ -75,6 +75,10 @@ All notable changes to this project will be documented here.
   `404 {"error":"dispatch_status_unavailable","reason":"outcome_policy"}` only
   for proven absence of any claim and uses distinct bodies for every other
   failure; status reads are exempt from per-client and purchase rate limits.
+- Gateway envelopes must carry the canonical signature encoding, the
+  standard-rail media type check parses charset parameters exactly as the
+  body parser does, unauthenticated status reads spend a per-client failure
+  budget, and concurrent status probes share the order lock.
 - Funded dispatches are no longer refused for paused sales or local capacity;
   a declared service readiness outage refuses them before admission with
   `service_unavailable` instead of executing and signing a failure. Reviewed

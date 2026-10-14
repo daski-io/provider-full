@@ -73,7 +73,11 @@ describe("standard-rail JSON ingress", () => {
     const gzip = await post("/quote", gzipSync(body), { "content-encoding": "gzip" });
     expect(gzip.status).toBe(415);
     await expect(gzip.json()).resolves.toEqual({ error: "uncompressed_application_json_required" });
-    for (const contentType of ["text/plain", "application/json; charset=utf-16", "application/x-json"]) {
+    for (const contentType of [
+      "text/plain", "application/json; charset=utf-16", "application/x-json",
+      "application/json; charset =utf-7", "application/json; Charset= \"UTF-7\"",
+      "application/json; charset=utf-8; charset=utf-7",
+    ]) {
       const response = await post("/quote", body, { "content-type": contentType });
       expect(response.status).toBe(415);
     }
@@ -82,6 +86,8 @@ describe("standard-rail JSON ingress", () => {
       "content-type": "application/json; charset=utf-8",
     });
     expect(identity.status).toBe(200);
+    expect((await post("/quote", body, { "content-type": 'application/json; charset = "UTF-8"' })).status)
+      .toBe(200);
   });
 
   it("bounds request bodies, with a tighter bound for status queries", async () => {

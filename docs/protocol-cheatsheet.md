@@ -71,7 +71,9 @@ The gateway posts `{"request": envelope}` to the quote URL for fixed and
 dynamic listings alike. Each handler checks the artifact type and schema
 version first, then the environment, chain, provider audience, the
 `gateway-dispatch` signer key id and freshness, and only then the signature;
-several envelope types share that key.
+several envelope types share that key. Only the canonical signature encoding
+the gateway emits is accepted (lowercase hex, `v` of `1b`/`1c`, low `s`), so a
+re-encoded copy of a signature can never become a second dispatch identity.
 
 - `ProviderQuoteRequestV1` carries exactly `outcomeId`,
   `listingManifestHash`, `requestHash`, `request` and `payer` (lowercase hex,
@@ -194,7 +196,10 @@ Every other failure leaves the dispatch unknown:
 Status reads are exempt from the per-client and purchase rate limits (the
 gateway polls about every ten seconds for an order's whole life); the process
 concurrency budget, the 16 KiB body bound and signature verification still
-apply. The terminal
+apply. A client whose status queries fail authentication 30 times within a
+minute is answered `429 {"error":"rate_limit_exceeded"}` before any signature
+recovery until the minute passes; verified reads and `RATE_LIMIT_BYPASS_IPS`
+never consume that budget. The terminal
 `resultHash` is still derived from the task projection today; the frozen
 terminal-result store replaces that single seam
 (`src/core/standardRail/terminalResult.ts`).

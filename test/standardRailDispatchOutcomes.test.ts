@@ -265,6 +265,48 @@ describe("dispatch recovery outcomes (C-T11)", () => {
     expect(await (await queryStatus(order)).text()).toBe(NO_CLAIM);
   });
 
+  it("lets concurrent status reads prove absence without blocking each other", async () => {
+    const order = await paidOrder();
+    const reader = await database.pool.connect();
+    try {
+      await reader.query("BEGIN");
+      await reader.query(
+        "SELECT pg_advisory_xact_lock_shared(hashtextextended('standard-dispatch-claim:' || $1 || ':' || $2, 0))",
+        [config.gatewayAudience, order.dispatch.payload.orderId],
+      );
+      expect(await (await queryStatus(order)).text()).toBe(NO_CLAIM);
+    } finally {
+      await reader.query("ROLLBACK");
+      reader.release();
+    }
+  });
+
+  it("spends a per-client failure budget only on unauthenticated status reads", async () => {
+    const isolated = await startRailServer(config);
+    const order = await paidOrder();
+    try {
+      const forged = async () => postJson(`${isolated.base}/dispatch/status`, {
+        query: await statusQuery(order, { privateKey: otherKey }),
+      });
+      for (let attempt = 0; attempt < 30; attempt += 1) expect((await forged()).status).toBe(401);
+      const refused = await forged();
+      expect(refused.status).toBe(429);
+      expect(refused.headers.get("retry-after")).toBe("60");
+      expect(await classifyStatusAnswer(refused)).toBe("unknown");
+    } finally {
+      await isolated.close();
+    }
+    const verified = await startRailServer(config);
+    try {
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        const response = await postJson(`${verified.base}/dispatch/status`, { query: await statusQuery(order) });
+        expect(response.status).toBe(404);
+      }
+    } finally {
+      await verified.close();
+    }
+  });
+
   it("never uses outcome_policy for authentication, freshness or lookup failures", async () => {
     const order = await paidOrder();
     const cases: Array<[Promise<Response>, number, Record<string, string>]> = [

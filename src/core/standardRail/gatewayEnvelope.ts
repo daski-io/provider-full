@@ -9,6 +9,20 @@ export const GATEWAY_CLOCK_SKEW_SECONDS = 30;
 
 export type GatewayEnvelopeFailure = "shape" | "domain" | "lifetime" | "signature";
 
+const SECP256K1_HALF_ORDER = 0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0n;
+
+/**
+ * The single encoding the gateway's signer emits: lowercase hex, v of 27 or
+ * 28 and a low s. A dispatch hash covers the signature string, so admitting a
+ * re-encoded copy of the same signature would create a second identity for
+ * one gateway dispatch.
+ */
+export function isCanonicalSignature(signature: unknown): signature is Hex {
+  if (typeof signature !== "string" || !/^0x[0-9a-f]{128}(?:1b|1c)$/.test(signature)) return false;
+  const s = BigInt(`0x${signature.slice(66, 130)}`);
+  return s > 0n && s <= SECP256K1_HALF_ORDER;
+}
+
 export class GatewayEnvelopeError extends Error {
   constructor(readonly failure: GatewayEnvelopeFailure, message: string) {
     super(message);
@@ -73,9 +87,7 @@ export async function verifyGatewayEnvelope<T>(
   ) throw new GatewayEnvelopeError("lifetime", `${label} lifetime is invalid`);
   let signer: Address;
   try {
-    if (typeof envelope.signature !== "string" || !/^0x[0-9a-fA-F]{130}$/.test(envelope.signature)) {
-      throw new Error("malformed signature");
-    }
+    if (!isCanonicalSignature(envelope.signature)) throw new Error("non-canonical signature");
     signer = await recoverMessageAddress({
       message: { raw: unsignedEnvelopeHash(envelope as unknown as Record<string, unknown>) },
       signature: envelope.signature as Hex,
