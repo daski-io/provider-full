@@ -116,6 +116,26 @@ export async function claimSplitterProviderWrite(
   return result.rowCount === 1;
 }
 
+/**
+ * Free a listing's claim on a journaled deployment that can never be mined
+ * because another transaction took its nonce, so a fresh deployment can be
+ * journaled. A compare-and-set on the claimed write.
+ */
+export async function releaseSplitterClaim(
+  ref: RegistrationRef,
+  listingId: string,
+  providerWriteId: string,
+): Promise<void> {
+  const result = await pool.query(
+    `UPDATE provider_gateway_splitter_writes
+        SET provider_write_id=NULL,transaction_hash=NULL,state='PREPARED',
+            last_error_code='nonce_consumed',updated_at=now()
+      WHERE listing_id=$1 AND provider_write_id=$2 AND gateway_registration_local_id=$3`,
+    [listingId, providerWriteId, ref.id],
+  );
+  if (result.rowCount !== 1) throw new Error("splitter write persistence claim was lost");
+}
+
 export async function confirmSplitterWrite(
   listingId: string,
   providerWriteId: string,

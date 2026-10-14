@@ -5,15 +5,18 @@ import {
   loadProviderWrite,
   prepareAndBroadcastProviderWrite,
   rebroadcastProviderWrite,
+  replaceProviderWrite,
   revertProviderWrite,
 } from "../chain/providerWriteCoordinator.js";
-import { waitForCanonicalFinalReceipt } from "../chain/finality.js";
+import { finalizedReadBlockNumber, waitForCanonicalFinalReceipt } from "../chain/finality.js";
+import { receiptOf, walletNonceAt } from "../chain/writeOutcome.js";
 import { canonicalHash } from "../standardRail/canonical.js";
 import {
   claimSplitterProviderWrite,
   confirmSplitterWrite,
   ensureSplitterPreparations,
   listGatewaySplitterWrites,
+  releaseSplitterClaim,
 } from "./splitterRows.js";
 import { markRegistrationBroadcast, type RegistrationRef } from "./store.js";
 import { factoryAbi } from "./prepared.js";
@@ -66,6 +69,27 @@ async function resend(writeId: string): Promise<boolean> {
 }
 
 /**
+ * Close a journaled deployment another transaction displaced at its nonce:
+ * it can never be mined, so the write is recorded as replaced and the
+ * listing's claim is freed for a fresh deployment. Returns whether it was.
+ */
+async function releaseDisplacedWrite(
+  registration: RegistrationRef,
+  listingId: string,
+  writeId: string,
+): Promise<boolean> {
+  const row = await loadProviderWrite(writeId);
+  if (!row || (row.status !== "prepared" && row.status !== "broadcast")) return false;
+  // Displaced: no receipt of its own (a failed read proves nothing), while
+  // the wallet's nonce at the finalized depth is already past its nonce.
+  if (await receiptOf(row.transaction_hash) !== null) return false;
+  if (await walletNonceAt(await finalizedReadBlockNumber()) <= BigInt(row.nonce)) return false;
+  await replaceProviderWrite(writeId, null, "nonce_consumed");
+  await releaseSplitterClaim(registration, listingId, writeId);
+  return true;
+}
+
+/**
  * Broadcast-only pass: submit every missing splitter deployment without
  * waiting for confirmations, so all services' deployments can share one
  * finality window before the activation phase confirms them.
@@ -85,7 +109,10 @@ export async function ensureSplitterBroadcasts(
     if (!listing.preparation || !listing.transaction || !persisted) {
       throw new Error("durable splitter preparation is incomplete");
     }
-    if (persisted.provider_write_id && persisted.transaction_hash) {
+    if (
+      persisted.provider_write_id && persisted.transaction_hash &&
+      !await releaseDisplacedWrite(registration, listing.listingId, persisted.provider_write_id)
+    ) {
       // Already journaled; resend the same signed bytes only when the
       // original send never reached the mempool. Confirmation belongs to
       // the activation phase.
@@ -141,7 +168,10 @@ export async function confirmSplitterDeployments(
     if (!listing.preparation || !listing.transaction || !persisted) {
       throw new Error("durable splitter preparation is incomplete");
     }
-    if (persisted.provider_write_id && persisted.transaction_hash) {
+    if (
+      persisted.provider_write_id && persisted.transaction_hash &&
+      !await releaseDisplacedWrite(registration, listing.listingId, persisted.provider_write_id)
+    ) {
       hashes.push({
         listingId: listing.listingId,
         transactionHash: await confirmExistingWrite(

@@ -627,6 +627,8 @@ export class FakeChain {
   agentWallet: Address = providerAccount.address;
   /** The finalized ServiceRegistry serviceURI. */
   serviceUri = `${PROVIDER_ORIGIN}/agent-cards/${SERVICE_SLUG}.json`;
+  /** The provider wallet's nonce at any block; 0 leaves every journaled nonce unused. */
+  walletNonce = 0n;
   readonly reads: string[] = [];
 
   async getBlockNumber(): Promise<bigint> {
@@ -647,6 +649,10 @@ export class FakeChain {
 
   async waitForTransactionReceipt({ hash }: { hash: Hex }) {
     return this.getTransactionReceipt({ hash });
+  }
+
+  async getTransactionCount(): Promise<bigint> {
+    return this.walletNonce;
   }
 
   async readContract(args: { functionName: string; args?: readonly unknown[] }): Promise<unknown> {
@@ -747,5 +753,14 @@ export class FakeWriteCoordinator {
 
   async revertProviderWrite(id: string | null | undefined): Promise<void> {
     if (id) await this.pool().query("UPDATE provider_chain_writes SET status='reverted' WHERE id=$1", [id]);
+  }
+
+  async replaceProviderWrite(id: string | null | undefined, _replacement: string | null, errorCode: string): Promise<void> {
+    if (id) {
+      await this.pool().query(
+        "UPDATE provider_chain_writes SET status='replaced',last_error_code=$2 WHERE id=$1",
+        [id, errorCode],
+      );
+    }
   }
 }

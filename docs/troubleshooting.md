@@ -351,10 +351,13 @@ including from `ATTENTION`. While the gateway still reports `PREPARED`, no
 evidence was accepted: an expired persisted envelope, or one refused once as
 `EVIDENCE_AUTH_INVALID`, is re-signed over the same registration, preparation
 and original splitter transaction hashes and persisted before it is posted.
-Recovery never redeploys or re-signs a splitter transaction; a journaled write
-whose send was not confirmed is resent with its original signed bytes, and a
-resend the node refuses because it already has or mined the transaction is
-left to the receipt wait.
+Recovery never redeploys or re-signs a splitter transaction while it can still
+be mined; a journaled write whose send was not confirmed is resent with its
+original signed bytes, and a resend the node refuses because it already has or
+mined the transaction is left to the receipt wait. Only a journaled deployment
+that another transaction displaced (it has no receipt while the wallet's
+finalized nonce is past its own) is recorded as replaced (`nonce_consumed`)
+and deployed afresh.
 
 Activation polling defaults to every 20 seconds, and gateway `429` answers are
 retried with bounded backoff that honors `Retry-After`. See

@@ -60,6 +60,9 @@ vi.mock("../src/core/chain/providerWriteCoordinator.js", () => ({
   rebroadcastProviderWrite: (id: string) => h.coordinator!.rebroadcastProviderWrite(id),
   confirmProviderWrite: (id: string) => h.coordinator!.confirmProviderWrite(id),
   revertProviderWrite: (id: string) => h.coordinator!.revertProviderWrite(id),
+  replaceProviderWrite: (id: string, replacement: string | null, code: string) =>
+    h.coordinator!.replaceProviderWrite(id, replacement, code),
+  providerWriteScope: { chainId: 84_532, walletAddress: "0x19e7e376e7c213b7e7e7e46cc70a5dd086daff2a" },
 }));
 vi.mock("../src/core/gatewayRegistration/wire.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/core/gatewayRegistration/wire.js")>();
@@ -78,7 +81,7 @@ vi.mock("../src/core/logger.js", () => {
 });
 
 import { randomUUID } from "node:crypto";
-import { getAddress } from "viem";
+import { TransactionReceiptNotFoundError, getAddress } from "viem";
 import { registerServiceWithGateway } from "../src/core/gatewayRegistration/client.js";
 import {
   buildRuntimeListingCommitment,
@@ -580,6 +583,29 @@ describe("activation evidence recovery", { timeout: 30_000 }, () => {
 });
 
 describe("splitter deployments", { timeout: 30_000 }, () => {
+  it("redeploy a splitter whose journaled write another transaction displaced at its nonce", async () => {
+    await registerServiceWithGateway(GATEWAY, await service(), 1, "broadcast");
+    const [displaced] = (await database.pool.query("SELECT * FROM provider_chain_writes")).rows;
+    // The identity helper, sharing the wallet, used that nonce: the write has
+    // no receipt and the finalized wallet nonce is past it.
+    const chain = h.chain!;
+    const receipt = chain.getTransactionReceipt.bind(chain);
+    vi.spyOn(chain, "getTransactionReceipt").mockImplementation(async ({ hash }) => {
+      if (hash === displaced.transaction_hash) throw new TransactionReceiptNotFoundError({ hash });
+      return receipt({ hash });
+    });
+    chain.walletNonce = BigInt(displaced.nonce) + 1n;
+
+    await expect(registerServiceWithGateway(GATEWAY, await service()))
+      .resolves.toMatchObject({ state: "ACTIVE" });
+    expect((await database.pool.query("SELECT status,last_error_code FROM provider_chain_writes WHERE id=$1", [displaced.id])).rows[0])
+      .toEqual({ status: "replaced", last_error_code: "nonce_consumed" });
+    const [row] = await splitterWrites();
+    expect(row).toMatchObject({ state: "CONFIRMED" });
+    expect(row.provider_write_id).not.toBe(displaced.id);
+    expect(h.coordinator!.prepared).toHaveLength(2);
+  });
+
   it("confirm a deployment whose unconfirmed send already reached the network", async () => {
     await registerServiceWithGateway(GATEWAY, await service(), 1, "broadcast");
     // The send timed out after the node accepted it: the journal says

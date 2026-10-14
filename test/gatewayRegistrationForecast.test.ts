@@ -64,6 +64,9 @@ vi.mock("../src/core/chain/providerWriteCoordinator.js", () => {
     rebroadcastProviderWrite: (id: string) => call("rebroadcast", () => h.coordinator!.rebroadcastProviderWrite(id)),
     confirmProviderWrite: (id: string) => call("confirm", () => h.coordinator!.confirmProviderWrite(id)),
     revertProviderWrite: (id: string) => call("revert", () => h.coordinator!.revertProviderWrite(id)),
+    replaceProviderWrite: (id: string, replacement: string | null, code: string) =>
+      call("replace", () => h.coordinator!.replaceProviderWrite(id, replacement, code)),
+    providerWriteScope: { chainId: 84_532, walletAddress: "0x19e7e376e7c213b7e7e7e46cc70a5dd086daff2a" },
   };
 });
 vi.mock("../src/core/gatewayRegistration/wire.js", async (importOriginal) => {

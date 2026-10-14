@@ -1,4 +1,4 @@
-import { TransactionReceiptNotFoundError, type Address, type Hex } from "viem";
+import type { Hex } from "viem";
 import { config } from "../config.js";
 import {
   listOpenProviderWrites,
@@ -20,6 +20,7 @@ import {
   revertProviderWrite,
 } from "./providerWriteCoordinator.js";
 import type { ReconcileCycle } from "./reconcileCycle.js";
+import { receiptOf, walletNonceAt } from "./writeOutcome.js";
 
 // ServiceRegistry writes the registrar already journaled. An open write is
 // resumed until the state it was signed for is final, never signed a second
@@ -57,17 +58,6 @@ export async function registryHolds(expected: Hex, blockNumber: bigint): Promise
   }) as boolean;
 }
 
-/** A write's receipt, null when the chain has none, "unknown" when the read failed. */
-async function receiptOf(
-  hash: Hex,
-): Promise<{ status: string; blockNumber: bigint } | null | "unknown"> {
-  try {
-    return await publicClient.getTransactionReceipt({ hash });
-  } catch (error) {
-    return error instanceof TransactionReceiptNotFoundError ? null : "unknown";
-  }
-}
-
 /**
  * Record the outcome of every open ServiceRegistry write of a service that
  * is final at `finalizedBlock`: confirmed or reverted by its receipt at that
@@ -91,10 +81,7 @@ export async function settleServiceWrites(
         else await revertProviderWrite(write.id, "canonical_receipt_reverted");
         continue;
       }
-      finalizedNonce ??= BigInt(await publicClient.getTransactionCount({
-        address: providerWriteScope.walletAddress as Address,
-        blockNumber: finalizedBlock,
-      }));
+      finalizedNonce ??= await walletNonceAt(finalizedBlock);
       if (BigInt(write.nonce) < finalizedNonce) {
         await replaceProviderWrite(write.id, null, "nonce_consumed");
       }
