@@ -294,7 +294,8 @@ All notable changes to this project will be documented here.
   reply's HTTP status, throws `OutboundCircuitOpenError` with the circuit's
   real `retryAt`, and composes a caller's `signal` with its own timeout
   through the whole body read on both the fetch and the pinned path; a caller
-  abort is `OutboundAbortedError` and never opens the circuit.
+  abort is `OutboundAbortedError` and never opens the circuit. A failed DNS
+  lookup keeps the resolver's error as its `cause`.
 
 - Recurring work logs state transitions instead of every poll: polling
   workers log a failure when it starts or changes and their recovery once;
@@ -367,7 +368,21 @@ All notable changes to this project will be documented here.
   ambiguous or credential condition, or an exhausted RPC failover, raised by
   the asset lookup, a service hook or the pre-execute consult (or as a cause
   of what they raise), leaves the order unstarted for its fulfillment job to
-  resume; only a definite refusal still fails it.
+  resume; only a definite refusal still fails it. A resolver fault on the
+  pinned outbound path and a certificate or TLS failure count as such
+  faults, while a target refused as private stays definite. The worker waits
+  on such a fault without spending the job's attempts, until it clears or
+  the admitted fulfillment deadline fails the order as never started, so the
+  order neither dead-letters after its retries nor holds capacity past its
+  deadline; one an earlier release admitted without a recorded fulfillment
+  duration keeps the attempt budget and dead-letters for an operator.
+- A timeout or abort during a funded order's service call (a `boundedFetch`
+  timeout, an `OutboundAbortedError`, a fetch socket failure, raised
+  directly or as a cause) no longer signs a failure the supplier may not
+  have suffered: like an ambiguous supplier outcome or an infrastructure
+  failure, it leaves the order `working` and flagged
+  `standard_reconciliation_required`. Only a definite failure, or a supplier
+  client's own non-ambiguous classification, is signed.
 - Buyer input to owner-only work whose owner changed during the service call
   is answered with the order's settled `failed` state (`asset_owner_changed`,
   deliverable withheld) and commits that outcome, as dispatch does, instead

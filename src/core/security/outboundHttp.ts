@@ -83,7 +83,12 @@ export async function boundedFetch(
       allowQueryOrFragment: policy.publicTarget.allowQueryOrFragment,
     });
     if (!resolved.ok) {
-      throw failed(new Error(`outbound target rejected: ${resolved.reason}`));
+      // The resolver's own error stays the cause, so a transient lookup
+      // fault (EAI_AGAIN) is told apart from a refused target.
+      throw failed(new Error(
+        `outbound target rejected: ${resolved.reason}`,
+        resolved.cause === undefined ? undefined : { cause: resolved.cause },
+      ));
     }
     pinnedIp = resolved.addresses[0] ?? null;
     if (!pinnedIp) throw failed(new Error("outbound target resolved without a usable address"));

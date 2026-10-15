@@ -445,17 +445,22 @@ resumable (`standardRail/faultClassification.ts`): a database or connection
 failure (the database client's own query timeout included), an asset owner
 check that reached no decision, and a transient, ambiguous or provider-side
 condition, timeout or outbound-boundary refusal met by the asset lookup, a
-service hook or the pre-execute consult. Only a definite refusal, such as a
-supplier's explicit rejection or a missing asset, fails it as never started,
-and the job's worker resumes it on any replica whose build can run the
-order's contract (a job names the executable definition it needs), waiting
-while the service declares an outage or a lifecycle action holds the order.
-A started call whose answer was never persisted is never repeated: the
-order is parked for reconciliation. Three clocks stay separate: the
-dispatch deadline bounds only when a new claim may commit, the job lease
-and task watchdog watch worker progress, and the admitted fulfillment
-duration, counted from durable acceptance, marks work overdue. Only an
-order that never started fails at that deadline, as never started;
+service hook or the pre-execute consult (a resolver or certificate failure
+included). Only a definite refusal, such as a supplier's explicit rejection
+or a missing asset, fails it as never started, and the job's worker resumes
+it on any replica whose build can run the order's contract (a job names the
+executable definition it needs), waiting while the service declares an
+outage or a lifecycle action holds the order, and waiting the same way,
+without spending the job's attempts, on a fault that decides nothing until
+the fault clears or the admitted deadline ends the order. A started call
+whose answer was never persisted is never repeated: the order is parked for
+reconciliation, as it is when the service's call ends in a timeout, an
+abort, an infrastructure failure or an ambiguous supplier outcome, any of
+which may follow a request the supplier acted on. Three clocks stay
+separate: the dispatch deadline bounds only when a new claim may commit,
+the job lease and task watchdog watch worker progress, and the admitted
+fulfillment duration, counted from durable acceptance, marks work overdue.
+Only an order that never started fails at that deadline, as never started;
 accepted, started or ambiguous work stays nonterminal so a late result is
 still delivered.
 

@@ -135,6 +135,8 @@ describe("validatePublicUrl: hostname resolution", () => {
     );
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toMatch(/dns lookup failed/);
+    // The resolver's own error stays available, so a caller can read its code.
+    if (!r.ok) expect(r.cause).toBeInstanceOf(Error);
   });
 
   it("accepts a publicly-resolving hostname", async () => {

@@ -51,7 +51,7 @@ const { StandardQuoteService } = await import("../src/core/standardRail/quote.js
 const { ProviderEvidenceVerifier } = await import("../src/core/standardRail/evidence.js");
 const { enqueueUnqueuedAdmissions, resumeAdmittedOrder, runPaidFulfillmentCycle } =
   await import("../src/core/standardRail/paidFulfillmentWorker.js");
-const { claimDurableJob, enqueueDurableJob } = await import("../src/core/db/queries/durableJobs.js");
+const { claimDurableJob, enqueueDurableJob, requeueDeadLetter } = await import("../src/core/db/queries/durableJobs.js");
 const { isInfrastructureFailure } = await import("../src/core/standardRail/faultClassification.js");
 const { SupplierClientError } = await import("../src/core/suppliers/errorClassifier.js");
 const { createPreExecuteEscalation } = await import("../src/core/engine/escalationResolutionStore.js");
@@ -226,6 +226,73 @@ describe("admitted paid work", () => {
     await database.pool.query("UPDATE durable_jobs SET available_at=now() WHERE queue='standard-paid-fulfillment'");
     await runPaidFulfillmentCycle(config, false);
     for (const order of orders) expect(await task(order)).toMatchObject({ status: "completed", job_status: "completed" });
+  });
+
+  describe("an order waiting on a fault that decides nothing", () => {
+    const jobOf = async (order: DispatchArgs) => (await database.pool.query(
+      "SELECT status,attempts FROM durable_jobs WHERE queue='standard-paid-fulfillment' AND idempotency_key=$1",
+      [(await task(order)).id],
+    )).rows[0];
+    /** More worker cycles than the job's attempt budget, each with the job due. */
+    async function outlastAttemptBudget(): Promise<void> {
+      for (let cycle = 0; cycle < 14; cycle += 1) {
+        await database.pool.query("UPDATE durable_jobs SET available_at=now() WHERE queue='standard-paid-fulfillment'");
+        await runPaidFulfillmentCycle(config, false);
+      }
+    }
+    const unavailable = () => new SupplierClientError("supplier temporarily unavailable", { supplier: "synthetic", status: 503 });
+
+    it("spends none of its job's attempts, and starts once the fault clears", async () => {
+      const order = await admittedButNotStarted();
+      h.preExecute = async () => { throw unavailable(); };
+      await outlastAttemptBudget();
+      expect(await jobOf(order)).toMatchObject({ status: "retry", attempts: 1 });
+      expect(await task(order)).toMatchObject({ status: "submitted" });
+      h.preExecute = null;
+      await database.pool.query("UPDATE durable_jobs SET available_at=now() WHERE queue='standard-paid-fulfillment'");
+      await runPaidFulfillmentCycle(config, false);
+      expect(h.executions).toBe(1);
+      expect(await task(order)).toMatchObject({ status: "completed", job_status: "completed" });
+    });
+
+    it("fails as never started once its admitted fulfillment deadline passed", async () => {
+      const order = await admittedButNotStarted();
+      h.preExecute = async () => { throw new DOMException("The operation was aborted due to timeout", "TimeoutError"); };
+      await runPaidFulfillmentCycle(config, false);
+      expect(await task(order)).toMatchObject({ status: "submitted", job_status: "retry" });
+      await database.pool.query(
+        `UPDATE standard_dispatch_claims SET claimed_at=now() - (admitted_fulfillment_seconds + 10) * interval '1 second'
+          WHERE order_id=$1`, [order.dispatch.payload.orderId],
+      );
+      await database.pool.query("UPDATE durable_jobs SET available_at=now() WHERE queue='standard-paid-fulfillment'");
+      await runPaidFulfillmentCycle(config, false);
+      expect(h.executions).toBe(0);
+      expect(await task(order)).toMatchObject({ status: "failed", claim_state: "failed", job_status: "completed" });
+      expect((await status(order)).body.state).toBe("failed");
+    });
+
+    it("keeps the attempt budget when it was admitted with no known deadline, so it reaches an operator", async () => {
+      const order = await admittedButNotStarted();
+      // As an earlier release may have left it: no deadline would ever end it.
+      await database.pool.query("ALTER TABLE standard_dispatch_claims DISABLE TRIGGER standard_dispatch_claims_admitted_clocks");
+      try {
+        await database.pool.query(
+          "UPDATE standard_dispatch_claims SET admitted_fulfillment_seconds=NULL WHERE order_id=$1",
+          [order.dispatch.payload.orderId],
+        );
+      } finally {
+        await database.pool.query("ALTER TABLE standard_dispatch_claims ENABLE TRIGGER standard_dispatch_claims_admitted_clocks");
+      }
+      h.preExecute = async () => { throw unavailable(); };
+      await outlastAttemptBudget();
+      expect(await jobOf(order)).toMatchObject({ status: "dead_letter" });
+      expect(await task(order)).toMatchObject({ status: "submitted" });
+      // The operator's retry, once the fault cleared, starts it.
+      h.preExecute = null;
+      await expect(requeueDeadLetter("standard-paid-fulfillment", (await task(order)).id)).resolves.toBe(true);
+      await runPaidFulfillmentCycle(config, false);
+      expect(await task(order)).toMatchObject({ status: "completed", job_status: "completed" });
+    });
   });
 
   it("admits and answers a funded order while this process takes no new sales (C05)", async () => {

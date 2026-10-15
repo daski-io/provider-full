@@ -571,9 +571,11 @@ The row stays listed as unresolved, and every other order stays serviceable.
 
 ### A paid task stays `working` with `standard_reconciliation_required`
 
-The service's supplier call ended ambiguously, or the process died during
-the call and the paid-fulfillment worker found no persisted answer. The
-provider deliberately did not sign a failure: the supplier may have acted.
+The service's supplier call ended ambiguously (an ambiguous supplier
+outcome, a timeout or abort, or an infrastructure failure during `execute`),
+or the process died during the call and the paid-fulfillment worker found no
+persisted answer. The provider deliberately did not sign a failure: the
+supplier may have acted.
 Reconcile authoritative supplier state through the service's journal
 (`supplier_operations`) before completing or failing the task; never repeat
 the purchase blindly.
@@ -600,12 +602,19 @@ lease expires, or 30 seconds after an attempt failed on the database. Check
 that the worker is healthy (`/health/ready`), that the job is not dead
 lettered, and that a replica's build can run the order's admitted contract:
 a job naming an executable definition no build retains is never claimed.
-The worker also waits while the service's readiness invariants fail and
-while a buyer's cancellation of the order is unresolved; an uncertain
-cancellation stays claimed until a later cancel attempt reconciles it.
-Once the order's admitted fulfillment duration passed with nothing started,
-it fails as never started (`standard_fulfillment_expired`); work that did
-start is never failed by that deadline.
+The worker also waits while the service's readiness invariants fail, while
+a buyer's cancellation of the order is unresolved (an uncertain cancellation
+stays claimed until a later cancel attempt reconciles it), and while a fault
+before the start decides nothing: a dependency, resolver, certificate or
+database outage met by the asset lookup, a service hook or the pre-execute
+consult. Such a wait spends none of the job's attempts and is logged once
+per change of fault (`Paid fulfillment waits on a fault that decides
+nothing`); an order an earlier release admitted without a recorded
+fulfillment duration keeps the attempt budget and dead-letters for an
+operator to requeue instead. Once the order's admitted fulfillment duration
+passed with nothing started, it fails as never started
+(`standard_fulfillment_expired`); work that did start is never failed by
+that deadline.
 
 ### Quote succeeds but execute rejects input
 

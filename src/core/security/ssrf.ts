@@ -13,7 +13,9 @@ export type ValidatePublicUrlResult =
   // rather than re-resolving the hostname, which would reopen the rebinding
   // window this guard closes.
   | { ok: true; url: URL; addresses: string[] }
-  | { ok: false; reason: string };
+  // `cause` is the resolver's own error when the lookup failed, so a caller
+  // can tell a transient resolver fault (EAI_AGAIN) from a refused target.
+  | { ok: false; reason: string; cause?: unknown };
 
 interface ValidateOptions {
   /// `true` permits http:// in addition to https://. Default: false.
@@ -86,6 +88,7 @@ export async function validatePublicUrl(
     return {
       ok: false,
       reason: `dns lookup failed for ${host}: ${(err as Error).message}`,
+      cause: err,
     };
   } finally {
     if (timer) clearTimeout(timer);

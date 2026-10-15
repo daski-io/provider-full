@@ -12,7 +12,8 @@ import {
 import { getServiceById } from "../db/queries/services.js";
 import { getSkillByServiceAndSkillId } from "../db/queries/skills.js";
 import { failWorker, heartbeatWorker, setWorkerStatus } from "../health.js";
-import { errorExtra, logError, logInfo } from "../logger.js";
+import { errorExtra, logError, logInfo, logWarn } from "../logger.js";
+import { ConditionTracker } from "../observability/conditionTracker.js";
 import { workerCycleFailed, workerCycleSucceeded } from "../observability/workerConditions.js";
 import { executableDefinitionHash } from "../serviceRegistry/executableContracts.js";
 import { serviceInvariantFailures } from "../serviceRegistry/readiness.js";
@@ -20,7 +21,7 @@ import { getAdapter, getService } from "../serviceRegistry/registry.js";
 import { contractHandler, registeredExecutableHashes } from "../serviceRegistry/retainedHandlers.js";
 import { admittedSupplierCostCeiling } from "../serviceRegistry/supplierCostCeiling.js";
 import type { ProviderStandardRailConfig } from "./config.js";
-import { fulfillAdmittedDispatch } from "./dispatchExecution.js";
+import { fulfillAdmittedDispatch, isUndecidedFulfillmentFault } from "./dispatchExecution.js";
 import {
   FULFILLMENT_LEASE_SECONDS,
   PAID_FULFILLMENT_QUEUE,
@@ -39,13 +40,17 @@ import { completeRefusedStart, parkForReconciliation, refuseStart, startRefusal 
  * parked for reconciliation, never repeated; anything else already has an
  * owner. A worker only claims jobs whose contract its build can run, and
  * waits while the service declares an outage or a buyer's lifecycle action
- * holds the order.
+ * holds the order. A fault that decides nothing before the start waits the
+ * same way, without spending the job's attempts: the order starts once the
+ * fault clears or fails as never started at its admitted deadline.
  */
 
 export const PAID_FULFILLMENT_WORKER = "standard-paid-fulfillment";
 const POLL_MS = 5_000;
 const SWEEP_EVERY_POLLS = 12;
 const DEFER_MS = 60_000;
+/** Orders waiting on an undecided fault, by the fault's class: logged when that changes, not every retry. */
+const undecidedWaits = new ConditionTracker();
 
 interface ResumableRow {
   status: string;
@@ -59,6 +64,8 @@ interface ResumableRow {
   claim_state: string;
   answered: boolean;
   fulfillment_expired: boolean;
+  /** Whether the order was admitted with a fulfillment deadline (an earlier release's may have none). */
+  deadline_known: boolean;
 }
 
 const hex = (value: Buffer): Hex => `0x${value.toString("hex")}`;
@@ -73,7 +80,8 @@ export async function resumeAdmittedOrder(
     `SELECT t.status,t.metadata,t.service_id,t.skill_id,t.standard_payer,t.standard_listing_manifest_hash,
             c.gateway_audience,c.order_id,c.state AS claim_state,c.response_hash IS NOT NULL AS answered,
             COALESCE(c.claimed_at + c.admitted_fulfillment_seconds * interval '1 second' <= now(), false)
-              AS fulfillment_expired
+              AS fulfillment_expired,
+            c.admitted_fulfillment_seconds IS NOT NULL AS deadline_known
        FROM transactions t
        JOIN standard_dispatch_claims c ON c.transaction_id=t.id AND c.order_id=t.standard_order_id
       WHERE t.id=$1`,
@@ -115,12 +123,29 @@ export async function resumeAdmittedOrder(
     purpose: "standard-order-request", table: "transactions", recordId: taskId,
     field: "metadata.standard_request_encrypted", recordVersion: 1,
   })) as Record<string, unknown>;
-  const step = await fulfillAdmittedDispatch({
-    taskId, order, request, skillId: row.skill_id, service, skill, lease,
-    handler: choice.kind === "retained" ? choice.adapter : getAdapter(service.adapter_name),
-    requiresOwnership: admittedOwnership(version, skill),
-    supplierCostCeiling: admittedSupplierCostCeiling(row.metadata) ?? null,
-  });
+  let step: Awaited<ReturnType<typeof fulfillAdmittedDispatch>>;
+  try {
+    step = await fulfillAdmittedDispatch({
+      taskId, order, request, skillId: row.skill_id, service, skill, lease,
+      handler: choice.kind === "retained" ? choice.adapter : getAdapter(service.adapter_name),
+      requiresOwnership: admittedOwnership(version, skill),
+      supplierCostCeiling: admittedSupplierCostCeiling(row.metadata) ?? null,
+    });
+  } catch (error) {
+    // A fault that decided nothing (before the start, or the database
+    // failing after it, which the next resume finds and parks) waits like
+    // an outage, without spending the job's attempts, until it clears or the
+    // admitted deadline refuses the never-started order. One admitted with
+    // no known deadline keeps the attempt budget, so it dead-letters to an
+    // operator instead of waiting forever.
+    if (!row.deadline_known || !isUndecidedFulfillmentFault(error)) throw error;
+    const errorClass = error instanceof Error ? error.name : "UnknownError";
+    if (undecidedWaits.changed(taskId, errorClass)) {
+      logWarn("Paid fulfillment waits on a fault that decides nothing", errorExtra(error, { taskId }));
+    }
+    return "defer";
+  }
+  undecidedWaits.clear(taskId);
   return step === "busy" ? "defer" : "done";
 }
 

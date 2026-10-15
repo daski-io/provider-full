@@ -88,7 +88,8 @@ vi.mock("../src/core/standardRail/dispatchResponse.js", async (importOriginal) =
 const { StandardQuoteService } = await import("../src/core/standardRail/quote.js");
 const { ProviderEvidenceVerifier } = await import("../src/core/standardRail/evidence.js");
 const { mountProtocolRoutes } = await import("../src/core/standardRail/protocolRoutes.js");
-const { SupplierOutcomeAmbiguousError } = await import("../src/core/suppliers/errorClassifier.js");
+const { SupplierClientError, SupplierOutcomeAmbiguousError } = await import("../src/core/suppliers/errorClassifier.js");
+const { OutboundAbortedError } = await import("../src/core/security/outboundHttp.js");
 
 const config = fixtureConfig();
 const request = { item: "widget" };
@@ -377,6 +378,43 @@ describe("admitted paid work is never answered with a guessed failure", () => {
       [order.dispatch.payload.orderId],
     );
     expect(incidents.rows[0].n).toBe(1);
+  });
+
+  it("parks a started call that timed out or was aborted, and signs only a definite failure", async () => {
+    const reconciliation = async (order: DispatchArgs) => (await database.pool.query(
+      "SELECT status,metadata FROM transactions WHERE standard_order_id=$1", [order.dispatch.payload.orderId],
+    )).rows[0];
+    // Each may follow a request the supplier received and acted on.
+    for (const fault of [
+      new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+      new Error("outbound request timed out after 15000ms"),
+      new OutboundAbortedError(new DOMException("This operation was aborted", "AbortError")),
+      new OutboundAbortedError("shutting down"),
+      Object.assign(new TypeError("fetch failed"), {
+        cause: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }),
+      }),
+      new Error("report job failed", { cause: new DOMException("The operation timed out.", "TimeoutError") }),
+    ]) {
+      const order = await paidOrder();
+      h.executeError = fault;
+      const response = await dispatchOrder(order);
+      const accepted = await acceptDispatchResponse(await readGatewayJson(response), expectation(canonicalHash(order.dispatch)));
+      expect(accepted.body.state, fault.message).toBe("working");
+      expect(await reconciliation(order), fault.message).toMatchObject({
+        status: "working", metadata: expect.objectContaining({ standard_reconciliation_required: true }),
+      });
+    }
+    for (const fault of [
+      new Error("The widget is not offered"),
+      new SupplierClientError("rejected", { supplier: "synthetic", status: 422 }),
+    ]) {
+      const order = await paidOrder();
+      h.executeError = fault;
+      const response = await dispatchOrder(order);
+      const failed = await acceptDispatchResponse(await readGatewayJson(response), expectation(canonicalHash(order.dispatch)));
+      expect(failed.body.state, fault.message).toBe("failed");
+      expect((await reconciliation(order)).metadata.standard_reconciliation_required, fault.message).toBeUndefined();
+    }
   });
 
   it("does not rewrite the service's answer when persisting it fails", async () => {

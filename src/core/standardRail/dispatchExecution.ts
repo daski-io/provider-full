@@ -11,9 +11,8 @@ import { getService } from "../serviceRegistry/registry.js";
 import type {
   AdapterResult, FulfillmentAdapter, PreExecuteDecision, SupplierCostCeiling,
 } from "../serviceRegistry/types.js";
-import { classifySupplierError } from "../suppliers/errorClassifier.js";
 import { canonicalHash } from "./canonical.js";
-import { isInfrastructureFailure, isUndecidedPreStartFault } from "./faultClassification.js";
+import { isAmbiguousAfterStart, isUndecidedPreStartFault } from "./faultClassification.js";
 import { admitPaidTaskForAsset, checkPaidTaskOwner } from "./assetOwnerAdmission.js";
 import { AssetOwnerChangedError } from "./assetOwnerFence.js";
 import { ASSET_OWNER_CHANGED_RESULT } from "./assetOwnerOutcome.js";
@@ -81,6 +80,15 @@ export type FulfillmentStep = "settled" | "busy";
 const step = (fence: "started" | "lost" | "busy"): FulfillmentStep => fence === "busy" ? "busy" : "settled";
 
 /**
+ * Whether a failure escaping `fulfillAdmittedDispatch` decided nothing about
+ * the order: a fault that decides nothing before the start, or an owner step
+ * that reached no decision. Such an order is left for its fulfillment job.
+ */
+export function isUndecidedFulfillmentFault(error: unknown): boolean {
+  return error instanceof OwnerStepUndecidedError || isUndecidedPreStartFault(error);
+}
+
+/**
  * Nothing was started. A fault that decides nothing (infrastructure, a
  * transient or provider-side condition of the asset lookup, a service hook
  * or the pre-execute consult, a timeout), or an owner step that reached no
@@ -94,20 +102,21 @@ async function refuseBeforeStart(error: unknown, args: {
   order: AdmittedOrder;
   lease: FulfillmentJobLease;
 }): Promise<FulfillmentStep> {
-  if (isUndecidedPreStartFault(error) || error instanceof OwnerStepUndecidedError) throw error;
+  if (isUndecidedFulfillmentFault(error)) throw error;
   return step(await refuseStart({ ...args, refusal: "pre_start_failure", cause: error }));
 }
 
 /**
  * Fulfil an admitted paid order under its fulfillment-job lease. A definite
  * service failure before or during execution becomes a recorded terminal
- * failure; an ambiguous supplier outcome stays nonterminal for
- * reconciliation. A database or connection failure before the service was
- * called escapes and leaves the order resumable by its fulfillment job;
- * after the call it is ambiguous. Every decision that ends or starts the
- * order first wins its start fence (orderStart.ts); an executor that loses
- * it returns without acting, and a pre-execute escalation wins it in the
- * escalation's own transaction. Owner-only work is admitted under the asset
+ * failure; an ambiguous supplier outcome, or a timeout or abort during
+ * execution, stays nonterminal for reconciliation. A database or connection
+ * failure before the service was called escapes and leaves the order
+ * resumable by its fulfillment job; after the call it is ambiguous. Every
+ * decision that ends or starts the order first wins its start fence
+ * (orderStart.ts); an executor that loses it returns without acting, and a
+ * pre-execute escalation wins it in the escalation's own transaction.
+ * Owner-only work is admitted under the asset
  * owner fence for the order's payer, only by the executor that may still
  * start the order, and checked once more right before the start; a stale or
  * foreign owner refuses the start. Once the service has answered, its
@@ -203,7 +212,9 @@ export async function fulfillAdmittedDispatch(args: {
       asset ?? undefined,
     );
   } catch (error) {
-    if (classifySupplierError(error)?.kind === "ambiguous" || isInfrastructureFailure(error)) {
+    // A timeout, an abort or an infrastructure failure after the start may
+    // have followed a call that acted: unknown, never a signed failure.
+    if (isAmbiguousAfterStart(error)) {
       await parkForReconciliation(taskId, order);
     } else {
       await failAdmittedTask(taskId, service.id, order, error);
