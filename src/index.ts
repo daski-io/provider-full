@@ -53,6 +53,7 @@ import { startReputationOutcomeWorker } from "./core/standardRail/reputationOutc
 import { deriveProviderLaunchPolicy } from "./core/standardRail/launchPolicy.js";
 import { startStandardReviewResolutionWorker } from "./core/standardRail/reviewResolutionWorker.js";
 import { startPaidFulfillmentWorker } from "./core/standardRail/paidFulfillmentWorker.js";
+import { installOutboundFailureLog } from "./core/observability/outboundFailureLog.js";
 
 let shuttingDown = false;
 let serviceWorkerStops: Array<() => void | Promise<void>> = [];
@@ -70,6 +71,8 @@ async function main(): Promise<void> {
     chainId: config.CHAIN_ID,
     chainMode: config.CHAIN_MODE,
   });
+  // Every failed outbound API call reaches the platform log from here on.
+  installOutboundFailureLog();
   if (!(await checkDatabase())) throw new Error("Database unreachable");
   await runMigrations();
   await configureStandardRuntimePrivileges();

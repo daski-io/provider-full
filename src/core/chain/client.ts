@@ -3,7 +3,9 @@ import { privateKeyToAccount } from "viem/accounts";
 import { base, baseSepolia } from "viem/chains";
 import { config } from "../config.js";
 import { logWarn } from "../logger.js";
+import { observeOutbound } from "../observability/outboundFailures.js";
 import { withRpcFailover } from "./rpcFailover.js";
+import { rpcOperation } from "./rpcOperation.js";
 
 /**
  * When set via `CHAIN_MODE=mock`, every on-chain touchpoint
@@ -60,6 +62,7 @@ const publicTransport: Transport = CHAIN_MODE_MOCK
       const primary = endpoints[0]!.client;
       const request = ((...args: Parameters<typeof primary.request>) =>
         withRpcFailover(endpoints, ({ client }) => client.request(...args), {
+          operation: rpcOperation(args),
           onFallback: ({ primaryHost, selectedHost }) => {
             logWarn("Provider RPC fallback selected", {
               primaryHost,
@@ -72,7 +75,15 @@ const publicTransport: Transport = CHAIN_MODE_MOCK
 
 // Signed writes remain primary-only; ambiguous broadcasts are reconciled by
 // their owning workflow and must never be hidden behind transport failover.
-const walletTransport = http(transportUrl, { retryCount: 0, timeout: 20_000 });
+// Failures still reach the outbound-failure log.
+const primaryRpcHost = new URL(transportUrl).hostname;
+const walletTransport: Transport = (parameters) => {
+  const target = http(transportUrl, { retryCount: 0, timeout: 20_000 })(parameters);
+  const request = ((...args: Parameters<typeof target.request>) =>
+    observeOutbound(primaryRpcHost, rpcOperation(args), () => target.request(...args))
+  ) as typeof target.request;
+  return { ...target, request };
+};
 
 export const publicClient: any = createPublicClient({
   chain,

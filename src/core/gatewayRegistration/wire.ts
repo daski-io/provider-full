@@ -6,6 +6,7 @@ import {
   type Hex,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
+import { observeOutbound, outboundOperation } from "../observability/outboundFailures.js";
 import {
   assertNoDuplicateJsonKeys,
   canonicalHash,
@@ -191,10 +192,22 @@ export async function requestBoundedJson(
   return (await requestBoundedJsonResponse(url, init)).body;
 }
 
-/** A bounded JSON request that also reports the success status it answered. */
+/** A bounded JSON request that also reports the success status it answered; failures reach the outbound log. */
 export async function requestBoundedJsonResponse(
   url: string,
   init: RequestInit = {},
+): Promise<{ status: number; body: unknown }> {
+  const parsedUrl = new URL(url);
+  return observeOutbound(
+    parsedUrl.hostname,
+    outboundOperation(init.method, parsedUrl),
+    () => requestBoundedJsonResponseUnobserved(url, init),
+  );
+}
+
+async function requestBoundedJsonResponseUnobserved(
+  url: string,
+  init: RequestInit,
 ): Promise<{ status: number; body: unknown }> {
   const response = await fetchRegistration(url, init);
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";

@@ -13,7 +13,9 @@ import { type EmailAgentContext } from "./tools/index.js";
 import { toolsForService } from "./toolRegistry.js";
 import { getService } from "../../serviceRegistry/registry.js";
 import { buildEmailAgentPrompt } from "./prompt.js";
+import { LLM_OPERATION, LLM_TARGET } from "../../llm/openai.js";
 import { maxTokensParam } from "../../llm/params.js";
+import { observeOutbound } from "../../observability/outboundFailures.js";
 import { logError } from "../../logger.js";
 import { redactSensitiveText } from "../../security/redaction.js";
 
@@ -124,13 +126,14 @@ export async function processInboundEmail(inboundId: string): Promise<void> {
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       // Cast through unknown because the OpenAI SDK has a more specific
       // discriminated union for messages than our local AgentMessage shape.
-      const response = await openai.chat.completions.create({
-        model,
-        messages: messages as unknown as Parameters<typeof openai.chat.completions.create>[0]["messages"],
-        tools: toolDefs as unknown as Parameters<typeof openai.chat.completions.create>[0]["tools"],
-        tool_choice: "auto",
-        ...maxTokensParam(model, 800),
-      });
+      const response = await observeOutbound(LLM_TARGET, LLM_OPERATION, () =>
+        openai.chat.completions.create({
+          model,
+          messages: messages as unknown as Parameters<typeof openai.chat.completions.create>[0]["messages"],
+          tools: toolDefs as unknown as Parameters<typeof openai.chat.completions.create>[0]["tools"],
+          tool_choice: "auto",
+          ...maxTokensParam(model, 800),
+        }));
       const m = response.choices[0].message;
       const toolCalls = m.tool_calls;
       if (!toolCalls || toolCalls.length === 0) {

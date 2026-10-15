@@ -289,6 +289,7 @@ async function observeContract(
       }, {
         attempts: 1,
         baseDelayMs: 0,
+        operation: "payer signature",
         onFallback: ({ primaryHost, selectedHost }) => {
           logWarn("Payer signature RPC fallback selected", { primaryHost, selectedHost });
         },

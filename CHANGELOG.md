@@ -278,6 +278,16 @@ All notable changes to this project will be documented here.
   required while it still owes nonterminal tasks or unresolved supplier
   operations, and readiness logs each transition once.
 
+- Every failed outbound call is reported redacted and throttled
+  (`outbound.request_failed`): supplier and email HTTP, the gateway
+  registration fetch, each chain RPC endpoint attempt with its method and
+  block-tag class (a JSON-RPC error answer is `rpc_error`, not a network
+  failure), and LLM calls. `boundedFetch` keeps an empty or non-JSON error
+  reply's HTTP status, throws `OutboundCircuitOpenError` with the circuit's
+  real `retryAt`, and composes a caller's `signal` with its own timeout
+  through the whole body read on both the fetch and the pinned path; a caller
+  abort is `OutboundAbortedError` and never opens the circuit.
+
 ### Fixed
 
 - The provider-write reconciler stays ready while another replica's live

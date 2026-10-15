@@ -1,3 +1,9 @@
+import {
+  isExpectedOutboundFailure,
+  outboundFailureFromError,
+  reportOutboundFailure,
+} from "../observability/outboundFailures.js";
+
 export interface RpcEndpoint<Client> {
   host: string;
   client: Client;
@@ -6,6 +12,8 @@ export interface RpcEndpoint<Client> {
 interface RpcFailoverOptions {
   attempts?: number;
   baseDelayMs?: number;
+  /** Label for the outbound-failure log, e.g. the RPC method. */
+  operation?: string;
   onFallback?: (detail: { primaryHost: string; selectedHost: string }) => void;
 }
 
@@ -50,6 +58,11 @@ export async function withRpcFailover<Endpoint extends RpcEndpoint<unknown>, Res
         return result;
       } catch (error) {
         lastError = error;
+        const operation = options.operation ?? "rpc";
+        const failure = outboundFailureFromError(error);
+        if (!isExpectedOutboundFailure(operation, failure)) {
+          reportOutboundFailure({ target: endpoint.host, operation, ...failure });
+        }
         if (attempt < attempts && baseDelayMs > 0) {
           await new Promise((resolve) => setTimeout(resolve, baseDelayMs * attempt));
         }

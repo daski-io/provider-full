@@ -10,6 +10,8 @@ export interface PinnedHttpRequestArgs {
   body?: BodyInit | null;
   timeoutMs: number;
   maxResponseBytes: number;
+  /** The caller's cancellation; it bounds the whole exchange with the timeout. */
+  signal?: AbortSignal;
 }
 
 export interface PinnedHttpResponse {
@@ -40,6 +42,10 @@ export async function pinnedHttpRequest(
 ): Promise<PinnedHttpResponse> {
   const body = await bodyBuffer(args.body);
   return new Promise((resolve, reject) => {
+    if (args.signal?.aborted) {
+      reject(new Error("pinned outbound request was aborted before it started"));
+      return;
+    }
     const isHttps = args.url.protocol === "https:";
     const detectedFamily = isIP(args.pinnedIp);
     if (detectedFamily === 0) {
@@ -72,10 +78,12 @@ export async function pinnedHttpRequest(
     };
     let settled = false;
     let deadline: NodeJS.Timeout | null = null;
+    const onAbort = () => request.destroy(new Error("pinned outbound request was aborted"));
     const finish = (fn: () => void) => {
       if (settled) return;
       settled = true;
       if (deadline) clearTimeout(deadline);
+      args.signal?.removeEventListener("abort", onAbort);
       fn();
     };
     const onResponse = (response: http.IncomingMessage) => {
@@ -117,6 +125,9 @@ export async function pinnedHttpRequest(
       request.destroy(new Error(`outbound request timed out after ${args.timeoutMs}ms`));
     }, args.timeoutMs);
     deadline.unref();
+    // Destroying the request also ends a response whose body is still
+    // streaming, so the abort reaches the body read.
+    args.signal?.addEventListener("abort", onAbort, { once: true });
     request.on("error", (error) => finish(() => reject(error)));
     if (body) request.write(body);
     request.end();

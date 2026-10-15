@@ -128,6 +128,18 @@ reviewed product origin. Validate the response with a closed schema before it
 affects state, pricing, artifacts, or logs. Do not surface upstream response
 text as a public error.
 
+`boundedFetch` keeps an error reply's HTTP status even when its body is empty
+or HTML (content-type admission applies to successful bodies), throws
+`OutboundCircuitOpenError` with its `retryAt` while the origin's circuit is
+open, and honors a caller's `signal` together with its own timeout through
+the whole response-body read; a caller abort surfaces as
+`OutboundAbortedError` and never opens the circuit. An abort only stops
+waiting: it never proves the product did not act, so a mutating call
+reconciles instead of retrying blindly. Every failure is reported to the
+provider log and the admin Platform Log as `outbound.request_failed` with
+only its class, templated operation, status, the remote's short error code
+and network code, throttled to one report a minute per identical failure.
+
 ### Authentication
 
 - Parse the API credential in the service's `config.ts`.

@@ -459,6 +459,16 @@ order that never started fails at that deadline, as never started;
 accepted, started or ambiguous work stays nonterminal so a late result is
 still delivered.
 
+Outbound calls are observable without leaking data
+(`observability/outboundFailures.ts`): supplier and email HTTP through
+`boundedFetch`, the gateway registration fetch, every chain RPC endpoint
+attempt (labelled with its method and block-parameter class, never the
+parameter) and every LLM call report a failure's class (HTTP error, JSON-RPC
+error answer, timeout, network, circuit, concurrency, size, content type,
+target, redirect), templated operation, status, the remote's short error code
+and network code, never response text, once a minute per identical failure,
+to the provider log and the admin Platform Log.
+
 Workers declare heartbeat ids and service invariants through
 `operations.readiness`. Dead letters surface as human reviews rather than
 silently stopping.

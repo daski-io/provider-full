@@ -1,6 +1,11 @@
 import OpenAI from "openai";
 import { config } from "../config.js";
+import { observeOutbound } from "../observability/outboundFailures.js";
 import { maxTokensParam } from "./params.js";
+
+/** Outbound-failure log labels shared by every chat-completion call site. */
+export const LLM_TARGET = "api.openai.com";
+export const LLM_OPERATION = "chat.completions";
 
 export class OpenAIClient {
   private client: OpenAI;
@@ -24,15 +29,16 @@ export class OpenAIClient {
     model?: string,
   ): Promise<string> {
     const effectiveModel = model ?? this.model;
-    const response = await this.client.chat.completions.create({
-      model: effectiveModel,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userMessage },
-      ],
-      ...maxTokensParam(effectiveModel, 500),
-    });
+    const response = await observeOutbound(LLM_TARGET, LLM_OPERATION, () =>
+      this.client.chat.completions.create({
+        model: effectiveModel,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userMessage },
+        ],
+        ...maxTokensParam(effectiveModel, 500),
+      }));
     return response.choices[0].message.content || "";
   }
 }

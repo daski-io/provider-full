@@ -6,7 +6,9 @@ import {
   type OperatorChatRow,
 } from "../../db/queries/operatorChats.js";
 import { emitEvent } from "../../events/emitter.js";
+import { LLM_OPERATION, LLM_TARGET } from "../../llm/openai.js";
 import { maxTokensParam } from "../../llm/params.js";
+import { observeOutbound } from "../../observability/outboundFailures.js";
 import { redactSensitiveText } from "../../security/redaction.js";
 import { redactConfirmationTokens } from "./audit.js";
 import {
@@ -110,13 +112,14 @@ export async function runOperatorLoop(args: {
     rounds = round + 1;
     let response;
     try {
-      response = await openai.chat.completions.create({
-        model,
-        messages: messages as unknown as Parameters<typeof openai.chat.completions.create>[0]["messages"],
-        tools: toolDefs as unknown as Parameters<typeof openai.chat.completions.create>[0]["tools"],
-        tool_choice: "auto",
-        ...maxTokensParam(model, 800),
-      });
+      response = await observeOutbound(LLM_TARGET, LLM_OPERATION, () =>
+        openai.chat.completions.create({
+          model,
+          messages: messages as unknown as Parameters<typeof openai.chat.completions.create>[0]["messages"],
+          tools: toolDefs as unknown as Parameters<typeof openai.chat.completions.create>[0]["tools"],
+          tool_choice: "auto",
+          ...maxTokensParam(model, 800),
+        }));
     } catch {
       const errorMessage =
         "The operator model call failed. Retry the request or inspect provider operations.";

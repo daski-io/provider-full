@@ -75,6 +75,7 @@ export class ProviderEvidenceVerifier {
     work: (endpoint: (typeof this.clients)[number]) => Promise<Result>,
   ): Promise<Result> {
     return withRpcFailover(this.clients, work, {
+      operation: "standard-rail evidence",
       onFallback: ({ primaryHost, selectedHost }) => {
         logWarn("Standard-rail RPC fallback selected", {
           primaryHost,
