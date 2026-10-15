@@ -299,8 +299,11 @@ business failure.
 - Fixed prices use atomic USDC; `1000000` is 1 USDC.
 - A dynamic price must be an exact integer derived from validated input.
 - Bound any upstream price request like a fulfillment request.
-- If fulfillment will spend externally, attach a `supplierCostCeiling` that
-  commits the maximum supplier cost and currency.
+- If fulfillment will spend externally, report the upstream price for the
+  request as `supplierCost` (supplier, currency, decimal amount), for fixed
+  and dynamic listings alike. Core records it with the configured price
+  tolerance as the order's supplier-cost ceiling; a later spend above that
+  price plus the tolerance is refused before the call.
 - Put availability checks that depend on mutable product state in the
   read-only `requestReadiness` hook. It runs before each new quote with the
   quote's payer (or `null`) and can only refuse; it must not reserve or

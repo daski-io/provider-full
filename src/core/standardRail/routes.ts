@@ -36,7 +36,7 @@ export function createStandardRailRouter(
   const lifecycle = new StandardLifecycleService(config, core.CHAIN_ID, contractIntegrity);
   const quote = new StandardQuoteService(config, core.CHAIN_ID, {
     salesAdmission: options.salesAdmission, contractIntegrity,
-  });
+  }, core.SUPPLIER_PRICE_TOLERANCE_PERCENT);
   const assetQuery = walletConfig
     ? new ProviderAssetQueryService(config, walletConfig, core.CHAIN_ID)
     : null;

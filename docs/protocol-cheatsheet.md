@@ -111,7 +111,8 @@ re-encoded copy of a signature can never become a second dispatch identity.
   availability (sales paused stops quotes), this process's new-sale admission
   (the `admission` part of `/health/ready`), a fresh proof of the rail
   contracts, open paid work for the listing version against its capacity, the
-  service `quote()`, a supplier-cost ceiling if one is returned, and the
+  service `quote()`, the supplier cost it reports if any (recorded with the
+  configured price tolerance as a `supplier-cost-ceiling-v2`), and the
   optional read-only `requestReadiness` hook. The quote is persisted with its payer, pricing mode, price, request,
   listing and window before it is signed. A quote never starts or reserves
   product work.

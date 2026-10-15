@@ -50,9 +50,10 @@ export interface TaskContext {
   supplierMutationStarted?: boolean;
   /**
    * The order's admitted, immutable supplier-spend ceiling (absent for a
-   * no-spend quote). Compare every planned supplier operation with it before
-   * spending: pass it as `spend.ceiling` to `runSupplierOperation`, or call
-   * `assertSupplierSpendWithinCeiling`. Retries reuse this same value.
+   * quote that reported no supplier cost). Compare every planned supplier
+   * operation with it before spending: pass it as `spend.ceiling` to
+   * `runSupplierOperation`, or call `assertSupplierSpendWithinCeiling`.
+   * Retries reuse this same value.
    */
   supplierCostCeiling?: SupplierCostCeiling;
   /** Present on handleInput() and cancel() calls for a buyer's standard-rail order action. */
@@ -82,15 +83,45 @@ export type TaskInputAuthorizationContext = TaskInputAuthorizationBase & {
 };
 
 /**
- * Immutable supplier-spend ceiling committed by a paid provider quote and
- * carried into fulfillment. Decimal strings avoid floating-point drift.
+ * The supplier's current price for one quoted request, in the supplier's own
+ * currency as a non-negative decimal string. A quote that may spend
+ * externally reports it, for fixed and dynamic listings alike.
  */
-export interface SupplierCostCeiling {
+export interface SupplierCost {
+  supplier: string;
+  currency: string;
+  amount: string;
+}
+
+/**
+ * Immutable supplier-spend ceiling core records with a paid provider quote
+ * and carries into fulfillment: the supplier price quoted at quote time and
+ * the provider's price tolerance then in force. A planned spend is admitted
+ * while `amount * 100 <= quotedAmount * (100 + tolerancePercent)`. Decimal
+ * strings avoid floating-point drift.
+ */
+export interface SupplierCostCeilingV2 {
+  kind: "supplier-cost-ceiling-v2";
+  supplier: string;
+  currency: string;
+  quotedAmount: string;
+  /** SUPPLIER_PRICE_TOLERANCE_PERCENT when the quote was issued: 0 to 100, at most two decimals. */
+  tolerancePercent: string;
+}
+
+/**
+ * A ceiling recorded by an earlier release, still read for its orders: it
+ * admits spend up to `maximumAmount` (a quoted amount with no tolerance).
+ * Nothing records one any more.
+ */
+export interface SupplierCostCeilingV1 {
   kind: "supplier-cost-ceiling-v1";
   supplier: string;
   currency: string;
   maximumAmount: string;
 }
+
+export type SupplierCostCeiling = SupplierCostCeilingV2 | SupplierCostCeilingV1;
 
 export type QuoteResult =
   | {
@@ -98,7 +129,8 @@ export type QuoteResult =
       amount: bigint;
       currency: "USDC";
       notes?: string[];
-      supplierCostCeiling?: SupplierCostCeiling;
+      /** The supplier price this request would spend; core records the order's ceiling from it. */
+      supplierCost?: SupplierCost;
     }
   | {
       ok: false;

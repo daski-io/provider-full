@@ -121,8 +121,9 @@ product cannot answer; the operation stays parked. A documented refusal that
 proves nothing was created is returned as the operation's result
 (`{ rejected }`), so the worker maps it to a reviewed failure instead of
 retrying it. A spend-bearing submission passes
-`spend: { ceiling: task.supplierCostCeiling, planned }` so core refuses an
-over-ceiling call before it is made.
+`spend: { ceiling: task.supplierCostCeiling, planned }` so core refuses a
+call above the supplier price the quote reported plus the recorded price
+tolerance before it is made.
 
 If the process dies inside `execute`, core never calls it again for that
 order: it flags the order for reconciliation and records an incident, while

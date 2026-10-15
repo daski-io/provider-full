@@ -4,6 +4,7 @@ import {
   BASE_MAINNET_CHAIN_ID,
   BASE_MAINNET_EXTERNAL_CONTRACTS,
 } from "./chain/reviewedDeployments.js";
+import { isTolerancePercent } from "./serviceRegistry/supplierCostDecimal.js";
 
 // Core env schema. Service-specific knobs live in their own
 // services/<slug>/config.ts so a misconfigured service fails fast on
@@ -205,6 +206,13 @@ const envSchema = z.object({
 
   SUPPLIER_BREAKER_WINDOW_MINUTES: z.coerce.number().int().min(1).max(1_440).default(30),
   SUPPLIER_BREAKER_THRESHOLD: z.coerce.number().int().min(1).max(100).default(5),
+  // The supplier price increase a paid order absorbs, in percent over the
+  // supplier price its quote reported. Each quote records the value in force
+  // in the order's supplier-cost ceiling, so a later change never alters an
+  // admitted order. A decimal from 0 to 100 with at most two decimals.
+  SUPPLIER_PRICE_TOLERANCE_PERCENT: z.string().default("10").refine(isTolerancePercent, {
+    message: "SUPPLIER_PRICE_TOLERANCE_PERCENT must be a decimal from 0 to 100 with at most two decimals",
+  }),
 
   // Required — gates every /admin/* route. The middleware fails closed
   // if missing. See src/core/admin/routes.ts.

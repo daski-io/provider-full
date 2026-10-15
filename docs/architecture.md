@@ -433,10 +433,16 @@ stays ambiguous. A later attempt reconciles authoritative supplier state and
 records a definitive result before continuing. Blind retries are forbidden.
 
 A paid task that may spend externally carries the supplier-cost ceiling its
-quote admitted, bound immutably at admission. When the service declares the
-planned spend (`runSupplierOperation({ spend })`), the journal compares it
-with that ceiling immediately before the mutation and refuses an
-over-ceiling operation without calling the supplier.
+quote admitted, bound immutably at admission: the supplier price the
+service reported at quote time and the price tolerance then in force
+(`SUPPLIER_PRICE_TOLERANCE_PERCENT`), for fixed and dynamic listings alike.
+When the service declares the planned spend
+(`runSupplierOperation({ spend })`), the journal compares it with that
+ceiling immediately before the mutation, in exact decimal arithmetic
+(`amount * 100 <= quotedAmount * (100 + tolerancePercent)`), and refuses an
+operation above it, or for another supplier or currency, without calling
+the supplier. A ceiling an earlier release recorded (`maximumAmount`) keeps
+its exact meaning, a quoted amount with no tolerance.
 
 Every admitted paid order owns one durable `standard-paid-fulfillment` job,
 created in the admission transaction and leased to the admitting request.

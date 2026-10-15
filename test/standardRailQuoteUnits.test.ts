@@ -1,8 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  parseOptionalSupplierCostCeiling,
-  parseSupplierCostCeiling,
-} from "../src/core/serviceRegistry/supplierCostCeiling.js";
 import type { FulfillmentAdapter } from "../src/core/serviceRegistry/types.js";
 import { QuoteRefusedError } from "../src/core/standardRail/quoteErrors.js";
 import {
@@ -108,33 +104,5 @@ describe("quote field errors", () => {
     expect(Buffer.byteLength(JSON.stringify(body))).toBeLessThanOrEqual(MAX_QUOTE_REFUSAL_BYTES);
     expect((body.fieldErrors as unknown[]).length).toBeGreaterThan(0);
     expect((body.fieldErrors as unknown[]).length).toBeLessThanOrEqual(MAX_QUOTE_FIELD_ERRORS);
-  });
-});
-
-describe("supplier cost ceiling parsing", () => {
-  const ceiling = {
-    kind: "supplier-cost-ceiling-v1", supplier: "synthetic-supplier", currency: "USD", maximumAmount: "12.50",
-  };
-
-  it("accepts the exact v1 shape and returns a copy", () => {
-    const parsed = parseSupplierCostCeiling(ceiling);
-    expect(parsed).toEqual(ceiling);
-    expect(parsed).not.toBe(ceiling);
-    expect(parseOptionalSupplierCostCeiling(null)).toBeNull();
-    expect(parseOptionalSupplierCostCeiling(undefined)).toBeNull();
-  });
-
-  it.each([
-    { ...ceiling, extra: true },
-    { ...ceiling, kind: "supplier-cost-ceiling-v2" },
-    { ...ceiling, maximumAmount: "-1" },
-    { ...ceiling, maximumAmount: "1e3" },
-    { ...ceiling, maximumAmount: "01" },
-    { ...ceiling, maximumAmount: 12 },
-    { ...ceiling, currency: "usd" },
-    { ...ceiling, supplier: "" },
-    [],
-  ])("fails closed on %j", (value) => {
-    expect(() => parseSupplierCostCeiling(value)).toThrow("Supplier cost ceiling is invalid");
   });
 });

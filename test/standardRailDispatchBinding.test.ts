@@ -42,8 +42,10 @@ const { assertDepositWithinQuoteWindow } = await import("../src/core/standardRai
 const config = fixtureConfig();
 let database: DisposableDatabase;
 const request = { item: "widget" };
+const supplierCost = { supplier: "synthetic-supplier", currency: "USD", amount: "4.25" };
 const ceiling = {
-  kind: "supplier-cost-ceiling-v1" as const, supplier: "synthetic-supplier", currency: "USD", maximumAmount: "4.25",
+  kind: "supplier-cost-ceiling-v2" as const, supplier: "synthetic-supplier", currency: "USD",
+  quotedAmount: "4.25", tolerancePercent: "10",
 };
 
 function adapter(): FulfillmentAdapter {
@@ -55,7 +57,7 @@ function adapter(): FulfillmentAdapter {
       ok: true as const,
       amount: skillId === fixedOutcome.skillId ? 250_000n : 1_234_567n,
       currency: "USDC" as const,
-      ...(skillId === dynamicOutcome.skillId ? { supplierCostCeiling: ceiling } : {}),
+      ...(skillId === dynamicOutcome.skillId ? { supplierCost } : {}),
     })),
   };
 }

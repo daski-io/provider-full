@@ -205,10 +205,15 @@ async quote(
 ```
 
 If the price depends on a supplier quote, validate the input first, bound the
-supplier call, and return the exact amount. Use `supplierCostCeiling` when
-fulfillment must prove it stayed within a quoted external-spend ceiling; core
-validates its exact shape (`kind`, `supplier`, upper-case `currency`, decimal
-`maximumAmount`) and persists it with the quote.
+supplier call, and return the exact amount. When fulfillment will pay a
+supplier, for fixed and dynamic listings alike, also return the supplier's
+current price for this request as `supplierCost: { supplier, currency,
+amount }` (a supplier id, an upper-case currency code and a non-negative
+decimal string). Core validates it strictly, refusing the quote as
+unavailable when it is malformed, and records it with the configured price
+tolerance as the order's supplier-cost ceiling (see
+[Supplier-cost ceilings](#supplier-cost-ceilings)). A service never builds
+the ceiling itself.
 
 `quote()` runs for fixed listings too. Core always signs the admitted listing
 price for a fixed listing: return the same amount, and use `ok: false` to
@@ -376,11 +381,25 @@ state before acting; never repeat the mutation blindly. Throw
 
 ### Supplier-cost ceilings
 
-A quote that admits external spend returns `supplierCostCeiling`. Core
-validates it, persists it with the quote, and at dispatch admission binds the
-same value immutably to the task (`TaskContext.supplierCostCeiling`; a
-database trigger refuses any later change). Compare every planned supplier
-operation with it before spending:
+A quote that may spend externally reports the supplier's current price as
+`supplierCost`. Core records it with the quote as a ceiling, together with
+the price tolerance in force (`SUPPLIER_PRICE_TOLERANCE_PERCENT`, default
+10):
+
+```json
+{ "kind": "supplier-cost-ceiling-v2", "supplier": "report-supplier", "currency": "USD",
+  "quotedAmount": "4.25", "tolerancePercent": "10" }
+```
+
+At dispatch admission core binds the same value immutably to the task
+(`TaskContext.supplierCostCeiling`; a database trigger refuses any later
+change), so a later tolerance change never alters an admitted order. A
+planned spend for the same supplier and currency is admitted while
+`amount * 100 <= quotedAmount * (100 + tolerancePercent)`, computed
+exactly: with 4.25 quoted and 10 percent, up to 4.675 is spent and 4.676 is
+refused. `supplierCostLimit(ceiling)` returns that limit as a decimal string
+for display or for a supplier API that takes a maximum price. Compare every
+planned supplier operation with the ceiling before spending:
 
 ```typescript
 await runSupplierOperation({
@@ -400,12 +419,16 @@ await runSupplierOperation({
 
 The check runs after any earlier attempt was reconciled and immediately
 before `execute`. A missing ceiling, another supplier or currency, or an
-amount above `maximumAmount` throws `SupplierCostCeilingError` without calling
-the supplier and closes that operation key as not applied; a different
-planned spend needs a new key. Retries, buyer input and reviewed re-execution reuse the
-admitted ceiling; read it with `admittedSupplierCostCeiling(task.metadata)`
-in a worker. A changed supplier price never authorizes another buyer charge.
-No-spend services return no ceiling.
+amount above the quoted amount plus the tolerance throws
+`SupplierCostCeilingError` without calling the supplier and closes that
+operation key as not applied; a different planned spend needs a new key.
+Retries, buyer input and reviewed re-execution reuse the admitted ceiling;
+read it with `admittedSupplierCostCeiling(task.metadata)` in a worker. A
+supplier price increase within the tolerance is absorbed by the provider; a
+changed supplier price never authorizes another buyer charge. Orders quoted
+by an earlier release may carry a `supplier-cost-ceiling-v1` ceiling, whose
+`maximumAmount` admits exactly that amount with no tolerance. No-spend
+services report no supplier cost and get no ceiling.
 
 ## 6. Add service configuration
 

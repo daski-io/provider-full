@@ -74,8 +74,10 @@ Prices use atomic USDC (six decimals). `1000000` is 1 USDC.
 
 A fixed price can be declared directly. A variable price must be calculated by
 `quote()` from fully validated input and returned as an exact integer. If an
-external supplier price contributes, bind a safe supplier-cost ceiling and
-define what happens when the price changes before fulfillment.
+external supplier price contributes, report it as the quote's `supplierCost`
+so core binds a supplier-cost ceiling with the provider's configured price
+tolerance, and define what happens when the price rises beyond that
+tolerance before fulfillment.
 
 Never issue a successful paid quote with unknown required input.
 

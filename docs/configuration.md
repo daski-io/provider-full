@@ -235,6 +235,7 @@ authentication or a reviewed signing proxy as described in the security model.
 | --- | --- |
 | `SUPPLIER_BREAKER_WINDOW_MINUTES` | Rolling supplier circuit-breaker window. |
 | `SUPPLIER_BREAKER_THRESHOLD` | Failures admitted before the supplier circuit opens. |
+| `SUPPLIER_PRICE_TOLERANCE_PERCENT` | Supplier price increase a paid order absorbs, in percent over the supplier price its quote reported (default `10`): a decimal from 0 to 100 with at most two decimals; anything else refuses boot. Each quote records the value in force in the order's supplier-cost ceiling, so a later change never alters an admitted order; spend above the limit is refused before the supplier is called. |
 | `ESCALATION_MAX_HOLD_HOURS` | Maximum paid-task hold for pre-execution review before terminal handling. |
 | `RATE_LIMIT_SERVICE_CAPACITY` | Per-IP service-route burst capacity. |
 | `RATE_LIMIT_SERVICE_PER_MIN` | Per-IP sustained service-route rate. |

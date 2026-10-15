@@ -1,9 +1,10 @@
 import type { Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
+import { config as coreConfig } from "../config.js";
 import { getServiceBySlug } from "../db/queries/services.js";
 import { getAdapter } from "../serviceRegistry/registry.js";
 import { contractHandler } from "../serviceRegistry/retainedHandlers.js";
-import { parseOptionalSupplierCostCeiling } from "../serviceRegistry/supplierCostCeiling.js";
+import { supplierCostCeilingFromQuote } from "../serviceRegistry/supplierCostCeiling.js";
 import type { FulfillmentAdapter, QuoteResult, SupplierCostCeiling } from "../serviceRegistry/types.js";
 import { canonicalHash } from "./canonical.js";
 import type { ProviderStandardRailConfig } from "./config.js";
@@ -57,13 +58,16 @@ export interface QuoteGates {
  * persisted with its exact payer before it is signed. The HTTP router passes
  * its gates: a process that takes no new sales refuses the quote itself,
  * while routing keeps serving funded orders' reads, and a quote is signed
- * only after a fresh proof of the rail contracts.
+ * only after a fresh proof of the rail contracts. A quote whose service
+ * reports a supplier cost records the order's supplier-cost ceiling with the
+ * price tolerance in force (SUPPLIER_PRICE_TOLERANCE_PERCENT).
  */
 export class StandardQuoteService {
   constructor(
     private readonly config: ProviderStandardRailConfig,
     private readonly chainId: number,
     private readonly gates: QuoteGates = {},
+    private readonly supplierPriceTolerancePercent: string = coreConfig.SUPPLIER_PRICE_TOLERANCE_PERCENT,
   ) {}
 
   /** The request validator of a current head; undefined for any other outcome id. */
@@ -165,7 +169,9 @@ export class StandardQuoteService {
   /**
    * The service validates the request and, for dynamic listings, prices it.
    * A fixed listing's amount is the admitted listing price: the service may
-   * decline the request but can never change what the buyer pays.
+   * decline the request but can never change what the buyer pays. For both
+   * pricing modes, the supplier cost it reports becomes the quote's
+   * supplier-cost ceiling.
    */
   private async price(
     adapter: FulfillmentAdapter,
@@ -195,9 +201,13 @@ export class StandardQuoteService {
     if (amount < (10_000n + commissionBps - 1n) / commissionBps) {
       throw new QuoteRefusedError(422, "price");
     }
+    // A service still returning the retired ceiling field means to spend:
+    // selling without the ceiling it meant would refuse that spend after
+    // payment, so the quote is refused like a malformed supplier cost.
+    if ("supplierCostCeiling" in result) throw new QuoteRefusedError(503, "service_unavailable");
     let supplierCostCeiling: SupplierCostCeiling | null;
     try {
-      supplierCostCeiling = parseOptionalSupplierCostCeiling(result.supplierCostCeiling);
+      supplierCostCeiling = supplierCostCeilingFromQuote(result.supplierCost, this.supplierPriceTolerancePercent);
     } catch {
       throw new QuoteRefusedError(503, "service_unavailable");
     }

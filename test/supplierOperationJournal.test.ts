@@ -242,6 +242,28 @@ describe("runSupplierOperation", () => {
     expect(within.execute).toHaveBeenCalledOnce();
   });
 
+  it("admits a supplier price increase within a v2 ceiling's tolerance and refuses one above it", async () => {
+    const ceiling = {
+      kind: "supplier-cost-ceiling-v2" as const,
+      supplier: "sample-supplier",
+      currency: "USD",
+      quotedAmount: "4.25",
+      tolerancePercent: "10",
+    };
+    const within = opArgs({
+      opKey: "renew:asset-1:2027:tolerated",
+      spend: { ceiling, planned: { supplier: "sample-supplier", currency: "USD", amount: "4.675" } },
+    });
+    await expect(runSupplierOperation(within)).resolves.toEqual({ orderId: "o-1" });
+    expect(within.execute).toHaveBeenCalledOnce();
+    const over = opArgs({
+      opKey: "renew:asset-1:2027:over",
+      spend: { ceiling, planned: { supplier: "sample-supplier", currency: "USD", amount: "4.6751" } },
+    });
+    await expect(runSupplierOperation(over)).rejects.toMatchObject({ refusal: "ceiling_exceeded" });
+    expect(over.execute).not.toHaveBeenCalled();
+  });
+
   it("still refuses an over-ceiling spend when the refusal cannot be journaled", async () => {
     h.failFailedWrite = true;
     const args = opArgs({ spend: {

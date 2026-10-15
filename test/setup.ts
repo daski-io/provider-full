@@ -67,6 +67,7 @@ const CLEARED_TEST_ENV: string[] = [
   "MIGRATION_DATABASE_URL",
   "POSTMARK_SERVER_TOKEN",
   "POSTMARK_TEST_MODE",
+  "SUPPLIER_PRICE_TOLERANCE_PERCENT",
 ];
 
 for (const [key, value] of Object.entries(PINNED_TEST_ENV)) {

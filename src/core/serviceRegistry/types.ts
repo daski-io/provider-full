@@ -6,6 +6,7 @@ export {
   admittedSupplierCostCeiling,
   assertSupplierSpendWithinCeiling,
   SupplierCostCeilingError,
+  supplierCostLimit,
   type PlannedSupplierSpend,
   type SupplierCostCeilingRefusal,
 } from "./supplierCostCeiling.js";

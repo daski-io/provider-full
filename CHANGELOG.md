@@ -149,6 +149,19 @@ All notable changes to this project will be documented here.
   planned supplier operation above it, for another supplier or currency, or
   without an admitted ceiling before the supplier is called, closing that
   operation key as `execute.not_applied`.
+- Supplier-cost ceilings carry a price tolerance. A quote reports the
+  supplier's current price as `QuoteResult.supplierCost`, which replaces
+  `supplierCostCeiling` (services no longer build ceilings), for fixed and
+  dynamic listings alike; core records it as a `supplier-cost-ceiling-v2`
+  with the `SUPPLIER_PRICE_TOLERANCE_PERCENT` in force (default 10, 0 to 100
+  with at most two decimals, parsed strictly at boot), so a later change
+  never alters an admitted order. A planned spend is admitted while
+  `amount * 100 <= quotedAmount * (100 + tolerancePercent)`, in exact
+  decimal arithmetic, and refused above it before the supplier is called
+  (`SupplierCostCeilingError`, as before); `supplierCostLimit` returns the
+  limit as a decimal string. Ceilings earlier releases recorded
+  (`supplier-cost-ceiling-v1`) keep their exact meaning, and a quote that
+  still returns the retired field is refused as unavailable.
 - Dispatch and status answers carry a signed `operations` observation from
   a persisted semantic projection and revision (core migration 004, all-null
   at revision 0), freshly stamped with the database clock and signed per

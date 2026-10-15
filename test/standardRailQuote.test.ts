@@ -58,10 +58,7 @@ function syntheticAdapter(overrides: Partial<FulfillmentAdapter> = {}): Fulfillm
       amount: skillId === fixedOutcome.skillId ? 250_000n : 1_234_567n,
       currency: "USDC" as const,
       ...(skillId === dynamicOutcome.skillId ? {
-        supplierCostCeiling: {
-          kind: "supplier-cost-ceiling-v1" as const, supplier: "synthetic-supplier",
-          currency: "USD", maximumAmount: "4.25",
-        },
+        supplierCost: { supplier: "synthetic-supplier", currency: "USD", amount: "4.25" },
       } : {}),
     })),
     ...overrides,
@@ -87,7 +84,17 @@ afterAll(async () => {
 
 beforeEach(async () => {
   h.adapter = syntheticAdapter();
-  await database.pool.query("DELETE FROM standard_provider_quotes");
+  // A disposable reset: a provider quote is otherwise kept for its whole
+  // first-dispatch window (core migration 016).
+  const client = await database.pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SET LOCAL session_replication_role = replica");
+    await client.query("DELETE FROM standard_provider_quotes");
+    await client.query("COMMIT");
+  } finally {
+    client.release();
+  }
   await database.pool.query("UPDATE services SET is_active=true");
 });
 
@@ -189,6 +196,39 @@ describe("fixed readiness quotes (C-T01)", () => {
     expect(status).toBe(200);
     await acceptProviderQuote(body, expectationFor(fixedOutcome, null));
     expect((await quoteRows())[0]?.payer).toBeNull();
+  });
+
+  it("records a fixed listing's reported supplier cost with the configured price tolerance", async () => {
+    h.adapter = syntheticAdapter({
+      quote: vi.fn(async () => ({
+        ok: true as const, amount: 250_000n, currency: "USDC" as const,
+        supplierCost: { supplier: "synthetic-supplier", currency: "USD", amount: "1.20" },
+      })),
+    });
+    const app = express();
+    app.use("/standard-rail", ...standardRailJsonIngress(), createStandardRailRouter(
+      { CHAIN_ID, SUPPLIER_PRICE_TOLERANCE_PERCENT: "2.5" } as Config, fixtureConfig(), undefined,
+      { salesAdmission: async () => ({ status: "open" as const }), contractIntegrity: async () => undefined },
+    ));
+    const local = app.listen(0, "127.0.0.1");
+    await once(local, "listening");
+    try {
+      const answered = await fetch(`http://127.0.0.1:${(local.address() as AddressInfo).port}/standard-rail/quote`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ request: await quoteEnvelope() }),
+      });
+      expect(answered.status).toBe(200);
+      expect(await quoteRows()).toEqual([expect.objectContaining({
+        pricing_mode: "fixed",
+        gross: "250000",
+        supplier_cost_ceiling: {
+          kind: "supplier-cost-ceiling-v2", supplier: "synthetic-supplier", currency: "USD",
+          quotedAmount: "1.20", tolerancePercent: "2.5",
+        },
+      })]);
+    } finally {
+      await new Promise<void>((resolve) => local.close(() => resolve()));
+    }
   });
 
   it("keeps the listing price even when asked twice, and refuses a drifted service price", async () => {
@@ -390,7 +430,7 @@ describe("service availability and capacity stop new quotes", () => {
 });
 
 describe("dynamic quotes", () => {
-  it("prices from the service, binds a validated supplier-cost ceiling and lives 180 s", async () => {
+  it("prices from the service, records its supplier cost as a v2 ceiling and lives 180 s", async () => {
     const { status, body } = await postQuote(await quoteEnvelope({ outcome: dynamicOutcome }));
     expect(status).toBe(200);
     const accepted = await acceptProviderQuote(body, expectationFor(dynamicOutcome, lowerPayer));
@@ -399,20 +439,24 @@ describe("dynamic quotes", () => {
     expect((await quoteRows())[0]).toEqual(expect.objectContaining({
       pricing_mode: "dynamic",
       supplier_cost_ceiling: {
-        kind: "supplier-cost-ceiling-v1", supplier: "synthetic-supplier", currency: "USD", maximumAmount: "4.25",
+        kind: "supplier-cost-ceiling-v2", supplier: "synthetic-supplier", currency: "USD",
+        quotedAmount: "4.25", tolerancePercent: "10",
       },
     }));
   });
 
-  it("refuses a malformed ceiling and an unreleasable amount", async () => {
-    h.adapter = syntheticAdapter({
-      quote: vi.fn(async () => ({
-        ok: true as const, amount: 1_000n, currency: "USDC" as const,
-        supplierCostCeiling: { kind: "supplier-cost-ceiling-v1", supplier: "x", currency: "usd", maximumAmount: "1e3" } as never,
-      })),
-    });
-    expect((await postQuote(await quoteEnvelope({ outcome: dynamicOutcome }))).body)
-      .toEqual({ error: "quote_unavailable", reason: "service_unavailable" });
+  it("refuses a malformed supplier cost, the retired ceiling field and an unreleasable amount", async () => {
+    for (const reported of [
+      { supplierCost: { supplier: "x", currency: "usd", amount: "1e3" } },
+      { supplierCost: { supplier: "synthetic-supplier", currency: "USD", amount: "4.25", maximumAmount: "5" } },
+      { supplierCostCeiling: { kind: "supplier-cost-ceiling-v1", supplier: "x", currency: "USD", maximumAmount: "4.25" } },
+    ]) {
+      h.adapter = syntheticAdapter({
+        quote: vi.fn(async () => ({ ok: true as const, amount: 1_000n, currency: "USDC" as const, ...reported } as never)),
+      });
+      expect((await postQuote(await quoteEnvelope({ outcome: dynamicOutcome }))).body)
+        .toEqual({ error: "quote_unavailable", reason: "service_unavailable" });
+    }
     h.adapter = syntheticAdapter({
       quote: vi.fn(async () => ({ ok: true as const, amount: 19n, currency: "USDC" as const })),
     });
