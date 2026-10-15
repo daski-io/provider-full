@@ -1,6 +1,7 @@
 import { purgeExpiredAuthState } from "../db/queries/authSecurity.js";
 import { purgeExpiredSessions } from "../db/queries/sessions.js";
-import { logError } from "../logger.js";
+import { logError, logInfo } from "../logger.js";
+import { workerCycleFailed, workerCycleSucceeded } from "../observability/workerConditions.js";
 import { failWorker, heartbeatWorker, setWorkerStatus } from "../health.js";
 import { classifyStaleConfirmationExecutions } from "../db/queries/confirmationIntents.js";
 import { expireDestructiveAssetActions } from "../standardRail/actionCompletion.js";
@@ -34,12 +35,17 @@ export function startAuthSecurityCleanup(): void {
     if (inFlight) return;
     inFlight = runAuthSecurityCleanup();
     void inFlight
-      .then(() => heartbeatWorker("auth-cleanup"))
+      .then(() => {
+        heartbeatWorker("auth-cleanup");
+        if (workerCycleSucceeded("auth-cleanup")) logInfo("authentication security cleanup recovered", {});
+      })
       .catch((error) => {
         failWorker("auth-cleanup");
-        logError("authentication security cleanup failed", {
-          error: (error as Error).message,
-        });
+        if (workerCycleFailed("auth-cleanup", error)) {
+          logError("authentication security cleanup failed", {
+            error: (error as Error).message,
+          });
+        }
       })
       .finally(() => {
         inFlight = null;

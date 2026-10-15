@@ -17,7 +17,8 @@ import { getService } from "../serviceRegistry/registry.js";
 import { redactSensitiveText } from "../security/redaction.js";
 import { pool } from "../db/pool.js";
 import { failWorker, heartbeatWorker, setWorkerStatus } from "../health.js";
-import { logError } from "../logger.js";
+import { logError, logInfo } from "../logger.js";
+import { workerCycleFailed, workerCycleSucceeded } from "../observability/workerConditions.js";
 
 export const EMAIL_INGRESS_QUEUE = "email-ingress";
 const LEASE_SECONDS = 300;
@@ -36,11 +37,16 @@ export function startEmailIngressWorker(): void {
   const startTick = () => {
     if (tickInFlight) return;
     tickInFlight = tick()
+      .then(() => {
+        if (workerCycleSucceeded("email-ingress")) logInfo("email ingress worker recovered", {});
+      })
       .catch((error) => {
         failWorker("email-ingress");
-        logError("email ingress worker failed", {
-          error: (error as Error).message,
-        });
+        if (workerCycleFailed("email-ingress", error)) {
+          logError("email ingress worker failed", {
+            error: (error as Error).message,
+          });
+        }
       })
       .finally(() => {
         tickInFlight = null;

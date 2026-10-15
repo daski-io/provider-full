@@ -13,6 +13,7 @@ import { getServiceById } from "../db/queries/services.js";
 import { getSkillByServiceAndSkillId } from "../db/queries/skills.js";
 import { failWorker, heartbeatWorker, setWorkerStatus } from "../health.js";
 import { errorExtra, logError, logInfo } from "../logger.js";
+import { workerCycleFailed, workerCycleSucceeded } from "../observability/workerConditions.js";
 import { executableDefinitionHash } from "../serviceRegistry/executableContracts.js";
 import { serviceInvariantFailures } from "../serviceRegistry/readiness.js";
 import { getAdapter, getService } from "../serviceRegistry/registry.js";
@@ -199,9 +200,10 @@ export function startPaidFulfillmentWorker(config: ProviderStandardRailConfig): 
     try {
       await runPaidFulfillmentCycle(config, polls % SWEEP_EVERY_POLLS === 0);
       heartbeatWorker(PAID_FULFILLMENT_WORKER);
+      if (workerCycleSucceeded(PAID_FULFILLMENT_WORKER)) logInfo("Paid fulfillment worker recovered", {});
     } catch (error) {
       failWorker(PAID_FULFILLMENT_WORKER);
-      logError("Paid fulfillment worker failed", errorExtra(error));
+      if (workerCycleFailed(PAID_FULFILLMENT_WORKER, error)) logError("Paid fulfillment worker failed", errorExtra(error));
     } finally {
       polls += 1;
       running = null;

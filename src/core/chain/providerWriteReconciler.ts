@@ -1,5 +1,6 @@
 import { failWorker, heartbeatWorker, setWorkerStatus } from "../health.js";
 import { errorExtra, logError, logInfo, logWarn } from "../logger.js";
+import { workerCycleFailed, workerCycleSucceeded } from "../observability/workerConditions.js";
 import { withCycleLease } from "../db/cycleLease.js";
 import { CHAIN_MODE_MOCK } from "./client.js";
 import { reconcileProviderNonceGap } from "./providerWriteCoordinator.js";
@@ -68,10 +69,14 @@ export async function runProviderWriteReconciliation(): Promise<void> {
   ownCycleHealthy = result === "clear";
   if (result === "clear") {
     heartbeatWorker(WORKER);
+    if (workerCycleSucceeded(WORKER)) logInfo("Provider wallet write reconciliation is clear again", {});
     return;
   }
   failWorker(WORKER);
-  logWarn("Provider wallet nonce gap recovery is active", { result });
+  // Logged when recovery starts or changes, not on every cycle it continues.
+  if (workerCycleFailed(WORKER, Object.assign(new Error(result), { name: `nonce_gap_${result}` }))) {
+    logWarn("Provider wallet nonce gap recovery is active", { result });
+  }
 }
 
 export function startProviderWriteReconciler(): void {
@@ -105,7 +110,7 @@ export function startProviderWriteReconciler(): void {
     inFlight = runProviderWriteReconciliation();
     void inFlight.catch((error) => {
       failWorker(WORKER);
-      logError("Provider wallet write reconciliation failed", errorExtra(error));
+      if (workerCycleFailed(WORKER, error)) logError("Provider wallet write reconciliation failed", errorExtra(error));
     }).finally(() => {
       inFlight = null;
     });

@@ -4,6 +4,7 @@ import { pool } from "./pool.js";
 import { inTransaction } from "./queryable.js";
 import { failWorker, heartbeatWorker, setWorkerStatus } from "../health.js";
 import { purgeExpiredEphemeralTransactions } from "./ephemeralRetention.js";
+import { workerCycleFailed, workerCycleSucceeded } from "../observability/workerConditions.js";
 import { ASSET_DELIVERY_ADMISSION_BOUND_SECONDS } from "../standardRail/assetDeliveryAdmission.js";
 
 // Frequent no-op sweeps keep both retention lag and readiness evidence
@@ -272,12 +273,15 @@ export async function runRetention(): Promise<Record<string, number>> {
   );
   await remove("rateBuckets", `DELETE FROM rate_limit_buckets WHERE expires_at < now()`, []);
   counts.ephemeralTransactions = await purgeExpiredEphemeralTransactions();
-  logInfo("Retention sweep completed", counts);
+  // An empty sweep is the normal case every five minutes: only removals
+  // are worth a log line.
+  if (Object.values(counts).some((count) => count > 0)) logInfo("Retention sweep completed", counts);
+  if (workerCycleSucceeded("retention")) logInfo("Retention sweep recovered", {});
   heartbeatWorker("retention");
   return counts;
 }
 
 function reportFailure(error: unknown): void {
   failWorker("retention");
-  logError("Retention sweep failed", { error: (error as Error).message });
+  if (workerCycleFailed("retention", error)) logError("Retention sweep failed", { error: (error as Error).message });
 }

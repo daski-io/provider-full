@@ -42,7 +42,8 @@ vi.mock("../src/core/db/queries/services.js", () => ({
   listActiveServices: h.listServices,
   setServiceOnChainId: h.setOnChainId,
 }));
-vi.mock("../src/core/events/emitter.js", () => ({ emitEvent: vi.fn() }));
+const events = vi.hoisted(() => ({ emitEvent: vi.fn() }));
+vi.mock("../src/core/events/emitter.js", () => ({ emitEvent: events.emitEvent }));
 vi.mock("../src/core/chain/signerLease.js", () => ({
   withProviderSignerLease: h.lease,
 }));
@@ -183,6 +184,20 @@ describe("service registry URI healing (live chain path)", () => {
     stubChain(() => chainEntry({ serviceURI: CANONICAL_URI }));
     await reconcileServiceRegistrations();
     expect(h.writeContract).not.toHaveBeenCalled();
+  });
+
+  it("audits a link once when it changes and writes no event for an unchanged verification", async () => {
+    stubChain(() => chainEntry({ serviceURI: CANONICAL_URI }));
+    events.emitEvent.mockClear();
+    await reconcileServiceRegistrations();
+    expect(events.emitEvent.mock.calls.map(([event]) => event.type)).toEqual(["chain.service_registered"]);
+    expect(events.emitEvent).toHaveBeenCalledWith(expect.objectContaining({
+      source: "chain", payload: expect.objectContaining({ onChainId: SERVICE_ID, serviceURI: CANONICAL_URI }),
+    }));
+    events.emitEvent.mockClear();
+    await reconcileServiceRegistrations();
+    await reconcileServiceRegistrations();
+    expect(events.emitEvent).not.toHaveBeenCalled();
   });
 
   it("refuses to heal when the payout wallet drifted", async () => {

@@ -288,6 +288,14 @@ All notable changes to this project will be documented here.
   through the whole body read on both the fetch and the pinned path; a caller
   abort is `OutboundAbortedError` and never opens the circuit.
 
+- Recurring work logs state transitions instead of every poll: polling
+  workers log a failure when it starts or changes and their recovery once;
+  the registration reconciler no longer writes a mandatory
+  `chain.service_registration_verified` audit row per service every cycle
+  (it audits `chain.service_registered` only when a link changes, records
+  each verdict for the operations summary and logs a change of verdict);
+  empty retention sweeps are silent.
+
 ### Fixed
 
 - The provider-write reconciler stays ready while another replica's live

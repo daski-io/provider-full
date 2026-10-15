@@ -10,7 +10,8 @@ import {
   OPERATOR_ESCALATION_QUEUE,
 } from "../../db/queries/escalations.js";
 import { failWorker, heartbeatWorker, setWorkerStatus } from "../../health.js";
-import { logError } from "../../logger.js";
+import { logError, logInfo } from "../../logger.js";
+import { workerCycleFailed, workerCycleSucceeded } from "../../observability/workerConditions.js";
 import { redactSensitiveText } from "../../security/redaction.js";
 import { processEscalation } from "./escalationRunner.js";
 import { reconcileStalledAutomationReviews } from "../../operations/stalledAutomationReviews.js";
@@ -90,11 +91,14 @@ async function tick(): Promise<void> {
     }
     await reconcileStalledAutomationReviews();
     heartbeatWorker("operator-escalation");
+    if (workerCycleSucceeded("operator-escalation")) logInfo("operator escalation worker recovered", {});
   } catch (error) {
     failWorker("operator-escalation");
-    logError("operator escalation worker failed", {
-      error: redactSensitiveText((error as Error).message).slice(0, 1_000),
-    });
+    if (workerCycleFailed("operator-escalation", error)) {
+      logError("operator escalation worker failed", {
+        error: redactSensitiveText((error as Error).message).slice(0, 1_000),
+      });
+    }
   } finally {
     running = null;
     if (!stopping) {

@@ -24,7 +24,8 @@ import {
 } from "../engine/escalationSnapshot.js";
 import { transitionTask } from "../engine/taskManager.js";
 import { failWorker, heartbeatWorker, setWorkerStatus } from "../health.js";
-import { errorExtra, logError } from "../logger.js";
+import { errorExtra, logError, logInfo } from "../logger.js";
+import { workerCycleFailed, workerCycleSucceeded } from "../observability/workerConditions.js";
 import { assetActionHandler, contractHandler } from "../serviceRegistry/retainedHandlers.js";
 import { admittedActionDefinition } from "./actionDefinitions.js";
 import { executeAssetAction } from "./actionExecution.js";
@@ -204,9 +205,10 @@ export function startStandardReviewResolutionWorker(
         }
       }
       heartbeatWorker("standard-review-resolution");
+      if (workerCycleSucceeded("standard-review-resolution")) logInfo("Standard review worker recovered", {});
     } catch (error) {
       failWorker("standard-review-resolution");
-      logError("Standard review worker failed", errorExtra(error));
+      if (workerCycleFailed("standard-review-resolution", error)) logError("Standard review worker failed", errorExtra(error));
     } finally {
       running = null;
       if (!stopping) { timer = setTimeout(start, 5_000); timer.unref(); }

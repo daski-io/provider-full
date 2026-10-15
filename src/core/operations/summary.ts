@@ -1,3 +1,4 @@
+import { getRegistrationObservations } from "../chain/registrationObservability.js";
 import { config } from "../config.js";
 import { providerAddress, publicClient } from "../chain/client.js";
 import { pool } from "../db/pool.js";
@@ -38,5 +39,8 @@ export async function getOperationsSummary(): Promise<Record<string, unknown>> {
     getProviderWalletOperationalSummary(),
     getDurableQueueMetrics(),
   ]);
-  return { reputationOutcomes, providerWrites, providerWallet, queues };
+  return {
+    reputationOutcomes, providerWrites, providerWallet, queues,
+    serviceRegistration: getRegistrationObservations(),
+  };
 }

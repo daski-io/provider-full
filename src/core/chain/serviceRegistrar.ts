@@ -9,6 +9,7 @@ import {
 import { emitEvent } from "../events/emitter.js";
 import { redactSensitiveText } from "../security/redaction.js";
 import { logWarn } from "../logger.js";
+import { observeRegistration } from "./registrationObservability.js";
 import { RegistrationCycleBudget } from "./registrationCycleBudget.js";
 import { detachedCycle, type ReconcileCycle } from "./reconcileCycle.js";
 import { expectedServiceWallet, serviceUriFor } from "./registeredService.js";
@@ -30,8 +31,9 @@ function safeRegistrationError(error: unknown): string {
 //   1. Derive the expected serviceId (pure helper on the contract).
 //   2. Check whether it already exists on-chain (idempotent reboot).
 //   3. If not, submit registerService(...) from the provider wallet.
-//   4. Write the resulting bytes32 back to services.on_chain_id.
-//   5. Emit a chain.service_registered event for the platform log.
+//   4. Audit a changed link (chain.service_registered), then write the
+//      resulting bytes32 back to services.on_chain_id.
+//   5. Record the verdict; a change of verdict, not every cycle, is logged.
 //
 // Re-registration on `version` bump is handled by inserting a new
 // services row with the new version (the registry seeder respects the
@@ -65,6 +67,8 @@ const verifiedServices = new Map<string, {
 }>();
 let reconcileTimer: ReturnType<typeof setInterval> | null = null;
 let reconciliationInFlight: Promise<BootstrapResult> | null = null;
+/** Errors a service's own verdict already recorded, so the cycle does not record them twice. */
+const serviceObservedErrors = new WeakSet<object>();
 
 export function getServiceRegistrationHealth(): ServiceRegistrationHealth {
   return { ...registrationHealth };
@@ -127,7 +131,10 @@ export async function bootstrapServiceRegistry(
       });
       result.already_on_chain++;
     }
-    if (isCurrent()) registrationHealth = { ok: true, checkedAt: new Date(), error: null };
+    if (isCurrent()) {
+      registrationHealth = { ok: true, checkedAt: new Date(), error: null };
+      observeRegistration("cycle", null);
+    }
     return result;
   }
 
@@ -150,30 +157,40 @@ export async function bootstrapServiceRegistry(
         serviceWallet: expectedServiceWallet(service),
         checkedAt: new Date(), ok: false, error: safeRegistrationError(error),
       });
+      observeRegistration(service.id, safeRegistrationError(error), service);
+      if (error && typeof error === "object") serviceObservedErrors.add(error);
       throw error;
     }
     if (!before || !before.equals(hexToBuffer(onChainId))) {
+      // A changed link is audited before it is written, so a failed
+      // mandatory insert is retried by the next cycle; an unchanged
+      // verification is no audit event.
+      await emitEvent({
+        serviceId: service.id,
+        source: "chain",
+        type: "chain.service_registered",
+        message: `Linked ${service.slug} v${service.version} to ServiceRegistry`,
+        payload: {
+          slug: service.slug,
+          version: service.version,
+          onChainId,
+          serviceURI: serviceUriFor(service),
+        },
+      });
+      if (!isCurrent()) return result;
       await setServiceOnChainId(service.id, hexToBuffer(onChainId));
       result.registered++;
     } else {
       result.already_on_chain++;
     }
     if (!isCurrent()) return result;
-    await emitEvent({
-      serviceId: service.id,
-      source: "chain",
-      type: "chain.service_registration_verified",
-      message: `Verified ${service.slug} v${service.version} on ServiceRegistry`,
-      payload: {
-        slug: service.slug,
-        version: service.version,
-        onChainId,
-        serviceURI: serviceUriFor(service),
-      },
-    });
+    observeRegistration(service.id, null, service);
   }
 
-  if (isCurrent()) registrationHealth = { ok: true, checkedAt: new Date(), error: null };
+  if (isCurrent()) {
+    registrationHealth = { ok: true, checkedAt: new Date(), error: null };
+    observeRegistration("cycle", null);
+  }
   return result;
 }
 
@@ -240,10 +257,12 @@ export function reconcileServiceRegistrations(): Promise<BootstrapResult> {
           checkedAt: new Date(),
           error: safeRegistrationError(error),
         };
+        // Logged on a change of verdict only; a service's own failure was
+        // recorded with that service.
+        if (!(error && typeof error === "object" && serviceObservedErrors.has(error))) {
+          observeRegistration("cycle", safeRegistrationError(error));
+        }
       }
-      logWarn("Service registration reconcile failed", {
-        error: safeRegistrationError(error),
-      });
       throw error;
     })
     .finally(() => {

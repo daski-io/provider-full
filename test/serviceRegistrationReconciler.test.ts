@@ -39,6 +39,7 @@ vi.mock("../src/core/logger.js", () => ({
   logError: vi.fn(),
 }));
 
+import { getRegistrationObservations } from "../src/core/chain/registrationObservability.js";
 import {
   getServiceRegistrationAuthorization,
   getServiceRegistrationHealth,
@@ -136,7 +137,7 @@ describe("service registration reconciliation", () => {
     releaseFirst([]);
   });
 
-  it("logs every failed cycle instead of failing silently", async () => {
+  it("logs a cycle that starts failing once, never each unchanged failure, and its recovery", async () => {
     h.listServices.mockRejectedValueOnce(new Error("pg connection refused"));
     await expect(reconcileServiceRegistrations()).rejects.toThrow("pg connection refused");
     expect(getServiceRegistrationHealth()).toMatchObject({
@@ -147,6 +148,16 @@ describe("service registration reconciliation", () => {
       "Service registration reconcile failed",
       expect.objectContaining({ error: expect.stringContaining("pg connection refused") }),
     );
+    h.listServices.mockRejectedValueOnce(new Error("pg connection refused"));
+    await expect(reconcileServiceRegistrations()).rejects.toThrow("pg connection refused");
+    expect(h.logWarn.mock.calls.filter(([message]) => message === "Service registration reconcile failed"))
+      .toHaveLength(1);
+    // Health still reflects every cycle; only the log is a transition.
+    await reconcileServiceRegistrations();
+    expect(getServiceRegistrationHealth()).toMatchObject({ ok: true });
+    expect(getRegistrationObservations()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ scope: "cycle", error: null }),
+    ]));
   });
 
   it("a superseded cycle's late failure cannot overwrite newer health", async () => {
