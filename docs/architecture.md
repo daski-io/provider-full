@@ -372,6 +372,12 @@ open admission counts as live work for an owner change for ten minutes after
 its last renewal, far longer than the bounded outbound call that follows a
 renewal.
 
+Admissions are lock bookkeeping, not evidence. The retention worker removes
+one that finished, or was revoked, more than `DURABLE_JOB_RETENTION_DAYS`
+ago and is far outside that live window. It never removes an admission left
+open (its send never resolved), nor one whose asset still has a nonterminal
+asset action or owner-only order, or is under a legal hold.
+
 ### Owner changes
 
 The starter ships no path that changes an owner, and the architecture gate

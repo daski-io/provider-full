@@ -4,6 +4,7 @@ import { pool } from "./pool.js";
 import { inTransaction } from "./queryable.js";
 import { failWorker, heartbeatWorker, setWorkerStatus } from "../health.js";
 import { purgeExpiredEphemeralTransactions } from "./ephemeralRetention.js";
+import { ASSET_DELIVERY_ADMISSION_BOUND_SECONDS } from "../standardRail/assetDeliveryAdmission.js";
 
 // Frequent no-op sweeps keep both retention lag and readiness evidence
 // bounded; indexed predicates make this safe across replicas.
@@ -249,6 +250,26 @@ export async function runRetention(): Promise<Record<string, number>> {
     );
     counts.providerSignedTransactions = providerWrites.rowCount ?? 0;
   });
+  // Delivery admissions are lock bookkeeping, not evidence. One goes only
+  // once its attempt finished, or it was revoked, longer ago than the job
+  // retention and far outside the live bound an owner change counts. An
+  // admission left open (its send never resolved) stays, and none goes
+  // while its asset has nonterminal owner-only work or a legal hold.
+  await remove(
+    "assetDeliveryAdmissions",
+    `DELETE FROM asset_delivery_admissions a
+      WHERE (a.finished_at < now() - ($1 * interval '1 day')
+          OR (a.finished_at IS NULL AND a.revoked_at < now() - ($1 * interval '1 day')))
+        AND a.renewed_at < now() - make_interval(secs => $2)
+        AND NOT EXISTS (SELECT 1 FROM active_legal_hold_targets h WHERE h.asset_id = a.asset_id)
+        AND NOT EXISTS (
+          SELECT 1 FROM standard_asset_action_executions x
+           WHERE x.provider_asset_id = a.asset_id AND x.state IN ('claimed','staged','executing','attention'))
+        AND NOT EXISTS (
+          SELECT 1 FROM transactions t
+           WHERE t.asset_id = a.asset_id AND t.status IN ('submitted','working','input-required'))`,
+    [config.DURABLE_JOB_RETENTION_DAYS, ASSET_DELIVERY_ADMISSION_BOUND_SECONDS],
+  );
   await remove("rateBuckets", `DELETE FROM rate_limit_buckets WHERE expires_at < now()`, []);
   counts.ephemeralTransactions = await purgeExpiredEphemeralTransactions();
   logInfo("Retention sweep completed", counts);

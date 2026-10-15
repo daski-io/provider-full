@@ -18,6 +18,7 @@ const { assetWire, lower, payerA, payerB, startAssetHarness } = await import("./
 const delivery = await import("../src/core/standardRail/assetDeliveryAdmission.js");
 const { sendEmail } = await import("../src/core/email/postmarkOutbound.js");
 const { AssetOwnerChangedError } = await import("../src/core/standardRail/assetOwnerFence.js");
+const { runRetention } = await import("../src/core/db/retention.js");
 
 // F-T08 stale delivery admission against PostgreSQL: a delivery of asset
 // information is admitted under the asset owner fence for the owner it
@@ -212,5 +213,53 @@ describe("asset delivery admission (F-T08)", () => {
       assetWire.pool = shared;
       await single.end();
     }
+  });
+});
+
+// Delivery admissions are bookkeeping with bounded retention: a finished or
+// revoked one goes after the job retention, never while it could still be
+// live, while its send never resolved, or while its asset has open
+// owner-only work or a legal hold.
+describe("asset delivery admission retention", () => {
+  async function aged(assetId: string, state: "finished" | "revoked" | "open", days: number): Promise<string> {
+    const { admission } = await delivery.admitAssetDelivery({ assetId, purpose: "note.changed" });
+    if (state === "finished") await delivery.finishAssetDeliveryAdmission(admission, "delivered");
+    if (state === "revoked") await inFence(assetId, (db) => delivery.revokeAssetDeliveryAdmissions(db, assetId));
+    await harness.database.pool.query(
+      `UPDATE asset_delivery_admissions SET admitted_at=now() - make_interval(days => $2),
+          renewed_at=now() - make_interval(days => $2),
+          finished_at=CASE WHEN finished_at IS NULL THEN NULL ELSE now() - make_interval(days => $2) END,
+          revoked_at=CASE WHEN revoked_at IS NULL THEN NULL ELSE now() - make_interval(days => $2) END
+        WHERE id=$1`,
+      [admission.id, days],
+    );
+    return admission.id;
+  }
+
+  it("purges finished and revoked admissions after retention and keeps every one still needed", async () => {
+    const idle = await harness.ownedNote(payerA, { identifier: "note-idle" });
+    const busy = await harness.ownedNote(payerA, { identifier: "note-busy" });
+    const held = await harness.ownedNote(payerA, { identifier: "note-held" });
+    const expired = [await aged(idle, "finished", 31), await aged(idle, "revoked", 31)];
+    const kept = [
+      await aged(idle, "finished", 2),
+      await aged(idle, "open", 31),
+      await aged(busy, "finished", 31),
+      await aged(held, "finished", 31),
+    ];
+    await harness.database.pool.query(
+      `INSERT INTO transactions (id,service_id,skill_id,status,asset_id) VALUES ('task-open-owner-work',$1,'touch-note','working',$2)`,
+      [harness.serviceId, busy],
+    );
+    await harness.database.pool.query(
+      `INSERT INTO legal_holds (id,scope_type,scope_id,reason,placed_by)
+       VALUES (gen_random_uuid(),'asset',$1,'daski:v1:synthetic-hold','test')`,
+      [held],
+    );
+    const counts = await runRetention();
+    expect(counts.assetDeliveryAdmissions).toBe(2);
+    const remaining = (await rows("SELECT id::text FROM asset_delivery_admissions")).map((row) => row.id).sort();
+    expect(remaining).toEqual([...kept].sort());
+    expect(remaining).not.toContain(expired[0]);
   });
 });

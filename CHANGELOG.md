@@ -305,6 +305,10 @@ All notable changes to this project will be documented here.
   is answered with the order's settled `failed` state (`asset_owner_changed`,
   deliverable withheld) and commits that outcome, as dispatch does, instead
   of `503 lifecycle_unavailable` until the buyer retried.
+- Asset delivery admissions no longer accumulate forever: the retention
+  worker removes finished or revoked ones after `DURABLE_JOB_RETENTION_DAYS`,
+  never one left open, one that could still count as live, or one whose
+  asset has nonterminal owner-only work or a legal hold.
 
 ### Removed
 
