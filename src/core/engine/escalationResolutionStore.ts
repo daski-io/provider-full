@@ -23,6 +23,7 @@ import {
   validateAndMergeReviewerEdits,
   type SnapshotEvidenceRow,
 } from "./escalationSnapshot.js";
+import { assertReviewedRequestAdmitted } from "./escalationRequest.js";
 
 export const ESCALATION_RESOLUTION_QUEUE = "escalation-resolution";
 
@@ -91,8 +92,9 @@ export async function createPreExecuteEscalation(args: {
       customer_id: string | null;
       status: string;
       canonical_request_hash: Buffer | null;
+      standard_order_id: string | null;
     }>(
-      `SELECT service_id, skill_id, customer_id, status, canonical_request_hash
+      `SELECT service_id, skill_id, customer_id, status, canonical_request_hash, standard_order_id
          FROM transactions WHERE id = $1 FOR UPDATE`,
       [args.transaction.id],
     );
@@ -101,12 +103,7 @@ export async function createPreExecuteEscalation(args: {
         task.skill_id !== args.skill.skill_id || task.customer_id !== args.transaction.customer_id) {
       throw new Error("transaction changed before escalation snapshot was persisted");
     }
-    if (task.canonical_request_hash) {
-      const persistedHash = `0x${task.canonical_request_hash.toString("hex")}`;
-      if (persistedHash !== snapshot.requestHash) {
-        throw new Error("canonical request changed before escalation snapshot was persisted");
-      }
-    }
+    await assertReviewedRequestAdmitted(db, { ...task, id: args.transaction.id }, args.requestData);
     if (args.claimStart) {
       if (!await args.claimStart(db)) throw new EscalationStartRefusedError();
     } else if (task.status === "submitted") {
@@ -123,6 +120,8 @@ export async function createPreExecuteEscalation(args: {
     } else if (task.status !== "working") {
       throw new Error(`cannot escalate transaction in ${task.status}`);
     }
+    // The review's target id is the escalation id as text: one parameter
+    // bound to both the uuid and the text column would be refused.
     const result = await db.query<PreExecuteEscalationRow>(
       `INSERT INTO escalations (
          id, transaction_id, question, source, status,
@@ -132,7 +131,7 @@ export async function createPreExecuteEscalation(args: {
          evidence, available_actions, review_due_at
        ) VALUES (
          $1,$2,$3,'pre_execute','pending',$4,$5,$6,1,$7,$8,$9,
-         'pre_execute_resolution','warning',$10,'pre_execute_escalation',$1,
+         'pre_execute_resolution','warning',$10,'pre_execute_escalation',$13,
          'A pre-execution policy rule requires a human decision before supplier dispatch.',
          $11::jsonb,$12::jsonb,now() + interval '24 hours'
        )
@@ -176,6 +175,7 @@ export async function createPreExecuteEscalation(args: {
             effect: "Rejects through the durable resolution pipeline.",
           },
         ]),
+        id,
       ],
     );
     await recordMandatoryAudit(db, {

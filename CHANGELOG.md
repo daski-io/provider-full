@@ -285,6 +285,15 @@ All notable changes to this project will be documented here.
   new intent or transaction, accepted evidence is replayed exactly after
   expiry, unaccepted evidence is refreshed over the original splitter
   transactions, and gateway rate limits are retried with bounded backoff.
+- A pre-execute review opens again. Its INSERT no longer binds one parameter
+  to both a uuid and a text column, which PostgreSQL refused for every review,
+  free tasks included; and a funded order's review is bound to the provider
+  request its dispatch verified (the claim's request hash), not compared with
+  the gateway's own canonical request hash, which never matched, so a
+  fail-closed or flagged paid order failed as never started instead of
+  waiting for its reviewer. The review still wins the order's start fence in
+  its own transaction, so an order another executor started is never
+  escalated.
 
 ### Removed
 

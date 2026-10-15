@@ -53,6 +53,11 @@ const { enqueueUnqueuedAdmissions, resumeAdmittedOrder, runPaidFulfillmentCycle 
   await import("../src/core/standardRail/paidFulfillmentWorker.js");
 const { claimDurableJob, enqueueDurableJob } = await import("../src/core/db/queries/durableJobs.js");
 const { isInfrastructureFailure } = await import("../src/core/standardRail/dispatchExecution.js");
+const { createPreExecuteEscalation } = await import("../src/core/engine/escalationResolutionStore.js");
+const { computeRequestHash } = await import("../src/core/auth/requestHash.js");
+const { getServiceById } = await import("../src/core/db/queries/services.js");
+const { getSkillByServiceAndSkillId } = await import("../src/core/db/queries/skills.js");
+const { getTransactionById } = await import("../src/core/db/queries/transactions.js");
 
 const config = fixtureConfig([fixedOutcome]);
 const request = { item: "widget" };
@@ -60,6 +65,7 @@ const { paidOrder } = paidOrderHarness({ config, request, quoteService: () => ne
 const lostConnection = () => Object.assign(new Error("Connection terminated unexpectedly"), { code: "08006" });
 let database: DisposableDatabase;
 let rail: Awaited<ReturnType<typeof startRailServer>>;
+let serviceId: string;
 
 async function task(order: DispatchArgs) {
   return (await database.pool.query(
@@ -130,7 +136,7 @@ beforeAll(async () => {
   vi.spyOn(ProviderEvidenceVerifier.prototype, "assertNotSanctioned").mockResolvedValue();
   database = await createMigratedDatabase("paid_fulfillment_resume");
   h.pool = database.pool;
-  await seedFixtureService(database.pool, { skillIds: [fixedOutcome.skillId] });
+  serviceId = await seedFixtureService(database.pool, { skillIds: [fixedOutcome.skillId] });
   rail = await startRailServer(config);
 }, DATABASE_HOOK_TIMEOUT_MS);
 
@@ -365,5 +371,71 @@ describe("admitted paid work", () => {
       .resolves.toBeNull();
     await expect(claimDurableJob({ queue: "capability-probe", workerId: "w", leaseSeconds: 30, capabilities: [capability] }))
       .resolves.toMatchObject({ idempotency_key: "one" });
+  });
+});
+
+// A pre-execute review opens against PostgreSQL itself, bound to the
+// request the order was admitted with (its dispatch claim's provider
+// request hash, never the gateway's canonical request hash), and only by
+// the executor that wins the order's start fence.
+describe("pre-execute review of admitted work", () => {
+  const escalations = async (taskId: string) => (await database.pool.query(
+    `SELECT id::text,status,source,target_id,request_hash FROM escalations WHERE transaction_id=$1`, [taskId],
+  )).rows;
+
+  it("opens a review for a funded order and leaves it started for the reviewer, never failed", async () => {
+    const order = await paidOrder();
+    h.preExecute = async () => ({ action: "escalate", reviewQuestion: "A human must look first." });
+    const answer = await postJson(`${rail.base}/dispatch`, order);
+    h.preExecute = null;
+    expect(answer.status).toBe(200);
+    const row = await task(order);
+    expect(row).toMatchObject({ status: "working", claim_state: "working", job_status: "completed" });
+    expect(row.metadata.supplier_mutation_started).toBeUndefined();
+    expect(h.executions).toBe(0);
+    const [review] = await escalations(row.id as string);
+    expect(review).toMatchObject({ status: "pending", source: "pre_execute", request_hash: computeRequestHash(request) });
+    // The review's target is its own id, as text beside the uuid column.
+    expect(review.target_id).toBe(review.id);
+    expect((await status(order)).body.state).toBe("working");
+  });
+
+  it("never opens a review for an order another executor already started", async () => {
+    const order = await admittedButNotStarted();
+    const taskId = (await task(order)).id as string;
+    const lease = await claimFulfillment();
+    const { reviewing, decide } = heldReview();
+    const release = heldExecution();
+    const slow = resumeAdmittedOrder(config, taskId, lease);
+    await reviewing;
+    const fast = resumeAdmittedOrder(config, taskId, lease);
+    await vi.waitFor(() => expect(h.executions).toBe(1));
+    decide({ action: "escalate", reviewQuestion: "Too late to ask." });
+    await expect(slow).resolves.toBe("done");
+    expect(await escalations(taskId)).toEqual([]);
+    release();
+    await expect(fast).resolves.toBe("done");
+    expect(await task(order)).toMatchObject({ status: "completed", claim_state: "completed" });
+  });
+
+  it("opens a review for a free task under its materialized request hash and refuses any other request", async () => {
+    const free = { item: "free-widget" };
+    const taskId = `task-free-${randomBytes(6).toString("hex")}`;
+    await database.pool.query(
+      `INSERT INTO transactions (id,service_id,skill_id,status,canonical_request_hash)
+       VALUES ($1,$2,$3,'submitted',$4)`,
+      [taskId, serviceId, fixedOutcome.skillId, Buffer.from(computeRequestHash(free).slice(2), "hex")],
+    );
+    const [service, skill, transaction] = await Promise.all([
+      getServiceById(serviceId), getSkillByServiceAndSkillId(serviceId, fixedOutcome.skillId), getTransactionById(taskId),
+    ]);
+    const escalate = (requestData: Record<string, unknown>) => createPreExecuteEscalation({
+      transaction: transaction!, service: service!, skill: skill!, asset: null, requestData, question: "Review it.",
+    });
+    await expect(escalate({ item: "another-widget" })).rejects.toThrow(/canonical request changed/);
+    expect(await escalations(taskId)).toEqual([]);
+    const opened = await escalate(free);
+    expect(opened).toMatchObject({ status: "pending", target_id: opened.id });
+    expect((await getTransactionById(taskId))?.status).toBe("working");
   });
 });
