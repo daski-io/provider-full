@@ -177,7 +177,13 @@ Every deployment needs stable HTTPS at `BASE_URL`, durable PostgreSQL 16 or
 newer, runtime-injected secrets, the required outbound API/RPC access, and at
 least one continuously available provider process while services are active.
 Route traffic only when `/health/ready` succeeds; `/health/live` proves only
-that the process exists.
+that the process exists. `/health/ready` answers 200 while the process can
+serve funded orders' persisted status and artifact reads, and reports beside
+that whether it admits new sales and whether its workers and retained
+contracts are healthy. A process that cannot take new sales refuses new
+quotes itself, so a dependency or worker outage never takes reads off the
+network; `/health/admission` answers 200 only while new sales are admitted,
+for a load balancer that routes quotes separately.
 
 ## Register with Daski
 

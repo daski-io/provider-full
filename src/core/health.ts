@@ -1,15 +1,15 @@
 import { Router } from "express";
 import { buildIdentity, publicRevision } from "./buildIdentity.js";
-import { checkDatabase } from "./db/pool.js";
+import { checkDatabase, pool } from "./db/pool.js";
 import { CHAIN_MODE_MOCK, publicClient } from "./chain/client.js";
 import { config } from "./config.js";
-import { listAllServices } from "./db/queries/services.js";
 import { getDurableQueueMetrics } from "./db/queries/durableJobs.js";
+import { listInactiveServicesOwingWork } from "./db/queries/services.js";
+import { runtimeEpochAdmitted } from "./db/runtimeEpoch.js";
 import { getAllServices } from "./serviceRegistry/registry.js";
 import type { ServiceModule } from "./serviceRegistry/types.js";
 import type { ServiceRow } from "./db/queries/services.js";
 import { logInfo, logWarn } from "./logger.js";
-import { getScreeningExtension } from "./screening/registry.js";
 import {
   getProviderIdentityAuthorization,
   recordProviderIdentityVerification,
@@ -19,6 +19,23 @@ import {
   getServiceRegistrationAuthorization,
   getServiceRegistrationHealth,
 } from "./chain/serviceRegistrar.js";
+import {
+  healthReportOf,
+  loadServiceCatalog,
+  readinessFailureSummary,
+  requiredWorkerNames as requiredWorkersOf,
+  workersAreReady,
+  type HealthReport,
+  type ReadinessGateSnapshot,
+} from "./healthReport.js";
+
+export {
+  loadServiceCatalog,
+  readinessFailureSummary,
+  workersAreReady,
+  type HealthReport,
+  type ReadinessGateSnapshot,
+} from "./healthReport.js";
 
 export interface ServiceHealthStatus {
   active: boolean;
@@ -47,67 +64,26 @@ const CORE_REQUIRED_WORKERS = [
   "standard-paid-fulfillment",
   "operator-escalation",
 ] as const;
+/** New sales may follow an admission verdict at most this old; reads never wait on one. */
+const ADMISSION_MAX_AGE_MS = 30_000;
 /** Whether this build serves every retained obligation; null until first checked. */
 let retainedServicing: { ok: boolean; gaps: string[] } | null = null;
 let readinessCache: { expiresAt: number; result: ReadinessResult } | null = null;
 let readinessInFlight: Promise<ReadinessResult> | null = null;
-let lastReportedReady: boolean | null = null;
+let lastComputed: { at: number; result: ReadinessResult } | null = null;
+let lastReportedState: string | null = null;
 
-export interface ReadinessGateSnapshot {
-  database: boolean;
-  serviceCatalog: boolean;
-  chainReachable: boolean;
-  chainFresh: boolean;
-  providerIdentity: boolean;
-  services: boolean;
-  serviceRegistration: boolean;
-  registrationError: string | null;
-  workers: boolean;
-  staleWorkers: string[];
-  liveModeInvariants: boolean;
-  /** Per-service fail-closed invariants (ServiceModule.operations.readiness). */
-  serviceInvariants: boolean;
-  serviceInvariantFailures: Record<string, string[]>;
-  /** This build serves every retained listing version and admitted action. */
-  retainedServicing?: boolean;
-  retainedServicingGaps?: string[];
-}
-
-/// Compact one-line summary of the failing readiness gates, for the
-/// transition log. The public /health/ready body deliberately hides gate
-/// detail; this is the operator-facing view of WHY readiness is off.
-export function readinessFailureSummary(
-  snapshot: ReadinessGateSnapshot,
-): Record<string, string> {
-  const failing = [
-    ...(snapshot.database ? [] : ["database"]),
-    ...(snapshot.serviceCatalog ? [] : ["serviceCatalog"]),
-    ...(snapshot.chainReachable ? [] : ["chain.reachable"]),
-    ...(snapshot.chainFresh ? [] : ["chain.fresh"]),
-    ...(snapshot.providerIdentity ? [] : ["providerIdentity"]),
-    ...(snapshot.services ? [] : ["services"]),
-    ...(snapshot.serviceRegistration ? [] : ["serviceRegistration"]),
-    ...(snapshot.workers ? [] : ["workers"]),
-    ...(snapshot.liveModeInvariants ? [] : ["liveModeInvariants"]),
-    ...(snapshot.serviceInvariants ? [] : ["serviceInvariants"]),
-    ...(snapshot.retainedServicing === false ? ["retainedServicing"] : []),
-  ];
-  const summary: Record<string, string> = { failing: failing.join(",") };
-  if (!snapshot.serviceRegistration && snapshot.registrationError) {
-    summary.registrationError = snapshot.registrationError;
-  }
-  if (!snapshot.workers && snapshot.staleWorkers.length > 0) {
-    summary.staleWorkers = snapshot.staleWorkers.join(",");
-  }
-  if (snapshot.retainedServicing === false && snapshot.retainedServicingGaps?.length) {
-    summary.retainedServicingGaps = snapshot.retainedServicingGaps.join(",");
-  }
-  if (!snapshot.serviceInvariants) {
-    summary.serviceInvariantFailures = Object.entries(snapshot.serviceInvariantFailures)
-      .map(([slug, reasons]) => `${slug}: ${reasons.join("; ")}`)
-      .join(" | ");
-  }
-  return summary;
+/**
+ * The workers readiness requires: core's, and those of every service that is
+ * active or still owes work while paused or inactive (healthReport.ts).
+ */
+export function requiredWorkerNames(
+  services: ServiceRow[],
+  modules: ServiceModule[] = getAllServices(),
+  serviceCatalogHealthy = true,
+  owing: ReadonlySet<string> | null = new Set(),
+): Set<string> {
+  return requiredWorkersOf(services, modules, serviceCatalogHealthy, owing, CORE_REQUIRED_WORKERS);
 }
 
 export function setServiceStatuses(statuses: Record<string, ServiceHealthStatus>): void {
@@ -171,25 +147,19 @@ export function isWorkerReady(worker: string, now = Date.now()): boolean {
 }
 
 interface ReadinessResult {
-  ready: boolean;
   checkedAt: string;
+  report: HealthReport;
   database: boolean;
   serviceCatalog: boolean;
   chain: { reachable: boolean; fresh: boolean; latestBlock: string | null };
   providerIdentity: boolean;
   services: Record<string, ServiceHealthStatus>;
   workers: Record<string, { ready: boolean; lastSuccessAt: string | null }>;
-  /** Durable queue depth/age/dead-letter diagnostics (never gates ready). */
+  /** Durable queue depth/age/dead-letter diagnostics (never gates anything). */
   queues: Record<
     string,
     { depth: number; running: number; deadLetter: number; oldestQueuedSeconds: number }
   >;
-  liveModeInvariants: boolean;
-  /** Per-service fail-closed invariants (ServiceModule.operations.readiness). */
-  serviceInvariants: boolean;
-  serviceInvariantFailures: Record<string, string[]>;
-  serviceRegistration: boolean;
-  retainedServicing: boolean;
 }
 
 export const healthRouter = Router();
@@ -209,11 +179,28 @@ healthRouter.get("/live", (_req, res) => {
   res.status(200).json({ status: "alive", timestamp: new Date().toISOString() });
 });
 
+// The status code is routing readiness: whether this process can serve
+// funded orders' persisted status and artifact reads. Admission and
+// servicing are reported beside it and never change it (healthReport.ts).
 healthRouter.get("/ready", async (_req, res) => {
   const result = await readiness();
-  res.status(result.ready ? 200 : 503).json({
-    status: result.ready ? "ready" : "not_ready",
+  const ready = result.report.reads.status === "ok";
+  res.status(ready ? 200 : 503).json({
+    status: ready ? "ready" : "not_ready",
     checkedAt: result.checkedAt,
+    ...result.report,
+  });
+});
+
+// For a load balancer that routes new sales separately from reads: 200
+// only while this process takes new quotes.
+healthRouter.get("/admission", async (_req, res) => {
+  const result = await readiness();
+  const open = result.report.admission.status === "open";
+  res.status(open ? 200 : 503).json({
+    status: open ? "open" : "stopped",
+    checkedAt: result.checkedAt,
+    codes: result.report.admission.codes,
   });
 });
 
@@ -227,6 +214,16 @@ async function readiness(): Promise<ReadinessResult> {
   return readinessInFlight;
 }
 
+/**
+ * Whether new sales may be admitted: the latest admission verdict while it
+ * is recent, otherwise a fresh one. Only new quotes ask; a funded dispatch,
+ * a lifecycle call or a read never does.
+ */
+export async function salesAdmission(now = Date.now()): Promise<HealthReport["admission"]> {
+  if (lastComputed && now - lastComputed.at <= ADMISSION_MAX_AGE_MS) return lastComputed.result.report.admission;
+  return (await readiness()).report.admission;
+}
+
 async function computeReadiness(now: number): Promise<ReadinessResult> {
   const [database, chain, serviceCatalog, queueMetrics] = await Promise.all([
     checkDatabase(),
@@ -234,6 +231,12 @@ async function computeReadiness(now: number): Promise<ReadinessResult> {
     loadServiceCatalog(),
     getDurableQueueMetrics().catch(() => []),
   ]);
+  const [schemaEpoch, owing] = database
+    ? await Promise.all([
+        runtimeEpochAdmitted(pool).catch(() => false),
+        listInactiveServicesOwingWork().catch(() => null),
+      ])
+    : [false, null];
   const serviceInvariantFailures = serviceCatalog.healthy
     ? await checkServiceInvariants(serviceCatalog.rows)
     : {};
@@ -243,6 +246,7 @@ async function computeReadiness(now: number): Promise<ReadinessResult> {
     serviceCatalog.rows,
     getAllServices(),
     serviceCatalog.healthy,
+    owing,
   );
   const workers = Object.fromEntries([...requiredWorkers].map((name) => {
     const status = workerStatuses.get(name);
@@ -285,20 +289,27 @@ async function computeReadiness(now: number): Promise<ReadinessResult> {
     (config.NODE_ENV === "production" || config.CHAIN_ID === 8453)
     && config.CHAIN_MODE === "mock"
   );
-  const servicing = retainedServicing?.ok === true;
+  const snapshot: ReadinessGateSnapshot = {
+    database,
+    schemaEpoch,
+    serviceCatalog: serviceCatalog.healthy,
+    chainReachable: chain.reachable,
+    chainFresh: chain.fresh,
+    providerIdentity: providerIdentityVerified,
+    services: servicesReady,
+    serviceRegistration,
+    registrationError: registration.error,
+    workers: workersReady,
+    staleWorkers: workersReady ? [] : [...requiredWorkers].filter((name) => !isWorkerReady(name, now)),
+    liveModeInvariants,
+    serviceInvariants,
+    serviceInvariantFailures,
+    retainedServicing: retainedServicing?.ok === true,
+    retainedServicingGaps: retainedServicing?.gaps ?? ["unchecked"],
+  };
   const result: ReadinessResult = {
-    ready: database
-      && serviceCatalog.healthy
-      && chain.reachable
-      && chain.fresh
-      && providerIdentityVerified
-      && servicesReady
-      && serviceRegistration
-      && workersReady
-      && liveModeInvariants
-      && serviceInvariants
-      && servicing,
     checkedAt: new Date().toISOString(),
+    report: healthReportOf(snapshot),
     database,
     serviceCatalog: serviceCatalog.healthy,
     chain,
@@ -314,88 +325,29 @@ async function computeReadiness(now: number): Promise<ReadinessResult> {
         oldestQueuedSeconds: metric.oldestQueuedSeconds,
       },
     ])),
-    liveModeInvariants,
-    serviceInvariants,
-    serviceInvariantFailures,
-    serviceRegistration,
-    retainedServicing: servicing,
   };
-  if (result.ready !== lastReportedReady) {
-    if (result.ready) {
-      logInfo("Readiness transitioned to ready", {});
-    } else {
-      const staleWorkers = workersReady ? [] : [...requiredWorkers].filter((name) => {
-        const status = workerStatuses.get(name);
-        return !(status?.ready && status.lastSuccessAt >= now - status.maxAgeMs);
-      });
-      logWarn("Readiness transitioned to not_ready", readinessFailureSummary({
-        database,
-        serviceCatalog: serviceCatalog.healthy,
-        chainReachable: chain.reachable,
-        chainFresh: chain.fresh,
-        providerIdentity: providerIdentityVerified,
-        services: servicesReady,
-        serviceRegistration,
-        registrationError: registration.error,
-        workers: workersReady,
-        staleWorkers,
-        liveModeInvariants,
-        serviceInvariants,
-        serviceInvariantFailures,
-        retainedServicing: servicing,
-        retainedServicingGaps: retainedServicing?.gaps ?? ["unchecked"],
-      }));
-    }
-    lastReportedReady = result.ready;
-  }
+  reportTransition(result.report, snapshot);
   readinessCache = { expiresAt: now + config.HEALTH_READINESS_CACHE_MS, result };
+  lastComputed = { at: now, result };
   return result;
 }
 
-export function requiredWorkerNames(
-  services: ServiceRow[],
-  modules: ServiceModule[] = getAllServices(),
-  serviceCatalogHealthy = true,
-): Set<string> {
-  const required = new Set<string>(CORE_REQUIRED_WORKERS);
-  if (CHAIN_MODE_MOCK) required.delete("provider-write-reconciler");
-  const active = new Set(
-    services.filter((service) => service.is_active).map((service) => service.slug),
-  );
-  for (const module of modules) {
-    if (serviceCatalogHealthy && !active.has(module.manifest.slug)) continue;
-    for (const worker of module.operations?.readiness?.requiredWorkers ?? []) {
-      required.add(worker);
-    }
+/** Log a change of any part of readiness once, never an unchanged verdict. */
+function reportTransition(report: HealthReport, snapshot: ReadinessGateSnapshot): void {
+  const state = [
+    report.reads.status, report.admission.status, report.servicing.status, report.admission.codes.join(","),
+  ].join("|");
+  if (state === lastReportedState) return;
+  lastReportedState = state;
+  if (report.admission.status === "open") {
+    logInfo("Readiness transitioned to ready", {});
+    return;
   }
-  if (modules.some((module) =>
-    (!serviceCatalogHealthy || active.has(module.manifest.slug))
-    && (module.screening?.requiredScopes.length ?? 0) > 0)) {
-    for (const worker of getScreeningExtension()?.readiness?.requiredWorkers ?? []) {
-      required.add(worker);
-    }
-  }
-  return required;
-}
-
-export async function loadServiceCatalog(
-  load: () => Promise<ServiceRow[]> = listAllServices,
-): Promise<{ healthy: boolean; rows: ServiceRow[] }> {
-  try {
-    return { healthy: true, rows: await load() };
-  } catch {
-    return { healthy: false, rows: [] };
-  }
-}
-
-export function workersAreReady(
-  required: Set<string>,
-  statuses: Map<string, { ready: boolean; lastSuccessAt: number; maxAgeMs: number }>,
-  now: number,
-): boolean {
-  return [...required].every((name) => {
-    const status = statuses.get(name);
-    return Boolean(status?.ready && status.lastSuccessAt >= now - status.maxAgeMs);
+  logWarn("Readiness transitioned", {
+    reads: report.reads.status,
+    admission: report.admission.status,
+    servicing: report.servicing.status,
+    ...readinessFailureSummary(snapshot),
   });
 }
 
@@ -418,7 +370,7 @@ async function checkServiceInvariants(
 }
 
 async function checkChain(): Promise<{ reachable: boolean; fresh: boolean; latestBlock: string | null }> {
-  if (config.CHAIN_MODE === "mock") return { reachable: true, fresh: true, latestBlock: null };
+  if (CHAIN_MODE_MOCK) return { reachable: true, fresh: true, latestBlock: null };
   let timer: NodeJS.Timeout | null = null;
   try {
     return await Promise.race([
@@ -444,3 +396,12 @@ async function checkChain(): Promise<{ reachable: boolean; fresh: boolean; lates
     if (timer) clearTimeout(timer);
   }
 }
+
+/** Tests: forget cached readiness verdicts. */
+export function resetReadinessForTests(): void {
+  readinessCache = null;
+  readinessInFlight = null;
+  lastComputed = null;
+  lastReportedState = null;
+}
+

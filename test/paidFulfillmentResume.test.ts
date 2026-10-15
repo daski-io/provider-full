@@ -228,6 +228,20 @@ describe("admitted paid work", () => {
     for (const order of orders) expect(await task(order)).toMatchObject({ status: "completed", job_status: "completed" });
   });
 
+  it("admits and answers a funded order while this process takes no new sales (C05)", async () => {
+    const stopped = await startRailServer(config, { salesAdmission: async () => ({ status: "stopped" as const }) });
+    try {
+      const order = await paidOrder();
+      const admitted = await postJson(`${stopped.base}/dispatch`, order);
+      expect(admitted.status).toBe(200);
+      expect(await task(order)).toMatchObject({ status: "completed" });
+      const read = await postJson(`${stopped.base}/dispatch/status`, { query: await statusQuery(order) });
+      expect(read.status).toBe(200);
+    } finally {
+      await stopped.close();
+    }
+  });
+
   it("never repeats a started call whose answer was lost: it parks the order for reconciliation", async () => {
     const order = await admittedButNotStarted();
     // As if the process died inside the service call.

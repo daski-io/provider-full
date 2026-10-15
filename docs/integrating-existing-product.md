@@ -335,8 +335,11 @@ specifically requires and protects them.
 
 ## Readiness
 
-A real service must make `/health/ready` fail closed when it cannot fulfill
-admitted work. Typical service checks include:
+A real service must make admission fail closed when it cannot fulfill new
+work: a failing service invariant or a dead required worker stops new quotes
+(the `admission` part of `/health/ready`) and degrades `servicing`, while the
+process stays routable for funded orders' persisted reads. Typical service
+checks include:
 
 - required credentials are present and valid for the selected product mode;
 - the configured mock, sandbox, charged-test, or live product environment

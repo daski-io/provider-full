@@ -39,16 +39,22 @@ const SERVICE_DECLINED = {
   message: "The request does not satisfy the service contract.",
 };
 
+/** Whether new sales are taken now (health.ts `salesAdmission`). */
+export type SalesAdmissionGate = () => Promise<{ status: "open" | "stopped" }>;
+
 /**
  * The provider quote endpoint. It answers signed readiness quotes for fixed
  * and dynamic listings and, on the same URL, signed intake discovery. A quote
  * validates the request and service prerequisites, never starts work, and is
- * persisted with its exact payer before it is signed.
+ * persisted with its exact payer before it is signed. With an admission gate
+ * (the HTTP router always passes one) a process that takes no new sales
+ * refuses the quote itself, while routing keeps serving funded orders' reads.
  */
 export class StandardQuoteService {
   constructor(
     private readonly config: ProviderStandardRailConfig,
     private readonly chainId: number,
+    private readonly admission?: SalesAdmissionGate,
   ) {}
 
   /** The request validator of a current head; undefined for any other outcome id. */
@@ -108,6 +114,9 @@ export class StandardQuoteService {
     if (!validate(args.request)) throw requestInvalid(providerSchemaFieldErrors(validate.errors));
     const service = await getServiceBySlug(outcome.serviceSlug);
     if (!service?.is_active) throw new QuoteRefusedError(503, "service_unavailable");
+    if (this.admission && (await this.admission()).status !== "open") {
+      throw new QuoteRefusedError(503, "service_unavailable");
+    }
     await assertQuoteCapacity(outcome);
     // A head is sold only while this build can execute its contract.
     const version = headListingVersion(this.config, outcome);

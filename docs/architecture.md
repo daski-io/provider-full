@@ -95,10 +95,23 @@ proven. In broad order it:
 11. starts required workers and readiness monitors; and
 12. starts the HTTP listener.
 
-`/health/live` reports process life. `/health/ready` reports whether the
-dependencies and workers required to serve admitted traffic remain healthy,
-including whether this build serves every retained obligation. `/health`
-names the build's embedded source digest and commit.
+`/health/live` reports process life. `/health/ready` separates three
+concerns (`healthReport.ts`, C05). Its status code is read serviceability:
+200 while the database answers at a schema epoch this build supports, so
+funded orders' persisted status and artifact reads stay routable. Its body
+also reports `admission`, whether new sales are taken (the database, service
+catalog, chain reachability and freshness, provider identity, service and
+registration verification, live-mode and service invariants, and servicing
+must all pass), and `servicing`: the heartbeats of every required worker,
+including those of a paused or inactive service that still owes nonterminal
+tasks or unresolved supplier operations, and whether this build serves every
+retained obligation. Each part carries stable codes; which worker or gate
+failed is logged once per transition, never per probe. When admission
+stops, new quotes are refused in-process (`503 service_unavailable`); funded
+dispatches, lifecycle calls and reads are never gated by it. A load
+balancer that routes new sales separately can use `/health/admission`, which
+answers 200 only while admission is open. `/health` names the build's
+embedded source digest and commit.
 
 ## Capabilities and compatibility
 
@@ -121,7 +134,8 @@ definition's handler. Boot runs the check, and the servicing monitor reruns
 it when the catalog's activation revision moves or every ten minutes,
 re-reading the heads each time (and once more on the poll after a move, as
 the revision can move before its promotion commits) so new sales follow a
-promotion without a restart; a gap fails readiness. A registration run
+promotion without a restart; a gap degrades servicing
+(`retained_servicing_gap`) and stops new sales. A registration run
 refuses to start while the registering build has a gap, and its
 `--check-only` forecast prints the same verdict. `npm run
 compatibility:check` (`node dist/checkCompatibility.js` in the image) prints

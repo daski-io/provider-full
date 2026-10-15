@@ -21,7 +21,8 @@ import {
  * the current heads are re-read so new sales follow the catalog. The
  * revision is a sequence, which can move before the promotion that moved it
  * commits, so the heads are re-read again on the next poll and on every
- * full check. A gap fails readiness and is logged once per change; work
+ * full check. A gap degrades servicing and stops new sales (healthReport.ts),
+ * and is logged once per change; work
  * this build cannot run is meanwhile refused before admission and never
  * claimed.
  */

@@ -266,6 +266,18 @@ All notable changes to this project will be documented here.
   lost initial dispatch could not survive. Every contract hash changes, so
   changed services re-register through `daski:register`.
 
+- `/health/ready` separates read serviceability, admission and servicing
+  (C05): its status code is 200 while persisted reads can be served (the
+  database answers at a supported schema epoch), and its body reports
+  `reads`, `admission` and `servicing` with stable codes. Any chain,
+  identity, catalog, registration, invariant or servicing trouble now stops
+  new quotes in-process with `503 service_unavailable` instead of taking
+  funded orders' reads off the network; dispatches, lifecycle calls and reads
+  are never gated by it. `/health/admission` answers 200 only while new sales
+  are admitted. The required workers of a paused or inactive service stay
+  required while it still owes nonterminal tasks or unresolved supplier
+  operations, and readiness logs each transition once.
+
 ### Fixed
 
 - The provider-write reconciler stays ready while another replica's live

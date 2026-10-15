@@ -116,6 +116,23 @@ export async function listAllServices(): Promise<ServiceRow[]> {
   return result.rows as ServiceRow[];
 }
 
+/**
+ * Slugs of paused or inactive service rows that still owe work: a
+ * nonterminal task, or a supplier operation whose outcome is unresolved.
+ * Their workers stay required until it is done.
+ */
+export async function listInactiveServicesOwingWork(): Promise<Set<string>> {
+  const result = await pool.query<{ slug: string }>(
+    `SELECT DISTINCT s.slug FROM services s
+      WHERE NOT s.is_active AND (
+        EXISTS (SELECT 1 FROM transactions t
+                 WHERE t.service_id=s.id AND t.status IN ('submitted','working','input-required'))
+        OR EXISTS (SELECT 1 FROM supplier_operations o
+                    WHERE o.service_id=s.id AND o.state IN ('intent','ambiguous')))`,
+  );
+  return new Set(result.rows.map((row) => row.slug));
+}
+
 export interface UpsertServiceArgs {
   name: string;
   slug: string;

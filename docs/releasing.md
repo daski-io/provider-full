@@ -51,9 +51,11 @@ still owes before it takes traffic:
    `PROVIDER_RETAINED_WALLET_PRIVATE_KEYS`, a quoted control profile no longer
    in `STANDARD_RAIL_RETAINED_CONTROL_PROFILE_HASHES` after a rotation, or an
    open asset action whose definition or handler is missing.
-2. Deploy only a candidate with no gap; a candidate with one also fails
-   `/health/ready`, refuses those versions' dispatches before admission and
-   never claims their fulfillment jobs.
+2. Deploy only a candidate with no gap; a candidate with one reports the
+   `retained_servicing_gap` servicing code and takes no new sales
+   (`/health/admission` fails), refuses those versions' dispatches before
+   admission and never claims their fulfillment jobs, while its persisted
+   reads stay served.
 3. Register a changed contract only after the build that serves both the
    old and new contract is live; the registration run refuses otherwise.
 4. Remove a retained contract or key only after every listing version that

@@ -101,7 +101,10 @@ describe("provider-wire quote and intake vectors", () => {
     expectWireAnswer(await harness.send(quote.requests["dynamic-payer-lowercase"].http), vector(quote, "dynamic.accepted"));
     // The admitted dynamic policy may be shorter than the catalog maximum.
     const { createProviderApp } = await import("../src/core/server.js");
-    const shorter = createProviderApp(fx.wireConfig([fx.wireOutcome(fx.dynamicListing, { quoteMaximumLifetimeSeconds: 120 })]));
+    const shorter = createProviderApp(
+      fx.wireConfig([fx.wireOutcome(fx.dynamicListing, { quoteMaximumLifetimeSeconds: 120 })]),
+      undefined, { salesAdmission: async () => ({ status: "open" as const }) },
+    );
     const server = shorter.listen(0, "127.0.0.1");
     await new Promise<void>((resolve) => server.once("listening", () => resolve()));
     try {

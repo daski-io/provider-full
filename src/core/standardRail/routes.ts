@@ -7,7 +7,8 @@ import { StandardDispatchService } from "./dispatch.js";
 import { StandardLifecycleService } from "./lifecycle.js";
 import { lifecycleRefusalOf } from "./lifecycleErrors.js";
 import { mountProtocolRoutes } from "./protocolRoutes.js";
-import { StandardQuoteService } from "./quote.js";
+import { salesAdmission } from "../health.js";
+import { StandardQuoteService, type SalesAdmissionGate } from "./quote.js";
 import type { ProviderStandardRailConfig } from "./config.js";
 import type { ProviderWalletConfig } from "./walletConfig.js";
 import { ProviderAssetQueryService } from "./assetQuery.js";
@@ -15,15 +16,21 @@ import { ProviderAssetActionService } from "./assetAction.js";
 import { AssetOwnerChangedError } from "./assetOwnerFence.js";
 import { createStatusFailureBudget, sendSignedJson } from "./transport.js";
 
+export interface StandardRailRouterOptions {
+  /** New-sale admission: quotes are refused while it is not open; nothing else asks. */
+  salesAdmission: SalesAdmissionGate;
+}
+
 export function createStandardRailRouter(
   core: Config,
   config: ProviderStandardRailConfig,
   walletConfig?: ProviderWalletConfig,
+  options: StandardRailRouterOptions = { salesAdmission },
 ): Router {
   const chain = core.CHAIN_ID === 8453 ? base : baseSepolia;
   const dispatch = new StandardDispatchService(config, chain, core.CHAIN_ID);
   const lifecycle = new StandardLifecycleService(config, core.CHAIN_ID);
-  const quote = new StandardQuoteService(config, core.CHAIN_ID);
+  const quote = new StandardQuoteService(config, core.CHAIN_ID, options.salesAdmission);
   const assetQuery = walletConfig
     ? new ProviderAssetQueryService(config, walletConfig, core.CHAIN_ID)
     : null;

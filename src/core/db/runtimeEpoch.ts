@@ -54,3 +54,18 @@ export async function assertRuntimeSchemaEpoch(db: Queryable, unknownMigrations:
     );
   }
 }
+
+/**
+ * Whether the schema's minimum runtime epoch still admits this build, for
+ * readiness: a schema migrated by a newer build refuses this one's writes.
+ * True on a schema that predates the epoch barrier.
+ */
+export async function runtimeEpochAdmitted(db: Queryable): Promise<boolean> {
+  const row = (await db.query<{ minimum: number | null }>(
+    `SELECT CASE WHEN to_regproc('public.provider_minimum_runtime_epoch') IS NULL THEN NULL
+                 ELSE public.provider_minimum_runtime_epoch() END AS minimum`,
+  )).rows[0];
+  if (row?.minimum === null || row?.minimum === undefined) return true;
+  const minimum = Number(row.minimum);
+  return Number.isSafeInteger(minimum) && minimum <= RUNTIME_SCHEMA_EPOCH;
+}

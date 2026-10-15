@@ -250,8 +250,11 @@ curl http://127.0.0.1:4000/health/live
 curl http://127.0.0.1:4000/health/ready
 ```
 
-Liveness means the process exists. Readiness means the dependencies and
-workers required for admitted traffic are currently healthy.
+Liveness means the process exists. Readiness (the status code) means the
+process can serve funded orders' persisted reads; its body reports `reads`,
+`admission` (whether new quotes are taken) and `servicing` (workers and
+retained contracts), each with stable codes. `/health/admission` answers 200
+only while new sales are admitted.
 
 ## Local provider with gateway and contracts
 

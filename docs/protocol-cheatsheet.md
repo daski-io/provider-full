@@ -55,7 +55,9 @@ the Daski gateway and standard rail.
 ## Provider endpoints
 
 - `GET /health/live`
-- `GET /health/ready`
+- `GET /health/ready` (200 while persisted reads can be served; body names
+  `reads`, `admission` and `servicing` with stable codes)
+- `GET /health/admission` (200 only while new sales are admitted)
 - `GET /.well-known/agent.json`
 - `POST /standard-rail/quote`
 - `POST /standard-rail/dispatch`

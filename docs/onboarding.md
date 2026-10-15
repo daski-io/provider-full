@@ -105,7 +105,9 @@ provider origins before artifact issuance. Audiences are signed bindings;
 localhost and a later public host are not interchangeable.
 
 The upstream Dockerfile is hosting-neutral. Your fork owns its platform
-configuration and must use `/health/ready` for traffic activation.
+configuration and must use `/health/ready` for traffic activation (it stays
+200 while persisted reads can be served; new sales stop in-process when the
+reported admission stops).
 
 ### 5. Receive one consistent Testnet set
 
@@ -191,7 +193,7 @@ npm run doctor -- --stage=testnet --live
 
 Inspect its public surfaces:
 
-- `/health/live` and `/health/ready`;
+- `/health/live`, `/health/ready` and `/health/admission`;
 - `/.well-known/agent.json` and
   `/.well-known/agent-registration.json`;
 - `/agent-cards/<slug>.json`;

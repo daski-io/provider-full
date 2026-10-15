@@ -211,7 +211,7 @@ separate coordinated configuration when they differ.
 
 ## Identity, wallet, and contracts
 
-### Provider identity readiness fails
+### Admission stops with `identity_unverified`
 
 Confirm the selected chain, `PROVIDER_AGENT_ID`, configured registries, and
 wallet address derived from the private key. The canonical IdentityRegistry's
@@ -446,7 +446,7 @@ backup or pointing two deployments at different databases); `price` means a
 persisted quote does not bind this order. Compare the gateway order with the
 `standard_provider_quotes` row instead of loosening the check.
 
-### Readiness fails with `retainedServicing`
+### Admission stops with `retained_servicing_gap`
 
 The running build cannot serve something the database still owes. Run
 `npm run compatibility:check` (`node dist/checkCompatibility.js` in the image)
@@ -457,8 +457,10 @@ for the full read-only report; each gap names its kind and target:
 control-profile hash to `STANDARD_RAIL_RETAINED_CONTROL_PROFILE_HASHES`),
 `unreadable_contract`, `action_definition` or `action_handler`. A version stops needing its handler
 only once it is retired with the gateway's receipt; it needs its key for as
-long as its orders can be read. The servicing monitor rechecks every minute
-after a catalog write and every ten minutes otherwise.
+long as its orders can be read. The servicing monitor polls the catalog's
+activation revision every minute: it re-reads the heads and rechecks on the
+first poll after a catalog write and once more on the next one (the revision
+can move before its promotion commits), and every ten minutes otherwise.
 
 ### A delayed dispatch of an earlier listing version is refused
 
@@ -624,20 +626,36 @@ The provider-write reconciler runs on every replica behind one cycle lease. A
 lease held by another replica's live session counts as a healthy cycle, so a
 rolling deploy stays ready, and ticks are jittered so replicas cannot
 phase-lock. A lease observed busy for more than five minutes is treated as a
-stuck peer and reported not ready, as are a failed cycle and active nonce-gap
-recovery. A busy lease never clears a failure or nonce gap this replica saw in
-its own last cycle; only its own next clear cycle does. A replica whose own
-cycle has run for more than five minutes reports itself not ready as well, so
-the replica holding a stuck lease is never the last one left ready.
+stuck peer and its worker reported stale (servicing degraded, new sales
+stopped), as are a failed cycle and active nonce-gap recovery. A busy lease
+never clears a failure or nonce gap this replica saw in its own last cycle;
+only its own next clear cycle does. A replica whose own cycle has run for more
+than five minutes reports its worker stale as well, so the replica holding a
+stuck lease is never the last one left admitting.
 
 ## HTTP, proxy, and health behavior
 
 ### `/health/live` passes but `/health/ready` fails
 
-This is expected when the process exists but a required database, identity,
-catalog, rail, product, or worker invariant is unhealthy. Route no admitted
-traffic until readiness recovers. Use the readiness details and service
-invariants; do not configure the load balancer against liveness.
+`/health/ready` answers 503 only when persisted reads cannot be served: the
+database is unreachable (`database_unavailable`) or was migrated by a newer
+build whose minimum runtime epoch this one does not support
+(`schema_epoch_unsupported`). Restore the database or deploy the newer build;
+do not configure the load balancer against liveness.
+
+### `/health/ready` is 200 but new quotes are refused
+
+The body's `admission` part is `stopped`: new quotes answer
+`503 service_unavailable` while funded dispatches, lifecycle calls and reads
+continue. Its codes name why: `chain_unreachable`, `chain_stale`,
+`identity_unverified`, `services_unverified`, `registration_unverified`,
+`service_catalog_unavailable`, `live_mode_invariant`, `service_invariant`, or
+a servicing code (`worker_stale`, `retained_servicing_gap`). The provider log
+names the failing gate, stale worker or service invariant once per
+transition. A required worker of a paused service stays required while that
+service still owes work. A multi-replica deployment that should route new
+sales only to admitting replicas can point that route's health check at
+`/health/admission`.
 
 ### Client IP, rate limit, or SIWE domain is wrong behind a proxy
 

@@ -118,7 +118,9 @@ adding another large branch to an already-large module.
 - Direct supplier HTTP uses the reviewed outbound boundary with pinned
   endpoints, bounded requests/responses, and SSRF protection.
 - Declare workers and live supplier invariants through service readiness so
-  `/health/ready` fails closed.
+  admission fails closed: a failing invariant or a dead required worker (also
+  of a paused service that still owes work) stops new quotes and degrades
+  servicing, while `/health/ready` keeps routing persisted reads.
 - Treat published skill contracts, prices, and action definitions as
   coordinated Daski release changes. Registration must produce matching
   gateway preparations and runtime commitments; never edit catalog rows.
@@ -131,7 +133,8 @@ expected to fail.
 
 The upstream starter is hosting-neutral. Its Dockerfile is the canonical
 production artifact; forks may add deployment descriptors. Use
-`/health/ready` for traffic activation and keep required workers available.
+`/health/ready` (read serviceability) for traffic activation, optionally
+`/health/admission` for new-sale routing, and keep required workers available.
 
 Service variables belong in `src/services/<slug>/config.ts` and are parsed
 strictly. Keep credentials out of manifests, docs, errors, and tests. Testnet
@@ -140,7 +143,7 @@ live readiness evidence. Dummy must never boot on Base Mainnet.
 
 ## Public surfaces
 
-- `/health/live`, `/health/ready`
+- `/health/live`, `/health/ready`, `/health/admission`
 - `/.well-known/agent.json`, `/.well-known/agent-registration.json`
 - `/agent-cards/<slug>.json`, `/skills/*`, `/llms.txt`
 - `/standard-rail/*`

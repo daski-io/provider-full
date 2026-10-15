@@ -20,7 +20,7 @@ import {
   concurrencyBudget,
   configureHttpTimeouts,
 } from "./security/httpCapacity.js";
-import { createStandardRailRouter } from "./standardRail/routes.js";
+import { createStandardRailRouter, type StandardRailRouterOptions } from "./standardRail/routes.js";
 import {
   capacityRefusalBody,
   exceptStatusReads,
@@ -67,6 +67,7 @@ export async function startServer(
 export function createProviderApp(
   standardRailConfig: ProviderStandardRailConfig,
   walletConfig?: ProviderWalletConfig,
+  railOptions?: StandardRailRouterOptions,
 ): Express {
   const app = express();
   installHttpSecurityBoundary(app);
@@ -211,7 +212,7 @@ export function createProviderApp(
   app.use(
     "/standard-rail",
     exceptStatusReads(a2aLimiter),
-    createStandardRailRouter(config, standardRailConfig, walletConfig),
+    createStandardRailRouter(config, standardRailConfig, walletConfig, railOptions),
   );
   app.use("/webhooks", postmarkWebhookRouter);
   app.use("/services", requireCurrentProviderIdentity);

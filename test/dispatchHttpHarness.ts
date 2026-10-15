@@ -12,14 +12,18 @@ import { signGatewayEnvelope } from "./gatewayConsumer.js";
 import { CHAIN_ID, ENVIRONMENT, gatewayKey, PROVIDER_AUDIENCE } from "./standardRailFixture.js";
 
 /** A real standard-rail ingress and router on an ephemeral loopback port. */
+/** Tests take new sales whatever this process's readiness; health tests gate it themselves. */
+export const OPEN_ADMISSION = { salesAdmission: async () => ({ status: "open" as const }) };
+
 export async function startRailServer(
   railConfig: ProviderStandardRailConfig,
+  options: { salesAdmission: () => Promise<{ status: "open" | "stopped" }> } = OPEN_ADMISSION,
 ): Promise<{ base: string; close(): Promise<void> }> {
   const { createStandardRailRouter } = await import("../src/core/standardRail/routes.js");
   const { standardRailJsonIngress } = await import("../src/core/standardRail/transport.js");
   const app = express();
   app.use("/standard-rail", ...standardRailJsonIngress(),
-    createStandardRailRouter({ CHAIN_ID } as Config, railConfig));
+    createStandardRailRouter({ CHAIN_ID } as Config, railConfig, undefined, options));
   const server: Server = app.listen(0, "127.0.0.1");
   await once(server, "listening");
   return {

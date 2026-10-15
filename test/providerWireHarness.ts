@@ -144,7 +144,7 @@ export async function startWireHarness(
   const { config: coreConfig } = await import("../src/core/config.js");
   Object.assign(coreConfig, coreOverrides);
   const { createProviderApp } = await import("../src/core/server.js");
-  const server: Server = createProviderApp(wireConfig()).listen(0, "127.0.0.1");
+  const server: Server = createProviderApp(wireConfig(), undefined, { salesAdmission: async () => ({ status: "open" as const }) }).listen(0, "127.0.0.1");
   await once(server, "listening");
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   vi.useFakeTimers({ toFake: ["Date"] });
