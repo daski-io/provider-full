@@ -5,11 +5,14 @@ import { baseSepolia } from "viem/chains";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { canonicalHash } from "../src/core/standardRail/canonical.js";
 import type { FulfillmentAdapter, TaskContext } from "../src/core/serviceRegistry/types.js";
+import type { DispatchStatusQueryV1, SignedEnvelope } from "../src/core/standardRail/types.js";
 import { gatewayDispatch, gatewayQuoteV1 } from "./dispatchWire.js";
+import { signGatewayEnvelope } from "./gatewayConsumer.js";
 import { paidOrderHarness } from "./paidOrderHarness.js";
 import { createMigratedDatabase, DATABASE_HOOK_TIMEOUT_MS, type DisposableDatabase } from "./postgresHarness.js";
 import {
-  CHAIN_ID, dynamicOutcome, fixedOutcome, fixtureConfig, hash, payerA, payerB, seedFixtureService,
+  CHAIN_ID, dynamicOutcome, ENVIRONMENT, fixedOutcome, fixtureConfig, gatewayKey, hash, payerA, payerB,
+  PROVIDER_AUDIENCE, SERVICE_SLUG, seedFixtureService,
 } from "./standardRailFixture.js";
 
 // Database-backed protocol tests: allow for a loaded shared host.
@@ -38,6 +41,9 @@ const { StandardDispatchService } = await import("../src/core/standardRail/dispa
 const { StandardQuoteService } = await import("../src/core/standardRail/quote.js");
 const { ProviderEvidenceVerifier } = await import("../src/core/standardRail/evidence.js");
 const { assertDepositWithinQuoteWindow } = await import("../src/core/standardRail/paymentBinding.js");
+const { MAX_FIRST_DISPATCH_QUOTE_AGE_SECONDS } = await import("../src/core/standardRail/quoteRetention.js");
+const { admitDispatchClaim } = await import("../src/core/standardRail/dispatchClaim.js");
+const { getServiceBySlug } = await import("../src/core/db/queries/services.js");
 
 const config = fixtureConfig();
 let database: DisposableDatabase;
@@ -89,7 +95,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-const { paidOrder } = paidOrderHarness({
+const { paidOrder, readinessQuote } = paidOrderHarness({
   config, request, quoteService: () => new StandardQuoteService(config, CHAIN_ID),
 });
 
@@ -262,5 +268,57 @@ describe("dispatches under an earlier provider control profile (C04)", () => {
       [Buffer.from(args.quote.payload.providerQuoteHash.slice(2), "hex")],
     )).rows[0];
     expect(recorded).toEqual({ profile: fixedOutcome.providerControlProfileHash.slice(2) });
+  });
+});
+
+// The gateway never signs a first dispatch more than 30 days after its
+// quote's validBefore. A new claim signed later is refused before admission;
+// an order already admitted keeps answering its exact replay and status.
+describe("first-dispatch quote age bound (B2)", () => {
+  /** A fixed-price order whose fresh dispatch is signed `age` seconds after its quote's validBefore. */
+  async function agedOrder(age: number) {
+    const issuedAt = Math.floor(Date.now() / 1_000);
+    const validBefore = issuedAt - age;
+    const providerQuote = await readinessQuote(fixedOutcome, payerA.toLowerCase() as Hex, validBefore - 120);
+    const quote = await gatewayQuoteV1({ outcome: fixedOutcome, request, providerQuote, validBefore });
+    return gatewayDispatch({
+      outcome: fixedOutcome, quote, request, payer: payerA, issuedAt,
+      reputationContract: config.reputationContract, outcomeSchemaUid: config.reputationOutcomeSchemaUid,
+    });
+  }
+
+  it("refuses a new claim signed past the bound with quote_window, admitting nothing", async () => {
+    const args = await agedOrder(MAX_FIRST_DISPATCH_QUOTE_AGE_SECONDS + 1);
+    await expect(service().accept(args)).rejects.toMatchObject({ reason: "quote_window" });
+    expect(h.adapter.execute).not.toHaveBeenCalled();
+    expect(await claimRow(args.dispatch.payload.orderId)).toBeUndefined();
+  });
+
+  it("admits a first dispatch signed exactly at the bound", async () => {
+    const args = await agedOrder(MAX_FIRST_DISPATCH_QUOTE_AGE_SECONDS);
+    await expect(service().accept(args)).resolves.toMatchObject({ state: "completed" });
+  });
+
+  it("still answers the exact replay and status of an order admitted past the bound", async () => {
+    // An earlier release admitted such an order without the bound.
+    const args = await agedOrder(MAX_FIRST_DISPATCH_QUOTE_AGE_SECONDS + 3_600);
+    const dispatchHash = canonicalHash(args.dispatch);
+    const admitted = await admitDispatchClaim({
+      dispatch: args.dispatch.payload, dispatchHash, request: args.request, outcome: fixedOutcome,
+      service: (await getServiceBySlug(SERVICE_SLUG))!, supplierCostCeiling: null,
+      providerQuoteHash: args.quote.payload.providerQuoteHash, fulfillmentSeconds: 2_592_000, capability: null,
+    });
+    expect(admitted.kind).toBe("admitted");
+    const taskId = admitted.kind === "admitted" ? admitted.taskId : "";
+    await expect(service().accept(args)).resolves.toMatchObject({ taskId, dispatchHash });
+    const issuedAt = Math.floor(Date.now() / 1_000);
+    const status = await signGatewayEnvelope<DispatchStatusQueryV1>({
+      artifactType: "DispatchStatusQueryV1", environment: ENVIRONMENT, chainId: CHAIN_ID,
+      audience: PROVIDER_AUDIENCE, signerKeyId: "gateway-dispatch", privateKey: gatewayKey,
+      issuedAt, validBefore: issuedAt + 60,
+      payload: { orderId: args.dispatch.payload.orderId, dispatchHash, issuedAt, validBefore: issuedAt + 60 },
+    }) as SignedEnvelope<DispatchStatusQueryV1>;
+    await expect(service().status(status)).resolves.toMatchObject({ taskId, dispatchHash });
+    expect(h.adapter.execute).not.toHaveBeenCalled();
   });
 });

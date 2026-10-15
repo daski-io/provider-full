@@ -134,11 +134,13 @@ was given one) that `scripts/copy-assets.mjs` embeds in
 The compatibility report (`compatibility/compatibilityReport.ts`) compares
 the manifest and the deployment's provider keys with durable state alone. A
 listing version needs its handler while it is sold, while it is unretired
-with any provider quote (a quote may still be paid, even by more than one
-order), or while it has pending orders, jobs, supplier operations, reviews
-or lifecycle actions; it needs its signing key while any order of it can be
-read. An open asset action needs its admitted definition and that
-definition's handler. Boot runs the check, and the servicing monitor reruns
+with a provider quote that has not lapsed (a quote may still be paid, even
+by more than one order, until it lapses; see
+[Retained listing versions](#retained-listing-versions)), or while it has
+pending orders, jobs, supplier operations, reviews or lifecycle actions; it
+needs its signing key while any order of it can be read. An open asset
+action needs its admitted definition and that definition's handler. Boot
+runs the check, and the servicing monitor reruns
 it when the catalog's activation revision moves or every ten minutes,
 re-reading the heads each time (and once more on the poll after a move, as
 the revision can move before its promotion commits) so new sales follow a
@@ -188,7 +190,8 @@ A paid order crosses several independent bindings:
 
 1. The provider quote validates service arguments and returns exact atomic
    USDC (the admitted listing price for fixed listings). It is persisted with
-   the gateway's exact payer before it is signed and never starts work.
+   the gateway's exact payer before it is signed, never starts work, and is
+   kept until it lapses.
 2. Daski binds the quote to the promoted runtime listing and payment recipe.
 3. The buyer authorizes a standard Exact-EVM USDC transfer.
 4. The facilitator verifies the payment and the gateway records finalized
@@ -196,11 +199,12 @@ A paid order crosses several independent bindings:
 5. The gateway signs a dispatch committing to the provider, service, skill,
    request, order, payer, audience, and deadline.
 6. The provider verifies all bindings, including the persisted provider quote
-   for both pricing modes and the deposit block's settlement time, and
-   atomically claims replay state under a per-order lock with a final
-   expiry fence. A funded order is an obligation: paused sales or full
-   local capacity never refuse it, an exact replay returns the same task,
-   and a different envelope never replaces it.
+   for both pricing modes and the deposit block's settlement time, refuses a
+   new claim the gateway signed more than 30 days after its quote's
+   `validBefore`, and atomically claims replay state under a per-order lock
+   with a final expiry fence. A funded order is an obligation: paused sales
+   or full local capacity never refuse it, an exact replay returns the same
+   task, and a different envelope never replaces it.
 7. Core materializes the transaction, records the dispatch deadline and the
    listing version's fulfillment duration with the claim (core migration
    010), creates the order's durable fulfillment job leased to the admitting
@@ -285,11 +289,22 @@ the current global policy. A dispatch under an earlier control profile is
 admitted only while `STANDARD_RAIL_RETAINED_CONTROL_PROFILE_HASHES` keeps it
 (`standardRail/controlProfiles.ts`); every readiness quote records the
 profile it was issued under (core migration 015), and the compatibility
-check reports a `control_profile` gap for an unretired version whose quotes
-name a profile the deployment no longer accepts. Asset actions keep the signed definition
+check reports a `control_profile` gap for an unretired version whose
+unlapsed quotes name a profile the deployment no longer accepts. Asset actions keep the signed definition
 they were admitted under: boot records every definition of the verified
 catalog, so an execution accepted under one completes under it after the
 catalog moves to a new epoch.
+
+A provider quote is owed only until it lapses. The gateway never signs a
+first dispatch more than 30 days (`MAX_FIRST_DISPATCH_QUOTE_AGE_SECONDS`)
+after its quote's `validBefore`, which is never later than the provider
+quote's own, admission refuses a new claim signed later, and a dispatch
+envelope lives at most a day: 31 days after its own `validBefore` no claim
+can name a quote any more (`standardRail/quoteRetention.ts`). From then on
+the quote asks for no handler, control profile or signing key, and the
+retention sweep prunes lapsed quotes that no claim names in bounded,
+best-effort batches. Core migration 016 refuses every other deletion,
+whoever deletes.
 
 Retirement ends a paid version's dispatch and execution support, never the
 reads of its orders, its frozen results or its key. It requires the

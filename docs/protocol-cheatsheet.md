@@ -17,9 +17,13 @@ The provider accepts paid work only through the standard Exact-EVM rail.
    price, pricing mode and payer (compared as an address; a `null` quote
    payer admits any payer), and that its window covers the gateway quote.
    Settlement time is proven by the authenticated deposit block timestamp
-   inside the gateway quote window. There is no provider-side quote-age cap:
-   the gateway may dispatch a timely-paid order with a fresh envelope long
-   after the quote expired.
+   inside the gateway quote window. The gateway may dispatch a timely-paid
+   order with a fresh envelope long after the quote expired, but never signs
+   a first dispatch more than 30 days (`MAX_FIRST_DISPATCH_QUOTE_AGE_SECONDS`,
+   2,592,000 s) after the gateway quote's `validBefore`: the provider refuses
+   a new claim signed later with `quote_window` (at exactly the bound it is
+   still admitted), while exact replays and status reads of admitted claims
+   are unaffected.
 6. Provider terminal attestations and chain evidence drive the gateway order
    state machine. Launch payments are not automatically reversed after release.
 
@@ -116,6 +120,11 @@ re-encoded copy of a signature can never become a second dispatch identity.
   optional read-only `requestReadiness` hook. The quote is persisted with its payer, pricing mode, price, request,
   listing and window before it is signed. A quote never starts or reserves
   product work.
+- A persisted quote is kept, and counts as an obligation of its listing
+  version, until it lapses 31 days after its own `validBefore` (the 30-day
+  first-dispatch bound plus a day for the dispatch envelope's lifetime and
+  clock skew). The retention sweep then prunes it unless a claim names it;
+  core migration 016 refuses any earlier deletion.
 - `ProviderIntakeRequestV1` (payload without `payer`) returns the signed
   intake contract: `requestSchema`, `requiredFields`, `selectorsRequired`,
   `normalizedSelectors`, `fieldErrors`, `supported`, `issuedAt`,
@@ -176,7 +185,9 @@ Refusal reasons are `validator`, `envelope_lifetime`, `signature`,
 `outcome_policy`, `self_purchase`, `quote_window`, `price`, `evidence` and
 `service_unavailable`. `quote_window` covers a forwarded QuoteV1 the signed
 dispatch does not bind or that names a provider quote this provider never
-persisted; `price` covers a persisted quote that does not bind this order.
+persisted, and a new claim signed more than 30 days after that QuoteV1's
+`validBefore`; `price` covers a persisted quote that does not bind this
+order.
 No route or middleware turns a possibly-admitted dispatch into a JSON error.
 
 - The forwarded QuoteV1's shape, its hash binding into the signed dispatch and

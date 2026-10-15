@@ -58,10 +58,10 @@ All notable changes to this project will be documented here.
   its capability manifest describes the same artifact. Boot, a registration
   run and its forecast check that manifest and the provider keys against
   durable obligations, requiring a version's handler while it is unretired
-  with any provider quote; a servicing monitor rechecks when the catalog's
-  activation revision moves and every ten minutes, refreshes the sold heads
-  without a restart (again on the poll after a move), and fails readiness on
-  any gap.
+  with any provider quote that has not lapsed; a servicing monitor rechecks
+  when the catalog's activation revision moves and every ten minutes,
+  refreshes the sold heads without a restart (again on the poll after a
+  move), and fails readiness on any gap.
 - The task watchdog no longer uses the boot catalog's 300-second dispatch
   deadline as a stall threshold, nor sets `standard_reconciliation_required`
   on stalls. It reads persisted per-order state for orders of any listing
@@ -105,9 +105,10 @@ All notable changes to this project will be documented here.
   signed `GatewayContractRetirementV1` receipt for that version and no open
   local obligation, now including unfinished durable jobs, claimed lifecycle
   actions and unexpired quotes; only the receipt ends a quote that may have
-  been paid but was never dispatched. It counts them after locking the
-  version rows that a database trigger makes every new order and quote lock,
-  so a concurrent admission either blocks it or is refused definitely.
+  been paid but was never dispatched before the quote lapses. It counts
+  them after locking the version rows that a database trigger makes every
+  new order and quote lock, so a concurrent admission either blocks it or is
+  refused definitely.
   `daski:register` gains `--retire-listing` and `--gateway-receipt`; reads of
   retired versions are never retired.
 - Refreshed dependencies past current advisories: fast-uri 3.1.8, qs 6.16.0,
@@ -162,6 +163,18 @@ All notable changes to this project will be documented here.
   limit as a decimal string. Ceilings earlier releases recorded
   (`supplier-cost-ceiling-v1`) keep their exact meaning, and a quote that
   still returns the retired field is refused as unavailable.
+- First dispatches are bounded by quote age
+  (`MAX_FIRST_DISPATCH_QUOTE_AGE_SECONDS`, 30 days): dispatch admission
+  refuses a new claim the gateway signed more than 30 days after its quote's
+  `validBefore` with `quote_window`, as the gateway never signs one; exact
+  replays and status reads of admitted claims are unaffected.
+- A provider quote stays an obligation only until it lapses, 31 days after
+  its own `validBefore` (the first-dispatch bound plus a day for the dispatch
+  envelope's lifetime and clock skew). A lapsed quote no longer requires its
+  version's handler, control profile or signing key in the compatibility
+  check, and the retention sweep prunes lapsed quotes that no dispatch claim
+  names in bounded, best-effort batches. Core migration 016 refuses every
+  other deletion of a provider quote, whoever deletes.
 - Dispatch and status answers carry a signed `operations` observation from
   a persisted semantic projection and revision (core migration 004, all-null
   at revision 0), freshly stamped with the database clock and signed per

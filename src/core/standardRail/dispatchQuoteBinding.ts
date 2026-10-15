@@ -6,6 +6,7 @@ import type { ProviderStandardRailConfig } from "./config.js";
 import { DispatchRejectedError, withDispatchRejection } from "./dispatchErrors.js";
 import { GATEWAY_CLOCK_SKEW_SECONDS } from "./gatewayEnvelope.js";
 import { assertQuoteWindowPolicy } from "./paymentBinding.js";
+import { MAX_FIRST_DISPATCH_QUOTE_AGE_SECONDS } from "./quoteRetention.js";
 import { loadProviderQuote, providerQuoteHash, type StoredProviderQuote } from "./quoteStore.js";
 import type { ProviderOutcomeConfig, QuoteV1, SignedEnvelope, StandardRailDispatchV2 } from "./types.js";
 
@@ -55,11 +56,14 @@ export async function assertForwardedQuoteIntegrity(args: {
 }
 
 /**
- * Verify the gateway QuoteV1 forwarded with every dispatch. Fixed and dynamic
- * listings alike carry a nonzero provider quote hash. The quote's age is not
- * compared with the current time: a timely payment can be dispatched with a
- * fresh envelope long after the quote window closed, and settlement time is
- * proven separately from the authenticated deposit block.
+ * Verify the gateway QuoteV1 forwarded with a dispatch that would admit a new
+ * claim. Fixed and dynamic listings alike carry a nonzero provider quote
+ * hash. The quote's age is not compared with the current time: a timely
+ * payment can be dispatched with a fresh envelope long after the quote
+ * window closed, and settlement time is proven separately from the
+ * authenticated deposit block. The gateway never signs a first dispatch more
+ * than MAX_FIRST_DISPATCH_QUOTE_AGE_SECONDS after the quote's validBefore, so
+ * an envelope signed later is refused; equality is still admitted.
  */
 export async function verifyGatewayQuote(args: {
   config: ProviderStandardRailConfig;
@@ -85,6 +89,9 @@ export async function verifyGatewayQuote(args: {
     envelope.issuedAt > now + GATEWAY_CLOCK_SKEW_SECONDS || envelope.validBefore <= envelope.issuedAt ||
     canonicalHash(envelope) !== dispatch.quoteHash
   ) throw new DispatchRejectedError("quote_window", "Quote envelope domain or window is invalid");
+  if (dispatch.issuedAt > envelope.payload.validBefore + MAX_FIRST_DISPATCH_QUOTE_AGE_SECONDS) {
+    throw new DispatchRejectedError("quote_window", "Dispatch was signed past its quote's first-dispatch bound");
+  }
   const recovered = await withDispatchRejection("signature", () => recoverMessageAddress({
     message: { raw: unsignedEnvelopeHash(envelope as unknown as Record<string, unknown>) },
     signature: envelope.signature,

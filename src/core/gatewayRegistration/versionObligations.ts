@@ -1,16 +1,20 @@
 import type { Hex } from "viem";
 import type { Queryable } from "../db/queryable.js";
+import { PROVIDER_QUOTE_OBLIGATION_SECONDS } from "../standardRail/quoteRetention.js";
 
 /*
  * What each promoted paid listing version still owes, derived only from
  * durable local state. Execution obligations (pending orders, unfinished
  * jobs, unresolved supplier operations, reviews, reputation writes and
  * lifecycle actions) need the version's handler; terminal orders need only
- * its signing key and frozen results, forever. Any provider quote of the
- * version may still be paid and dispatched, even after an order was
+ * its signing key and frozen results, forever. A provider quote of the
+ * version may still be paid and first dispatched, even after an order was
  * admitted with it (an identical request quoted in the same second shares a
- * quote): only the gateway can prove no more dispatches will come, so
- * quotes keep the version's dispatch support until it is retired.
+ * quote), until it lapses: the gateway never makes a first dispatch more
+ * than 30 days after a quote's validBefore (standardRail/quoteRetention.ts).
+ * Unlapsed quotes therefore keep the version's dispatch support until it is
+ * retired with the gateway's receipt or they lapse; a lapsed quote owes
+ * nothing.
  */
 
 export interface VersionObligations {
@@ -28,6 +32,7 @@ export interface VersionObligations {
   pendingReputation: number;
   unresolvedLifecycleActions: number;
   unexpiredQuotes: number;
+  /** Provider quotes that have not lapsed: each may still receive a first dispatch. */
   quotes: number;
 }
 
@@ -81,7 +86,8 @@ const OBLIGATIONS_SQL = `
          (SELECT count(*)::int FROM standard_provider_quotes q
            WHERE q.listing_manifest_hash=v.runtime_commitment_hash AND q.valid_before>now()) AS unexpired_quotes,
          (SELECT count(*)::int FROM standard_provider_quotes q
-           WHERE q.listing_manifest_hash=v.runtime_commitment_hash) AS quotes
+           WHERE q.listing_manifest_hash=v.runtime_commitment_hash
+             AND q.valid_before>=now()-make_interval(secs => $4)) AS quotes
     FROM provider_runtime_listing_versions v
    CROSS JOIN LATERAL (
      SELECT count(*) FILTER (WHERE t.status IN ('submitted','working','input-required'))::int AS pending_tasks,
@@ -107,6 +113,7 @@ export async function loadVersionObligations(db: Queryable, args: {
     args.gatewayOrigin,
     args.listingManifestHashes?.map((hash) => Buffer.from(hash.slice(2), "hex")) ?? null,
     args.serviceId ? Buffer.from(args.serviceId.slice(2), "hex") : null,
+    PROVIDER_QUOTE_OBLIGATION_SECONDS,
   ])).rows;
   return rows.map((row) => ({
     versionId: row.id,

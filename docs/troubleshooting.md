@@ -454,8 +454,10 @@ Nothing was admitted; the gateway sends a fresh envelope for the paid order.
 is failing and clears once the product recovers. `quote_window` means the
 forwarded quote is not the one the signed dispatch binds or names a provider
 quote this database never persisted (for example after restoring an older
-backup or pointing two deployments at different databases); `price` means a
-persisted quote does not bind this order. Compare the gateway order with the
+backup or pointing two deployments at different databases), or that the
+gateway signed this first dispatch more than 30 days after its quote's
+`validBefore`, which the protocol rules out; `price` means a persisted quote
+does not bind this order. Compare the gateway order with the
 `standard_provider_quotes` row instead of loosening the check.
 
 ### Admission stops with `retained_servicing_gap`
@@ -468,11 +470,14 @@ for the full read-only report; each gap names its kind and target:
 `PROVIDER_RETAINED_WALLET_PRIVATE_KEYS`), `control_profile` (add the earlier
 control-profile hash to `STANDARD_RAIL_RETAINED_CONTROL_PROFILE_HASHES`),
 `unreadable_contract`, `action_definition` or `action_handler`. A version stops needing its handler
-only once it is retired with the gateway's receipt; it needs its key for as
-long as its orders can be read. The servicing monitor polls the catalog's
-activation revision every minute: it re-reads the heads and rechecks on the
-first poll after a catalog write and once more on the next one (the revision
-can move before its promotion commits), and every ten minutes otherwise.
+once it is retired with the gateway's receipt, or once it is superseded,
+owes no work and each of its provider quotes has lapsed (31 days after the
+quote's `validBefore`, when no first dispatch can arrive for it any more);
+it needs its key for as long as its orders can be read. The servicing
+monitor polls the catalog's activation revision every minute: it re-reads
+the heads and rechecks on the first poll after a catalog write and once
+more on the next one (the revision can move before its promotion commits),
+and every ten minutes otherwise.
 
 ### A delayed dispatch of an earlier listing version is refused
 
@@ -493,9 +498,9 @@ profile its checkout committed; see `STANDARD_RAIL_RETAINED_CONTROL_PROFILE_HASH
 
 `gatewayEvidence` means a paid version has no verified
 `GatewayContractRetirementV1` receipt: an expired provider quote may already
-have been paid and still be owed its first dispatch, so only the gateway can
-end that obligation. Ask Daski to retire the exact listing version and pass
-the receipt with `--gateway-receipt`. `currentHead` means the version is
+have been paid and still be owed its first dispatch for up to 30 days, so
+only the gateway can end that obligation sooner. Ask Daski to retire the
+exact listing version and pass the receipt with `--gateway-receipt`. `currentHead` means the version is
 still sold; retire the whole service or promote its successor first. Every
 other count (`pendingTasks`, `durableJobs`, `supplierOperations`,
 `openReviews`, `pendingReputation`, `unresolvedLifecycleActions`,

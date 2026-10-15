@@ -220,7 +220,10 @@ the gateway commit recorded in `test/fixtures/provider-wire.source.json` and
 verify them offline, byte for byte. Run it against a gateway at or after that
 revision, including its fulfillment-deadline and named lifecycle-refusal
 changes; upgrade an existing deployment as [Releasing](docs/releasing.md)
-describes.
+describes. It relies on the gateway never signing a first dispatch more than
+30 days after its quote's `validBefore`: such a dispatch is refused
+(`quote_window`), and a quote no order names is pruned 31 days after its
+`validBefore`.
 
 ## Register with Daski
 

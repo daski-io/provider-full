@@ -31,6 +31,7 @@ const { compatibilityReport } = await import("../src/core/compatibility/compatib
 const { capabilityHash, capabilityManifest } = await import("../src/core/compatibility/capabilityManifest.js");
 const { promoteRuntimeListingVersions } = await import("../src/core/gatewayRegistration/runtimeCatalog.js");
 const { persistProviderQuote } = await import("../src/core/standardRail/quoteStore.js");
+const { PROVIDER_QUOTE_OBLIGATION_SECONDS } = await import("../src/core/standardRail/quoteRetention.js");
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const adapter = {} as FulfillmentAdapter;
@@ -39,6 +40,12 @@ const v2 = versionHead(2);
 const build = { sourceDigest: `sha256:${"1".repeat(64)}`, sourceCommit: null };
 const allKeys = new Set([provider.address, retainedWallet]);
 let database: DisposableDatabase;
+
+/** A quote window that closed `ago` seconds ago (a minute by default): the quote may still be paid. */
+function closedWindow(ago = 60): { issuedAt: number; validBefore: number } {
+  const validBefore = Math.floor(Date.now() / 1_000) - ago;
+  return { issuedAt: validBefore - 120, validBefore };
+}
 
 const asVersion = (head: typeof v1) => ({
   listingId: head.listingId, listingKey: head.listingKey, skillId: head.skillId, paymentRequired: true,
@@ -102,7 +109,7 @@ describe("compatibility report (F-T16, C-T06)", () => {
   it("is compatible when a superseded version that may still be dispatched keeps its handler and key", async () => {
     await persistProviderQuote({
       outcomeId: SKILL, listingManifestHash: v1.runtimeCommitmentHash, requestHash: `0x${"ab".repeat(32)}`,
-      grossAmount: "250000", payer: null, issuedAt: 1_700_000_000, validBefore: 1_700_000_120,
+      grossAmount: "250000", payer: null, ...closedWindow(),
     }, { pricingMode: "fixed", supplierCostCeiling: null });
     const result = await report([retainedModule()]);
     expect(result).toMatchObject({ artifactType: "ProviderCompatibilityReportV1", ok: true, gaps: [] });
@@ -117,7 +124,7 @@ describe("compatibility report (F-T16, C-T06)", () => {
   it("names the missing handler and key of a version that may still be dispatched", async () => {
     await persistProviderQuote({
       outcomeId: SKILL, listingManifestHash: v1.runtimeCommitmentHash, requestHash: `0x${"cd".repeat(32)}`,
-      grossAmount: "250000", payer: null, issuedAt: 1_700_000_000, validBefore: 1_700_000_120,
+      grossAmount: "250000", payer: null, ...closedWindow(),
     }, { pricingMode: "fixed", supplierCostCeiling: null });
     const result = await report([fixtureModule([])], new Set([provider.address]));
     expect(result.ok).toBe(false);
@@ -132,7 +139,7 @@ describe("compatibility report (F-T16, C-T06)", () => {
     const earlier = `0x${"e0".repeat(32)}` as Hex;
     await persistProviderQuote({
       outcomeId: SKILL, listingManifestHash: v1.runtimeCommitmentHash, requestHash: `0x${"ef".repeat(32)}`,
-      grossAmount: "250000", payer: null, issuedAt: 1_700_000_000, validBefore: 1_700_000_120,
+      grossAmount: "250000", payer: null, ...closedWindow(),
     }, { pricingMode: "fixed", supplierCostCeiling: null, providerControlProfileHash: earlier });
     const judged = (retained: Hex[]) => compatibilityReport(database.pool, {
       gatewayOrigin: GATEWAY_AUDIENCE, modules: [retainedModule()] as never, signingKeys: allKeys, build,
@@ -173,12 +180,12 @@ describe("compatibility report (F-T16, C-T06)", () => {
     expect(result.gaps).toEqual([expect.objectContaining({ kind: "signing_key", signingKey: retainedWallet })]);
   });
 
-  it("keeps requiring a version's handler after an admitted order used its quote, until the version is retired", async () => {
+  it("keeps requiring a version's handler after an admitted order used its quote, until it is retired or lapses", async () => {
     // An identical request quoted in the same second shares the quote, so a
     // second paid order may still arrive for it.
     const quoteHash = await persistProviderQuote({
       outcomeId: SKILL, listingManifestHash: v1.runtimeCommitmentHash, requestHash: `0x${"aa".repeat(32)}`,
-      grossAmount: "250000", payer: null, issuedAt: 1_700_000_000, validBefore: 1_700_000_120,
+      grossAmount: "250000", payer: null, ...closedWindow(),
     }, { pricingMode: "fixed", supplierCostCeiling: null });
     const customer = (await database.pool.query<{ id: string }>(
       "INSERT INTO customers(wallet_address) VALUES ($1) ON CONFLICT (wallet_address) DO UPDATE SET last_seen_at=now() RETURNING id",
@@ -213,6 +220,31 @@ describe("compatibility report (F-T16, C-T06)", () => {
     ]));
   });
 
+  it("asks nothing for a quote past its first-dispatch window, and judges no control profile it names (B3)", async () => {
+    const current = `0x${"c1".repeat(32)}` as Hex;
+    const earlier = `0x${"e1".repeat(32)}` as Hex;
+    const quoted = (requestByte: string, ago: number) => persistProviderQuote({
+      outcomeId: SKILL, listingManifestHash: v1.runtimeCommitmentHash, requestHash: `0x${requestByte.repeat(32)}` as Hex,
+      grossAmount: "250000", payer: null, ...closedWindow(ago),
+    }, { pricingMode: "fixed", supplierCostCeiling: null, providerControlProfileHash: earlier });
+    const judged = () => compatibilityReport(database.pool, {
+      gatewayOrigin: GATEWAY_AUDIENCE, modules: [fixtureModule([])] as never, signingKeys: new Set([provider.address]),
+      build, controlProfiles: { current, retained: [] },
+    });
+    await quoted("1a", PROVIDER_QUOTE_OBLIGATION_SECONDS + 60);
+    const lapsed = await judged();
+    expect(lapsed.versions[0]).toMatchObject({
+      listingManifestHash: v1.runtimeCommitmentHash, quotes: 0, requiresHandler: false, requiresSigningKey: false,
+      quoteControlProfiles: [],
+    });
+    expect(lapsed).toMatchObject({ ok: true, gaps: [] });
+    // A minute inside the window, a quote is still owed everything.
+    await quoted("1b", PROVIDER_QUOTE_OBLIGATION_SECONDS - 60);
+    const owed = await judged();
+    expect(owed.versions[0]).toMatchObject({ quotes: 1, requiresHandler: true, quoteControlProfiles: [earlier] });
+    expect(owed.gaps.map((gap) => gap.kind).sort()).toEqual(["control_profile", "handler", "signing_key"]);
+  });
+
   it("runs as a read-only command without hosting, coordinator or signed rail variables", async () => {
     const env: NodeJS.ProcessEnv = {};
     for (const [name, value] of Object.entries(process.env)) {
@@ -240,7 +272,7 @@ describe("compatibility report (F-T16, C-T06)", () => {
     await promoteRuntimeListingVersions(GATEWAY_AUDIENCE, SERVICE_ID, [asVersion(v1)]);
     await persistProviderQuote({
       outcomeId: SKILL, listingManifestHash: v1.runtimeCommitmentHash, requestHash: `0x${"ef".repeat(32)}`,
-      grossAmount: "250000", payer: null, issuedAt: 1_700_000_000, validBefore: 1_700_000_120,
+      grossAmount: "250000", payer: null, ...closedWindow(),
     }, { pricingMode: "fixed", supplierCostCeiling: null });
     const gapped = await run({ PROVIDER_RETAINED_WALLET_PRIVATE_KEYS: RETAINED_KEY });
     expect(gapped.code).toBe(1);

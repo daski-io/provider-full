@@ -11,6 +11,7 @@ import {
 } from "../serviceRegistry/executableContracts.js";
 import { canonicalHash } from "../standardRail/canonical.js";
 import type { ControlProfileSet } from "../standardRail/controlProfiles.js";
+import { PROVIDER_QUOTE_OBLIGATION_SECONDS } from "../standardRail/quoteRetention.js";
 import {
   capabilityHash,
   capabilityManifest,
@@ -22,14 +23,17 @@ import {
 /*
  * Does this artifact, with this deployment's keys, serve everything durable
  * state still requires? A version requires its handler while it can still
- * receive work: it is sold now, or unretired with any provider quote (one
- * may still be paid), or it has pending orders, jobs, supplier operations,
- * reviews or lifecycle actions. It requires its signing key for as long as
- * any order of it can be read. An open asset-action execution requires its
- * admitted definition and that definition's handler. An unretired version
- * whose quotes were issued under a control profile the deployment no longer
- * accepts may still receive a first dispatch it would refuse. Everything is
- * read from the database; nothing is assumed from an external coordinator.
+ * receive work: it is sold now, or unretired with a provider quote that has
+ * not lapsed (one may still be paid and first dispatched; a quote lapses 31
+ * days after its validBefore, standardRail/quoteRetention.ts), or it has
+ * pending orders, jobs, supplier operations, reviews or lifecycle actions.
+ * It requires its signing key for as long as any order of it can be read.
+ * An open asset-action execution requires its admitted definition and that
+ * definition's handler. An unretired version whose unlapsed quotes were
+ * issued under a control profile the deployment no longer accepts may still
+ * receive a first dispatch it would refuse. A lapsed quote requires nothing.
+ * Everything is read from the database; nothing is assumed from an external
+ * coordinator.
  */
 
 export type CompatibilityGapKind =
@@ -53,7 +57,7 @@ export interface VersionCompatibility extends VersionObligations {
   signingKey: Address;
   requiresHandler: boolean;
   requiresSigningKey: boolean;
-  /** The control profiles its recorded quotes were issued under. */
+  /** The control profiles its unlapsed quotes were issued under. */
   quoteControlProfiles: Hex[];
 }
 
@@ -99,11 +103,13 @@ function versionRequirements(version: VersionObligations): { handler: boolean; s
   return { handler, signingKey: handler || version.terminalTasks > 0 };
 }
 
-/** Each version's recorded quote control profiles, by lowercase commitment hash. */
+/** Each version's unlapsed quote control profiles, by lowercase commitment hash. */
 async function quoteControlProfiles(db: Queryable): Promise<Map<string, Hex[]>> {
   const rows = (await db.query<{ listing_manifest_hash: Buffer; provider_control_profile_hash: Buffer }>(
     `SELECT DISTINCT listing_manifest_hash,provider_control_profile_hash FROM standard_provider_quotes
-      WHERE provider_control_profile_hash IS NOT NULL`,
+      WHERE provider_control_profile_hash IS NOT NULL
+        AND valid_before>=now()-make_interval(secs => $1)`,
+    [PROVIDER_QUOTE_OBLIGATION_SECONDS],
   )).rows;
   const profiles = new Map<string, Hex[]>();
   for (const row of rows) {
@@ -154,8 +160,8 @@ export async function compatibilityReport(db: Queryable, args: {
       gaps.push({ kind: "handler", ...at, executableDefinitionHash: executable! });
     }
     if (requires.signingKey && !keys.has(signingKey)) gaps.push({ kind: "signing_key", ...at, signingKey });
-    // Any quote of an unretired version may still be paid and first
-    // dispatched under the profile it was issued under.
+    // Any unlapsed quote of an unretired version may still be paid and
+    // first dispatched under the profile it was issued under.
     const profiles = quoteProfiles.get(version.listingManifestHash.toLowerCase()) ?? [];
     if (accepted && !version.retired) {
       for (const profile of profiles) {

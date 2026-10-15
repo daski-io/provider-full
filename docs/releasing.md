@@ -46,8 +46,11 @@ recorded in `test/fixtures/provider-wire.source.json`, with the sha256 of its
 manifest; the tests verify that parity offline and drive the real quote,
 intake, dispatch, status and lifecycle handlers through every vector. That
 gateway commit is the release's tested consumer contract: deploy against a
-gateway at or after it, with its fulfillment-deadline protection and named
-lifecycle refusals. Re-vendor only a fixture revision the gateway publishes,
+gateway at or after it, with its fulfillment-deadline protection, named
+lifecycle refusals and first-dispatch quote age bound (no new dispatch
+envelope more than 30 days after a quote's `validBefore`,
+`MAX_FIRST_DISPATCH_QUOTE_AGE_SECONDS`), which the retention sweep's quote
+pruning relies on. Re-vendor only a fixture revision the gateway publishes,
 reviewed by both starters' maintainers, never by editing the files.
 
 Record with each release the package version, source commit, image digest,
@@ -74,10 +77,12 @@ still owes before it takes traffic:
    reads stay served.
 3. Register a changed contract only after the build that serves both the
    old and new contract is live; the registration run refuses otherwise.
-4. Remove a retained contract or key only after every listing version that
-   needs it is retired with the gateway's receipt
-   (`npm run daski:register -- --retire-listing`), and keep every key for as
-   long as that version's orders can be read.
+4. Remove a retained contract or key only once the compatibility check no
+   longer names it: a listing version needs its contract until it is
+   retired with the gateway's receipt
+   (`npm run daski:register -- --retire-listing`) or owes no work and has no
+   unlapsed quote (a quote lapses 31 days after its `validBefore`), and its
+   key for as long as its orders can be read.
 
 Rotating the provider control profile is an upgrade too: keep the earlier
 profile's hash in `STANDARD_RAIL_RETAINED_CONTROL_PROFILE_HASHES` (the

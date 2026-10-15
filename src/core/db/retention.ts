@@ -6,6 +6,7 @@ import { failWorker, heartbeatWorker, setWorkerStatus } from "../health.js";
 import { purgeExpiredEphemeralTransactions } from "./ephemeralRetention.js";
 import { workerCycleFailed, workerCycleSucceeded } from "../observability/workerConditions.js";
 import { ASSET_DELIVERY_ADMISSION_BOUND_SECONDS } from "../standardRail/assetDeliveryAdmission.js";
+import { pruneLapsedProviderQuotes } from "../standardRail/quoteRetention.js";
 
 // Frequent no-op sweeps keep both retention lag and readiness evidence
 // bounded; indexed predicates make this safe across replicas.
@@ -271,6 +272,9 @@ export async function runRetention(): Promise<Record<string, number>> {
            WHERE t.asset_id = a.asset_id AND t.status IN ('submitted','working','input-required'))`,
     [config.DURABLE_JOB_RETENTION_DAYS, ASSET_DELIVERY_ADMISSION_BOUND_SECONDS],
   );
+  // A provider quote no first dispatch can reach any more, and no order
+  // names, owes nothing: a bounded, best-effort batch per sweep.
+  counts.providerQuotes = await pruneLapsedProviderQuotes(pool);
   await remove("rateBuckets", `DELETE FROM rate_limit_buckets WHERE expires_at < now()`, []);
   counts.ephemeralTransactions = await purgeExpiredEphemeralTransactions();
   // An empty sweep is the normal case every five minutes: only removals
