@@ -44,7 +44,7 @@ import {
   installOutboundFailureLog,
   outboundFailureEvent,
 } from "../src/core/observability/outboundFailureLog.js";
-import { boundedFetch } from "../src/core/security/outboundHttp.js";
+import { boundedFetch, OutboundAbortedError } from "../src/core/security/outboundHttp.js";
 import { withRpcFailover } from "../src/core/chain/rpcFailover.js";
 
 const reports: OutboundFailureReport[] = [];
@@ -81,6 +81,22 @@ describe("outbound failure classification", () => {
     expect(outboundOperation(undefined, new URL("https://api.example/"))).toBe("GET /");
   });
 
+  it("keeps only plain words and versions of a path, so no domain, e-mail or account id is logged", () => {
+    expect(outboundOperation("POST", new URL("https://api.example/v1/domains/acme-secret.com/renew")))
+      .toBe("POST /v1/domains/:id/renew");
+    expect(outboundOperation("GET", new URL("https://api.example/customers/jane%40example.com"))).toBe("GET /customers/:id");
+    expect(outboundOperation("GET", new URL("https://api.example/customers/jane@example.com/orders")))
+      .toBe("GET /customers/:id/orders");
+    expect(outboundOperation("DELETE", new URL("https://api.example/v2/customers/synth_Rk7QmXp2LvT9")))
+      .toBe("DELETE /v2/customers/:id");
+    expect(outboundOperation("GET", new URL("https://api.example/accounts/ACME/plans/Gold")))
+      .toBe("GET /accounts/:id/plans/:id");
+    expect(outboundOperation("GET", new URL("https://api.example/report_jobs/batch-status/")))
+      .toBe("GET /report_jobs/batch-status/");
+    expect(outboundOperation("POST", new URL("https://api.example/v1/chat/completions"))).toBe("POST /v1/chat/completions");
+    expect(outboundOperation("GET", new URL(`https://api.example/${"a".repeat(33)}`))).toBe("GET /:id");
+  });
+
   it("keeps only the remote's short error code, never its text", () => {
     expect(outboundErrorCode("application/json", JSON.stringify({ ErrorCode: 300, Message: "Invalid recipient address" }))).toBe(300);
     expect(outboundErrorCode("application/json; charset=utf-8", JSON.stringify({ error: "DEFAULT", message: "Default error" }))).toBe("DEFAULT");
@@ -98,8 +114,9 @@ describe("outbound failure classification", () => {
     expect(outboundFailureFromError(new Error("outbound response content type 'text/html' is not allowed"))).toMatchObject({ reason: "content_type" });
     expect(outboundFailureFromError(new Error("outbound target rejected: private address"))).toMatchObject({ reason: "target_rejected" });
     expect(outboundFailureFromError(new Error("outbound request timed out after 1000ms"))).toMatchObject({ reason: "timeout" });
+    // A DOMException's numeric code is its legacy type number, not a remote's code.
     expect(outboundFailureFromError(new DOMException("The operation was aborted due to timeout", "TimeoutError")))
-      .toMatchObject({ reason: "timeout" });
+      .toMatchObject({ reason: "timeout", code: null });
     const fetchFailure = new TypeError("fetch failed");
     (fetchFailure as { cause?: unknown }).cause = { code: "ENOTFOUND" };
     expect(outboundFailureFromError(fetchFailure)).toMatchObject({ reason: "network", networkCode: "ENOTFOUND" });
@@ -262,6 +279,35 @@ describe("boundedFetch failure reporting", () => {
 
     expect(reports.map((report) => report.reason)).toEqual(["timeout", "circuit_open"]);
     expect(reports[0]).toMatchObject({ target: "timeouts.example", operation: "POST /a" });
+  });
+
+  it("counts a caller's own deadline the origin missed, but never the caller's other aborts", async () => {
+    // The origin never answers: fetch rejects with whatever aborted its signal.
+    vi.stubGlobal("fetch", vi.fn((_url: URL, init: RequestInit) => new Promise((_resolve, reject) => {
+      init.signal!.addEventListener("abort", () => reject(init.signal!.reason), { once: true });
+    })));
+    const cancelled = () => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new Error("caller gave up")), 5);
+      return controller.signal;
+    };
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await expect(boundedFetch("https://cancelled.example/a", { signal: cancelled() }))
+        .rejects.toBeInstanceOf(OutboundAbortedError);
+    }
+    await settle();
+    expect(reports).toEqual([]);
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await expect(boundedFetch("https://slow.example/a", { signal: AbortSignal.timeout(5) }))
+        .rejects.toBeInstanceOf(OutboundAbortedError);
+    }
+    await expect(boundedFetch("https://slow.example/a", { signal: AbortSignal.timeout(5) }))
+      .rejects.toThrow("outbound circuit open");
+    await settle();
+    expect(reports.map((report) => [report.target, report.reason])).toEqual([
+      ["slow.example", "timeout"], ["slow.example", "circuit_open"],
+    ]);
   });
 
   it("reports a rejected target before any request is made", async () => {

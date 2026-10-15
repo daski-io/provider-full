@@ -133,15 +133,18 @@ or HTML (content-type admission applies to successful bodies), throws
 `OutboundCircuitOpenError` with its `retryAt` while the origin's circuit is
 open, and honors a caller's `signal` together with its own timeout through
 the whole response-body read; a caller abort surfaces as
-`OutboundAbortedError` and never opens the circuit. An abort only stops
-waiting: it never proves the product did not act, so a mutating call
-reconciles instead of retrying blindly, and a timeout or abort that escapes
-`execute` parks the paid order for reconciliation rather than failing it. A
-failed DNS lookup keeps the resolver's error as its `cause`. Every failure
-is reported to the provider log and the admin Platform Log as
-`outbound.request_failed` with only its class, templated operation, status,
-the remote's short error code and network code, throttled to one report a
-minute per identical failure.
+`OutboundAbortedError` and never opens the circuit, except a caller's own
+deadline (`AbortSignal.timeout`), which counts against the origin like the
+helper's timeout. An abort only stops waiting: it never proves the product
+did not act, so a mutating call reconciles instead of retrying blindly, and
+a timeout or abort that escapes `execute` parks the paid order for
+reconciliation rather than failing it. A failed DNS lookup keeps the
+resolver's error as its `cause`. Every failure is reported to the provider
+log and the admin Platform Log as `outbound.request_failed` with only its
+class, templated operation (plain lowercase words and versions of the path
+are kept; any other segment becomes `:id`), status, the remote's short
+error code and network code, throttled to one report a minute per
+identical failure.
 
 ### Authentication
 

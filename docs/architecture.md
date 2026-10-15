@@ -496,14 +496,18 @@ Outbound calls are observable without leaking data
 attempt (labelled with its method and block-parameter class, never the
 parameter) and every LLM call report a failure's class (HTTP error, JSON-RPC
 error answer, timeout, network, circuit, concurrency, size, content type,
-target, redirect), templated operation, status, the remote's short error code
-and network code, never response text, once a minute per identical failure,
-to the provider log and the admin Platform Log. Recurring work logs
-transitions, not polls (`observability/conditionTracker.ts`): a polling
-worker logs when it starts failing, fails differently or recovers; the
-registration reconciler records each service's and cycle's verdict for the
-operations summary and logs a change of verdict, auditing a ServiceRegistry
-link only when it changes; an empty retention sweep is silent.
+target, redirect), templated operation (only plain lowercase words and
+versions of the path are kept; every other segment becomes `:id`), status,
+the remote's short error code and network code, never response text, once a
+minute per identical failure, to the provider log and the admin Platform
+Log. A caller's own deadline that the origin missed counts against the
+origin's circuit like the helper's timeout; any other caller abort does
+not. Recurring work logs transitions, not polls
+(`observability/conditionTracker.ts`): a polling worker logs when it starts
+failing, fails differently or recovers; the registration reconciler records
+each service's and cycle's verdict for the operations summary and logs a
+change of verdict, auditing a ServiceRegistry link only when it changes; an
+empty retention sweep is silent.
 
 Workers declare heartbeat ids and service invariants through
 `operations.readiness`. Dead letters surface as human reviews rather than

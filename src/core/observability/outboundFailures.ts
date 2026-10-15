@@ -47,8 +47,13 @@ const THROTTLE_MS = 60_000;
 const MAX_TRACKED_KEYS = 1_000;
 const OPERATION_MAX_CHARS = 120;
 const CODE_TOKEN = /^[A-Za-z0-9_.:-]{1,64}$/;
-const ID_SEGMENT =
-  /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{16,}|\d{4,}|[A-Za-z0-9_-]{24,})$/i;
+/**
+ * A path segment kept as written: lowercase words joined by `-` or `_`, or
+ * a version such as `v2`. Anything else (digits, capitals, dots, `@` or
+ * percent-encoding) may name a customer, account, domain or document.
+ */
+const PATH_WORD = /^(?:[a-z]+(?:[-_][a-z]+)*|v\d{1,3})$/;
+const PATH_WORD_MAX_CHARS = 32;
 const recent = new Map<string, { emittedAt: number; suppressed: number }>();
 
 export function onOutboundFailure(listener: Listener): () => void {
@@ -99,12 +104,15 @@ export function describeOutboundFailure(failure: OutboundFailure): string {
     + (failure.status === null ? "" : ` HTTP ${failure.status}`);
 }
 
-/// `POST /orders/:id` — identifiers become `:id` and the query is dropped,
-/// so the label never carries an order, account or document id.
+/// `POST /orders/:id` — every segment that is not a plain lowercase word or
+/// a version becomes `:id` and the query is dropped, so the label never
+/// carries an order, account, domain, e-mail or document id.
 export function outboundOperation(method: string | undefined, url: URL): string {
   const path = url.pathname
     .split("/")
-    .map((segment) => (segment && ID_SEGMENT.test(segment) ? ":id" : segment))
+    .map((segment) => (
+      !segment || (segment.length <= PATH_WORD_MAX_CHARS && PATH_WORD.test(segment)) ? segment : ":id"
+    ))
     .join("/");
   return `${(method ?? "GET").toUpperCase()} ${path || "/"}`.slice(0, OPERATION_MAX_CHARS);
 }
@@ -153,7 +161,9 @@ export function outboundFailureFromError(
   const status = typeof record.status === "number" && Number.isInteger(record.status)
     ? record.status
     : null;
-  const code = codeToken(record.code) ?? codeToken(record.type) ?? codeToken(cause?.code);
+  // A DOMException's numeric `code` is its legacy type number, not the remote's.
+  const ownCode = error instanceof DOMException ? null : codeToken(record.code);
+  const code = ownCode ?? codeToken(record.type) ?? codeToken(cause?.code);
   const networkCode = typeof cause?.code === "string" && CODE_TOKEN.test(cause.code)
     ? cause.code
     : typeof record.code === "string" && /^E[A-Z0-9_]+$/.test(record.code)
@@ -178,9 +188,7 @@ export function outboundFailureFromError(
   if (status !== null) return { reason: "http_error", status, code, networkCode };
   // A numeric JSON-RPC code without an HTTP status: the request reached the
   // node, which answered with an error object (viem's RpcRequestError).
-  if (typeof record.code === "number" && Number.isInteger(record.code)) {
-    return { reason: "rpc_error", status, code, networkCode };
-  }
+  if (typeof ownCode === "number") return { reason: "rpc_error", status, code, networkCode };
   return { reason: "network", status, code, networkCode };
 }
 

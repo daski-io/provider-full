@@ -58,11 +58,13 @@ const origins = new Map<string, OriginState>();
  * fetch and the pinned paths alike. An abort only stops this process from
  * waiting: it never proves the remote action did not happen, so a mutating
  * caller must reconcile, not retry blindly. A caller abort is not counted
- * against the origin's circuit. An error reply keeps its HTTP status even
- * when its body is empty or not the expected media type; content-type
- * admission applies to successful bodies only. Every failure (a guard
- * refusal, a transport error or a non-2xx reply) is reported to the
- * outbound-failure log, redacted, before it is thrown or returned.
+ * against the origin's circuit, unless it was the caller's own deadline
+ * (`AbortSignal.timeout`), which the origin missed. An error reply keeps
+ * its HTTP status even when its body is empty or not the expected media
+ * type; content-type admission applies to successful bodies only. Every
+ * failure (a guard refusal, a transport error, a missed deadline or a
+ * non-2xx reply) is reported to the outbound-failure log, redacted, before
+ * it is thrown or returned.
  */
 export async function boundedFetch(
   input: string | URL,
@@ -156,7 +158,16 @@ export async function boundedFetch(
       json: <T>() => JSON.parse(body.toString("utf8")) as T,
     };
   } catch (error) {
-    if (caller?.aborted) throw new OutboundAbortedError(caller.reason);
+    if (caller?.aborted) {
+      // The caller's own deadline (AbortSignal.timeout) expiring means the
+      // origin did not answer in time: that counts and is reported. Any
+      // other caller abort is the caller's decision, not the origin's fault.
+      if (isDeadline(caller.reason)) {
+        recordFailure(state);
+        reportOutboundFailure({ target, operation, ...outboundFailureFromError(caller.reason) });
+      }
+      throw new OutboundAbortedError(caller.reason);
+    }
     recordFailure(state);
     throw failed(error instanceof Error ? error : new Error(String(error)));
   } finally {
@@ -205,6 +216,9 @@ async function fetchResponse(
     body: Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)), size),
   };
 }
+
+const isDeadline = (reason: unknown): boolean =>
+  typeof reason === "object" && reason !== null && (reason as { name?: unknown }).name === "TimeoutError";
 
 function recordFailure(state: OriginState): void {
   state.failures++;

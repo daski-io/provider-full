@@ -301,7 +301,11 @@ All notable changes to this project will be documented here.
   reply's HTTP status, throws `OutboundCircuitOpenError` with the circuit's
   real `retryAt`, and composes a caller's `signal` with its own timeout
   through the whole body read on both the fetch and the pinned path; a caller
-  abort is `OutboundAbortedError` and never opens the circuit. A failed DNS
+  abort is `OutboundAbortedError` and never opens the circuit, unless it is
+  the caller's own deadline (`AbortSignal.timeout`), which counts and is
+  reported as the origin's timeout. A report's operation keeps only plain
+  lowercase words and versions of the path; any other segment (a domain, an
+  e-mail address, an account or document id) becomes `:id`. A failed DNS
   lookup keeps the resolver's error as its `cause`.
 
 - Recurring work logs state transitions instead of every poll: polling
