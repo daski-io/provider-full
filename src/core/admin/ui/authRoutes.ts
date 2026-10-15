@@ -17,6 +17,7 @@ import {
 } from "./sessionCookie.js";
 import { renderLogin } from "./layouts.js";
 import { getAdminWallet } from "./authMiddleware.js";
+import { requestClientIp } from "../../security/rateLimit.js";
 
 const NONCE_TTL_SECONDS = 5 * 60;
 
@@ -33,7 +34,7 @@ export function mountAdminAuthRoutes(router: Router): void {
       res.status(503).json({ error: "siwe_not_configured" });
       return;
     }
-    const issued = await issueSiweNonce(req.ip ?? "unknown");
+    const issued = await issueSiweNonce(requestClientIp(req));
     if (!issued.ok) {
       res.status(issued.reason === "rate-limited" ? 429 : 503).json({ error: issued.reason });
       return;
@@ -63,7 +64,7 @@ export function mountAdminAuthRoutes(router: Router): void {
     const result = await verifySiweSignIn({
       message: body.message,
       signature: body.signature as Hex,
-      requestIp: req.ip ?? "unknown",
+      requestIp: requestClientIp(req),
     });
     if (!result.ok) {
       res.status(result.reason === "rate-limited" ? 429 : 401).send(result.reason);

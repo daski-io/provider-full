@@ -5,11 +5,13 @@ import express from "express";
 import { afterEach, describe, expect, it } from "vitest";
 import { config } from "../src/core/config.js";
 import { installHttpSecurityBoundary } from "../src/core/security/httpBoundary.js";
+import { requestClientIp } from "../src/core/security/rateLimit.js";
 
 const originalConfig = {
   BASE_URL: config.BASE_URL,
   TRUST_PROXY_HOPS: config.TRUST_PROXY_HOPS,
   TRUST_PROXY_CIDRS: config.TRUST_PROXY_CIDRS,
+  EDGE_SECRET: config.EDGE_SECRET,
 };
 
 afterEach(() => Object.assign(config, originalConfig));
@@ -25,6 +27,18 @@ async function serveBoundary(overrides: Partial<typeof originalConfig>): Promise
     res.type("html").send(
       '<!doctype html><script>plain()</script><script nonce="fixed">fixed()</script>',
     );
+  });
+  app.get("/health/live", (_req, res) => {
+    res.json({ status: "alive" });
+  });
+  app.get("/echo-client", (req, res) => {
+    res.json({
+      client: requestClientIp(req),
+      edgeVerified: req.edgeVerified === true,
+      forwardedFor: req.get("x-forwarded-for") ?? null,
+      forwardedProto: req.get("x-forwarded-proto") ?? null,
+      edgeSecret: req.get("x-daski-edge-secret") ?? null,
+    });
   });
   app.get("/echo-forwarding", (req, res) => {
     res.json({
@@ -224,5 +238,65 @@ describe("global HTTP security boundary", () => {
     });
     const app = express();
     expect(() => installHttpSecurityBoundary(app)).toThrow("invalid IP/CIDR");
+  });
+});
+
+// C05: an optional verified edge mode. The edge secret proves the path and
+// names the client; a caller's forwarding headers are dropped unread, so
+// the two are never interchangeable trust sources. Unset, nothing changes.
+describe("verified edge mode", () => {
+  const edge = {
+    BASE_URL: "https://provider.example",
+    TRUST_PROXY_HOPS: 0,
+    TRUST_PROXY_CIDRS: "",
+    EDGE_SECRET: "s".repeat(64),
+  };
+
+  it("refuses a public request without the edge secret and still answers health", async () => {
+    await withServer(edge, async (url) => {
+      const refused = await fetch(new URL("/echo-client", url), {
+        headers: { "cf-connecting-ip": "203.0.113.9", "x-forwarded-for": "203.0.113.9" },
+      });
+      expect(refused.status).toBe(403);
+      await expect(refused.json()).resolves.toEqual({ error: "edge_required" });
+      const wrong = await fetch(new URL("/echo-client", url), {
+        headers: { "x-daski-edge-secret": `${"s".repeat(63)}x`, "cf-connecting-ip": "203.0.113.9" },
+      });
+      expect(wrong.status).toBe(403);
+      const health = await fetch(new URL("/health/live", url));
+      expect(health.status).toBe(200);
+    });
+  });
+
+  it("names the client the edge forwards and drops the forwarding chain and the secret", async () => {
+    await withServer(edge, async (url) => {
+      const admitted = await fetch(new URL("/echo-client", url), {
+        headers: {
+          "x-daski-edge-secret": "s".repeat(64),
+          "cf-connecting-ip": "203.0.113.9",
+          "x-forwarded-for": "198.51.100.1, 203.0.113.9, 172.67.1.1",
+          "x-forwarded-proto": "https",
+        },
+      });
+      expect(admitted.status).toBe(200);
+      await expect(admitted.json()).resolves.toEqual({
+        client: "203.0.113.9", edgeVerified: true, forwardedFor: null, forwardedProto: null, edgeSecret: null,
+      });
+      const unnamed = await fetch(new URL("/echo-client", url), {
+        headers: { "x-daski-edge-secret": "s".repeat(64) },
+      });
+      expect(unnamed.status).toBe(400);
+      await expect(unnamed.json()).resolves.toEqual({ error: "edge_client_address_missing" });
+    });
+  });
+
+  it("never lets a caller-written client address stand in for the edge's when no secret is configured", async () => {
+    await withServer({ ...edge, EDGE_SECRET: "" }, async (url) => {
+      const response = await fetch(new URL("/echo-client", url), {
+        headers: { "cf-connecting-ip": "203.0.113.9", "x-daski-edge-secret": "s".repeat(64) },
+      });
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({ client: "127.0.0.1", edgeVerified: false });
+    });
   });
 });

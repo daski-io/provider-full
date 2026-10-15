@@ -109,3 +109,15 @@ describe("Base Mainnet configuration contract", () => {
       .toThrow(/PAYMENT_RAIL is retired/);
   });
 });
+
+describe("edge secret", () => {
+  it("lets mainnet declare its topology through the edge secret instead of proxy ranges", () => {
+    const { TRUST_PROXY_HOPS: _hops, TRUST_PROXY_CIDRS: _cidrs, ...withoutProxy } = mainnetEnv();
+    expect(() => parseConfig(withoutProxy)).toThrow(/trusted reverse-proxy CIDRs or EDGE_SECRET/);
+    expect(parseConfig({ ...withoutProxy, EDGE_SECRET: "e".repeat(64) }).EDGE_SECRET).toBe("e".repeat(64));
+  });
+
+  it("rejects a short edge secret", () => {
+    expect(() => parseConfig({ ...productionTestnetEnv(), EDGE_SECRET: "short" })).toThrow(/at least 32 characters/);
+  });
+});

@@ -1,6 +1,20 @@
+import { timingSafeEqual } from "node:crypto";
+import { isIP } from "node:net";
 import type { Express, NextFunction, Request, Response } from "express";
 import { config } from "../config.js";
-import { isIpInRanges } from "./rateLimit.js";
+import { isIpInRanges, normalizeIp } from "./rateLimit.js";
+
+declare module "express-serve-static-core" {
+  interface Request {
+    /** The client address the boundary established: the edge-forwarded address in edge mode. */
+    clientAddress?: string;
+    /** Set once the request proved it came through the verified edge. */
+    edgeVerified?: boolean;
+  }
+}
+
+export const EDGE_SECRET_HEADER = "x-daski-edge-secret";
+export const EDGE_CLIENT_HEADER = "cf-connecting-ip";
 
 /** Install the security controls that must run before every public route. */
 export function installHttpSecurityBoundary(app: Express): void {
@@ -14,7 +28,48 @@ export function installHttpSecurityBoundary(app: Express): void {
   app.set("trust proxy", (ip: string, hop: number) =>
     hop < config.TRUST_PROXY_HOPS && isIpInRanges(ip, trustedProxyCidrs));
   app.use(securityHeaders());
+  app.use(edgeGate());
   app.use(rejectUntrustedForwardingHeaders(trustedProxyCidrs));
+}
+
+// Optional verified edge mode. Behind a Cloudflare edge the forwarding chain
+// is the edge's and the platform's, not a declared topology, and a hop count
+// would either name a proxy as the client or believe an address a direct
+// caller wrote. With EDGE_SECRET set the chain is never counted: the edge
+// adds the secret to every request it forwards and a public request without
+// it is refused, the client is the address the edge names itself, and the
+// forwarding headers are dropped before anything reads them, so the secret
+// and a caller's forwarding headers are never interchangeable proofs.
+// /health carries nothing, so a platform probe can reach the process
+// directly.
+function edgeGate() {
+  const secret = config.EDGE_SECRET ? Buffer.from(config.EDGE_SECRET) : null;
+  return (req: Request, res: Response, next: NextFunction): void => {
+    if (!secret) {
+      next();
+      return;
+    }
+    const health = req.path === "/health" || req.path.startsWith("/health/");
+    if (!health) {
+      const presented = Buffer.from(req.get(EDGE_SECRET_HEADER) ?? "");
+      if (presented.length !== secret.length || !timingSafeEqual(presented, secret)) {
+        res.status(403).json({ error: "edge_required" });
+        return;
+      }
+      const client = normalizeIp(req.get(EDGE_CLIENT_HEADER) ?? "");
+      if (!isIP(client)) {
+        res.status(400).json({ error: "edge_client_address_missing" });
+        return;
+      }
+      req.clientAddress = client;
+      req.edgeVerified = true;
+    }
+    delete req.headers["x-forwarded-for"];
+    delete req.headers["x-forwarded-proto"];
+    delete req.headers["x-forwarded-host"];
+    delete req.headers[EDGE_SECRET_HEADER];
+    next();
+  };
 }
 
 function securityHeaders() {

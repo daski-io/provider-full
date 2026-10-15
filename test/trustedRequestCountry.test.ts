@@ -14,14 +14,24 @@ afterEach(() => {
   config.TRUSTED_REQUEST_COUNTRY_HEADER = original.header;
 });
 
-function request(peer: string, value: string | undefined) {
+function request(peer: string, value: string | undefined, edgeVerified = false) {
   return {
     socket: { remoteAddress: peer },
     get: () => value,
+    edgeVerified,
   } as any;
 }
 
 describe("trusted request country", () => {
+  it("accepts the edge's country assertion only on an edge-verified request", () => {
+    config.TRUST_PROXY_HOPS = 0;
+    config.TRUST_PROXY_CIDRS = "";
+    config.TRUSTED_REQUEST_COUNTRY_HEADER = "cf-ipcountry";
+    expect(trustedRequestCountry(request("198.51.100.7", "ve", true), new Date("2026-07-21T12:00:00.000Z")))
+      .toEqual({ country: "VE", source: "edge-header:cf-ipcountry", observedAt: "2026-07-21T12:00:00.000Z" });
+    expect(trustedRequestCountry(request("198.51.100.7", "ve"))).toBeNull();
+  });
+
   it("accepts an ISO country only from the declared proxy peer", () => {
     config.TRUST_PROXY_HOPS = 1;
     config.TRUST_PROXY_CIDRS = "192.0.2.0/24";

@@ -242,7 +242,9 @@ authentication or a reviewed signing proxy as described in the security model.
 | `RATE_LIMIT_A2A_PER_MIN` | Per-IP sustained A2A rate. |
 | `RATE_LIMIT_BYPASS_IPS` | Optional reviewed gateway hosts/narrow CIDRs. Production rejects overbroad ranges. |
 | `TRUST_PROXY_HOPS` | Exact trusted reverse-proxy hop count, zero when none. Mainnet requires a reviewed proxy topology. |
-| `TRUST_PROXY_CIDRS` | Trusted proxy addresses/narrow CIDRs. Mainnet requires them; production rejects overbroad ranges. |
+| `TRUST_PROXY_CIDRS` | Trusted proxy addresses/narrow CIDRs. Mainnet requires them unless `EDGE_SECRET` is set; production rejects overbroad ranges. |
+| `EDGE_SECRET` | Optional verified edge mode, disabled when empty: the at-least-32-character value a Cloudflare edge adds as `X-Daski-Edge-Secret` to every request it forwards. A public request without it is refused (`403 edge_required`), the client address is the edge's `CF-Connecting-IP` (`400 edge_client_address_missing` without one), and forwarding headers are dropped unread; `/health` is exempt. Rate limits, the concurrency budget and the admin SIWE nonce use that address, and `TRUSTED_REQUEST_COUNTRY_HEADER` is accepted on edge-verified requests. Secret. |
+| `TRUSTED_REQUEST_COUNTRY_HEADER` | Optional edge-owned ISO alpha-2 country header name for screening context. Accepted only from a peer inside `TRUST_PROXY_CIDRS` or on an edge-verified request; the edge must replace, never forward, a client's value. |
 | `EDGE_RATE_LIMIT_VERIFIED` | Strict boolean evidence that production edge limiting is configured. Required on Mainnet. |
 | `PUSH_NOTIFICATION_ALLOW_HTTP` | Local-only escape hatch for HTTP destinations; forbidden in production and Mainnet. |
 

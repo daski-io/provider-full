@@ -17,7 +17,7 @@ interface IpRange {
   prefix: number;
 }
 
-function normalizeIp(value: string): string {
+export function normalizeIp(value: string): string {
   let ip = value.trim().replace(/^\[|\]$/g, "").split("%", 1)[0];
   if (ip.toLowerCase().startsWith("::ffff:") && isIP(ip.slice(7)) === 4) {
     ip = ip.slice(7);
@@ -97,8 +97,11 @@ export function isIpInRanges(ip: string, ranges: string[]): boolean {
   });
 }
 
+// The client address the HTTP boundary established (the edge's
+// CF-Connecting-IP in edge mode), else express's trusted-proxy view, else
+// the socket peer.
 export function requestClientIp(req: Request): string {
-  return normalizeIp(req.ip || req.socket.remoteAddress || "unknown");
+  return normalizeIp(req.clientAddress || req.ip || req.socket.remoteAddress || "unknown");
 }
 
 export function makeRateLimiter(cfg: RateLimitConfig) {

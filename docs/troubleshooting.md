@@ -661,7 +661,12 @@ sales only to admitting replicas can point that route's health check at
 
 Set the exact trusted hop count and narrow proxy CIDRs for the actual platform.
 Confirm it strips untrusted forwarded headers at the edge. Do not trust all
-proxies or use broad CIDRs as a convenience.
+proxies or use broad CIDRs as a convenience. Behind a Cloudflare edge, whose
+forwarding chain a caller can start, use `EDGE_SECRET` instead of a hop count:
+the edge adds the secret, the provider refuses requests without it
+(`403 edge_required`), and takes the client from `CF-Connecting-IP`. A
+`400 edge_client_address_missing` means the edge rule forwards the secret but
+not the client address.
 
 ### Standard-rail request answers `invalid_json`, `413`, or `415`
 

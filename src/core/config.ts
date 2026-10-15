@@ -313,6 +313,13 @@ const envSchema = z.object({
   // Express proxy topology. Zero means forwarded headers are ignored.
   TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(3).default(0),
   TRUST_PROXY_CIDRS: z.string().default(""),
+  // Optional verified edge (security/httpBoundary.ts): the value a
+  // Cloudflare edge adds to every request it forwards, as
+  // X-Daski-Edge-Secret. Set, a public request without it is refused, the
+  // client address is the one the edge forwards (CF-Connecting-IP), and the
+  // forwarding chain is dropped unread: the secret proves the edge path.
+  // Empty (default) keeps the hosting-neutral proxy-hop topology.
+  EDGE_SECRET: z.string().default(""),
   TRUSTED_REQUEST_COUNTRY_HEADER: z.string()
     .regex(/^(?:|[A-Za-z0-9!#$%&'*+.^_`|~-]+)$/)
     .default(""),
@@ -420,8 +427,13 @@ const envSchema = z.object({
       "production requires a distinct privileged migration database role",
     );
   }
-  if (mainnet && (env.TRUST_PROXY_HOPS < 1 || env.TRUST_PROXY_CIDRS.trim().length === 0)) {
-    reject("TRUST_PROXY_CIDRS", "Base mainnet must declare the trusted reverse-proxy CIDRs");
+  if (env.EDGE_SECRET && env.EDGE_SECRET.length < 32) {
+    reject("EDGE_SECRET", "EDGE_SECRET must be at least 32 characters");
+  }
+  // Mainnet declares its ingress topology one way or the other: the edge
+  // secret, or the reverse-proxy hops and ranges of a direct deployment.
+  if (mainnet && !env.EDGE_SECRET && (env.TRUST_PROXY_HOPS < 1 || env.TRUST_PROXY_CIDRS.trim().length === 0)) {
+    reject("TRUST_PROXY_CIDRS", "Base mainnet must declare the trusted reverse-proxy CIDRs or EDGE_SECRET");
   }
   if (production && hasOverbroadCidr(env.TRUST_PROXY_CIDRS)) {
     reject("TRUST_PROXY_CIDRS", "production proxy trust must use reviewed IPv4 /24 or IPv6 /64 (or narrower) ranges");

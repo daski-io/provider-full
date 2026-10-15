@@ -309,6 +309,14 @@ All notable changes to this project will be documented here.
   crawlers that treat the card URL listed in the registration file as a site
   root; the canonical URL and the on-chain service URI are unchanged.
 
+- Optional verified edge mode (`EDGE_SECRET`, disabled by default): behind a
+  Cloudflare edge the secret the edge adds proves the path, the client is the
+  address the edge forwards, and forwarding headers are dropped unread, so a
+  caller's forwarding chain and the edge secret are never interchangeable;
+  `/health` is exempt, and on Mainnet the secret declares the topology instead
+  of proxy hops and ranges. The admin SIWE nonce and sign-in now use the same
+  normalized client address as rate limits and the concurrency budget.
+
 ### Fixed
 
 - The provider-write reconciler stays ready while another replica's live
