@@ -304,6 +304,11 @@ All notable changes to this project will be documented here.
   actions, reputation writes and dispatch evidence verification now each
   prove the rail contracts freshly before they act.
 
+- Each agent card is also served at
+  `/agent-cards/<slug>.json/.well-known/agent-card.json`, for registry
+  crawlers that treat the card URL listed in the registration file as a site
+  root; the canonical URL and the on-chain service URI are unchanged.
+
 ### Fixed
 
 - The provider-write reconciler stays ready while another replica's live

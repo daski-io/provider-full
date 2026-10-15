@@ -59,6 +59,8 @@ the Daski gateway and standard rail.
   `reads`, `admission` and `servicing` with stable codes)
 - `GET /health/admission` (200 only while new sales are admitted)
 - `GET /.well-known/agent.json`
+- `GET /agent-cards/<slug>.json`, the same card at
+  `/agent-cards/<slug>.json/.well-known/agent-card.json`
 - `POST /standard-rail/quote`
 - `POST /standard-rail/dispatch`
 - lifecycle, outcome, and evidence operations under `/standard-rail`

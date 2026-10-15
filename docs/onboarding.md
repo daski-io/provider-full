@@ -196,7 +196,9 @@ Inspect its public surfaces:
 - `/health/live`, `/health/ready` and `/health/admission`;
 - `/.well-known/agent.json` and
   `/.well-known/agent-registration.json`;
-- `/agent-cards/<slug>.json`;
+- `/agent-cards/<slug>.json`, also served at
+  `/agent-cards/<slug>.json/.well-known/agent-card.json` for registry
+  crawlers that treat the card URL as a site root;
 - `/skills/<slug>.md` and skill documents; and
 - `/llms.txt`.
 

@@ -145,7 +145,9 @@ live readiness evidence. Dummy must never boot on Base Mainnet.
 
 - `/health/live`, `/health/ready`, `/health/admission`
 - `/.well-known/agent.json`, `/.well-known/agent-registration.json`
-- `/agent-cards/<slug>.json`, `/skills/*`, `/llms.txt`
+- `/agent-cards/<slug>.json` (also at
+  `/agent-cards/<slug>.json/.well-known/agent-card.json` for crawlers),
+  `/skills/*`, `/llms.txt`
 - `/standard-rail/*`
 - `/a2a/:serviceSlug`
 - `/admin/ui/*`, `/admin/*`
