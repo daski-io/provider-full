@@ -6,6 +6,7 @@ import type {
 } from "../gatewayRegistration/runtimeCatalog.js";
 import type { RuntimeListingCommitmentV1 } from "../gatewayRegistration/runtimeCommitment.js";
 import { DEFAULT_DISPATCH_SECONDS, DEFAULT_FULFILLMENT_SECONDS } from "../serviceRegistry/deadlines.js";
+import { executableContractOf } from "../serviceRegistry/executableContracts.js";
 import type { ProviderOutcomeConfig } from "./types.js";
 
 /*
@@ -66,6 +67,18 @@ export function contractDeadlines(contract: unknown): { dispatchSeconds: number 
     dispatchSeconds: seconds(deadlines.dispatchSeconds, DEFAULT_DISPATCH_SECONDS, 86_400),
     fulfillmentSeconds: seconds(deadlines.fulfillmentSeconds, DEFAULT_FULFILLMENT_SECONDS, MAX_FULFILLMENT_SECONDS),
   };
+}
+
+/**
+ * Whether an order of this version must prove asset ownership: its admitted
+ * contract decides, since a retained contract may differ from the current
+ * one; a head configured without the runtime catalog follows its installed
+ * skill.
+ */
+export function admittedOwnership(version: ListingVersion, skill: { requires_asset_ownership: boolean }): boolean {
+  return version.contract === null
+    ? skill.requires_asset_ownership
+    : executableContractOf(version.contract).requiresAssetOwnership === true;
 }
 
 /** The version a promoted runtime bundle describes. */

@@ -18,7 +18,7 @@ import {
 } from "./dispatchVerification.js";
 import type { ProviderEvidenceVerifier } from "./evidence.js";
 import { admitStandardEvidence } from "./evidenceAdmissions.js";
-import type { ListingVersion } from "./listingVersions.js";
+import { admittedOwnership, type ListingVersion } from "./listingVersions.js";
 import { outcomeRequestValidator, validateProviderRequest } from "./schema.js";
 import { orderSigningKeys } from "./signingKeys.js";
 import type {
@@ -81,6 +81,8 @@ export async function prepareDispatchAdmission(input: {
   skill: NonNullable<Awaited<ReturnType<typeof getSkillByServiceAndSkillId>>>;
   claim: AdmissionArgs;
   handler: FulfillmentAdapter;
+  /** Whether the admitted contract requires asset ownership. */
+  requiresOwnership: boolean;
 }> {
   const { config, args, evidence } = input;
   const dispatch = input.envelope.payload;
@@ -125,6 +127,7 @@ export async function prepareDispatchAdmission(input: {
   return {
     skill,
     handler,
+    requiresOwnership: admittedOwnership(version, skill),
     claim: {
       dispatch, dispatchHash: input.dispatchHash, request: args.request, outcome, service,
       supplierCostCeiling: providerQuote.supplierCostCeiling,

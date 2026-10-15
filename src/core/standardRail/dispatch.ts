@@ -136,16 +136,23 @@ export class StandardDispatchService {
       // The admission created the order's fulfillment job leased to this
       // request; if the request dies before the order starts, a worker
       // resumes it once the lease expires.
-      await underFulfillmentLease(job, () => fulfillAdmittedDispatch({
-        taskId,
-        order: { gatewayAudience: dispatch.gatewayAudience, orderId: dispatch.orderId, payer: dispatch.payer },
-        request: args.request,
-        skillId: admission.claim.outcome.skillId,
-        service: admission.claim.service,
-        skill: admission.skill,
-        handler: admission.handler,
-        supplierCostCeiling: admission.claim.supplierCostCeiling,
-      }));
+      await underFulfillmentLease(job, async () => {
+        const step = await fulfillAdmittedDispatch({
+          taskId,
+          order: { gatewayAudience: dispatch.gatewayAudience, orderId: dispatch.orderId, payer: dispatch.payer },
+          request: args.request,
+          skillId: admission.claim.outcome.skillId,
+          service: admission.claim.service,
+          skill: admission.skill,
+          handler: admission.handler,
+          requiresOwnership: admission.requiresOwnership,
+          supplierCostCeiling: admission.claim.supplierCostCeiling,
+          lease: job,
+        });
+        // A buyer's lifecycle action holds the order: hand the job back to
+        // the worker rather than completing it.
+        if (step === "busy") throw new Error("A lifecycle action holds the admitted order");
+      });
       return await signedDispatchSnapshot(this.config, { ...key, dispatchHash });
     } catch (error) {
       throw new DispatchAmbiguousError("Admitted dispatch cannot be answered", { cause: error });

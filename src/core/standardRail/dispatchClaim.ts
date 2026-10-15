@@ -194,7 +194,12 @@ export async function admitDispatchClaim(args: AdmissionArgs): Promise<Admission
   } catch (error) {
     if (error instanceof DispatchAmbiguousError) throw error;
     await client.query("ROLLBACK").catch(() => { destroy = true; });
-    const database = error as { code?: string; constraint?: string };
+    const database = error as { code?: string; constraint?: string; message?: string };
+    // The admission fence of core migration 009: the version was retired
+    // with the gateway's receipt, and nothing of this order committed.
+    if (database.code === "23514" && database.message === "standard listing version is retired") {
+      throw new DispatchRejectedError("outcome_policy", "The order's listing version is retired");
+    }
     if (database.code === "23505" && database.constraint?.includes("dispatch_nonce")) {
       await recordStandardSecurityIncident({
         kind: "dispatch_nonce_reuse",

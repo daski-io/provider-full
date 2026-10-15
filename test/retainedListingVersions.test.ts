@@ -207,4 +207,38 @@ describe("retained listing versions (F-T05, F-T15, C-T06)", () => {
       await other.close();
     }
   });
+
+  it("refuses definitely an admission that a committed retirement overtook", async () => {
+    const order = await paidOrder(v1Outcome, { item: "overtaken" }, Math.floor(Date.now() / 1_000) - DAY);
+    const version = Buffer.from(v1.runtimeCommitmentHash.slice(2), "hex");
+    // The version is retired after the dispatch resolved it and before its admission.
+    vi.mocked(ProviderEvidenceVerifier.prototype.verify).mockImplementationOnce(async () => {
+      await database.pool.query(
+        "UPDATE provider_runtime_listing_versions SET retired_at=now(),retirement='{}'::jsonb WHERE runtime_commitment_hash=$1",
+        [version],
+      );
+      return { authorizationKey: `0x${randomBytes(32).toString("hex")}` };
+    });
+    const before = await claims();
+    try {
+      const answer = await dispatch(order);
+      expect([answer.status, answer.body]).toEqual([409, { error: "dispatch_rejected", reason: "outcome_policy" }]);
+      expect(await claims()).toBe(before);
+      expect(h.current + h.retained).toBe(0);
+    } finally {
+      // Retirement is final in the database; undo it for this suite with triggers off.
+      const client = await database.pool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query("SET LOCAL session_replication_role = replica");
+        await client.query(
+          "UPDATE provider_runtime_listing_versions SET retired_at=NULL,retirement=NULL WHERE runtime_commitment_hash=$1",
+          [version],
+        );
+        await client.query("COMMIT");
+      } finally {
+        client.release();
+      }
+    }
+  });
 });

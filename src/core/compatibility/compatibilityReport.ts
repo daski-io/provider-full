@@ -21,8 +21,8 @@ import {
 /*
  * Does this artifact, with this deployment's keys, serve everything durable
  * state still requires? A version requires its handler while it can still
- * receive work: it is sold now, or unretired with a quote that may already
- * have been paid, or it has pending orders, jobs, supplier operations,
+ * receive work: it is sold now, or unretired with any provider quote (one
+ * may still be paid), or it has pending orders, jobs, supplier operations,
  * reviews or lifecycle actions. It requires its signing key for as long as
  * any order of it can be read. An open asset-action execution requires its
  * admitted definition and that definition's handler. Everything is read
@@ -86,7 +86,7 @@ export async function activationRevision(db: Queryable): Promise<string> {
 function versionRequirements(version: VersionObligations): { handler: boolean; signingKey: boolean } {
   const owesWork = version.pendingTasks > 0 || version.durableJobs > 0 || version.supplierOperations > 0 ||
     version.openReviews > 0 || version.unresolvedLifecycleActions > 0;
-  const handler = owesWork || (!version.retired && (version.head || version.unadmittedQuotes > 0));
+  const handler = owesWork || (!version.retired && (version.head || version.quotes > 0));
   return { handler, signingKey: handler || version.terminalTasks > 0 };
 }
 

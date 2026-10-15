@@ -10,10 +10,15 @@ import { consultPreExecuteAgent } from "../engine/preExecuteRunner.js";
 import { processAdapterResult } from "../engine/taskFinalization.js";
 import { getService } from "../serviceRegistry/registry.js";
 import { RetainedHandlerUnavailableError } from "../serviceRegistry/retainedHandlers.js";
-import type { AdapterResult, FulfillmentAdapter, SupplierCostCeiling } from "../serviceRegistry/types.js";
+import type {
+  AdapterResult, FulfillmentAdapter, PreExecuteDecision, SupplierCostCeiling,
+} from "../serviceRegistry/types.js";
 import { classifySupplierError } from "../suppliers/errorClassifier.js";
 import { canonicalHash } from "./canonical.js";
-import { recordStandardSecurityIncident } from "./incidents.js";
+import type { FulfillmentJobLease } from "./fulfillmentJobs.js";
+import {
+  claimStart, failAdmittedTask, parkForReconciliation, refuseStart, type AdmittedOrder,
+} from "./orderStart.js";
 
 const bytes = (value: Hex): Buffer => Buffer.from(value.slice(2), "hex");
 
@@ -47,13 +52,6 @@ async function resolveAsset(args: {
   return { asset: owned.asset, linkOwnership: shouldLinkAssetOwnership(policy) };
 }
 
-/** The admitted order a fulfilment acts for. */
-export interface AdmittedOrder {
-  gatewayAudience: string;
-  orderId: string;
-  payer: Hex;
-}
-
 const INFRASTRUCTURE_CODES = /^(?:08|25P03|40|53|57|58)/;
 const INFRASTRUCTURE_MESSAGES = /connection terminated|connection error|timeout exceeded when trying to connect|ECONN|ETIMEDOUT|EPIPE/i;
 
@@ -69,99 +67,23 @@ export function isInfrastructureFailure(error: unknown): boolean {
   return error instanceof Error && INFRASTRUCTURE_MESSAGES.test(error.message);
 }
 
-export async function failAdmittedTask(
-  taskId: string,
-  serviceId: string,
-  order: Pick<AdmittedOrder, "gatewayAudience" | "orderId">,
-  error: unknown,
-  code = "standard_fulfillment_failed",
-): Promise<void> {
-  await processAdapterResult(taskId, { status: "failed", failureClass: "terminal", error: code }, serviceId);
-  await pool.query(
-    "UPDATE transactions SET metadata=metadata || $2::jsonb WHERE id=$1",
-    [taskId, JSON.stringify({ standardFailureClass: error instanceof Error ? error.name : "UnknownError" })],
-  );
-  await pool.query(
-    `UPDATE standard_dispatch_claims SET state='failed',resolved_at=now()
-     WHERE gateway_audience=$1 AND order_id=$2`,
-    [order.gatewayAudience, order.orderId],
-  );
-}
+/** `busy`: a buyer lifecycle action holds the order; its fulfillment job tries again later. */
+export type FulfillmentStep = "settled" | "busy";
+
+const step = (fence: "started" | "lost" | "busy"): FulfillmentStep => fence === "busy" ? "busy" : "settled";
 
 /**
- * The supplier may have acted: never guess a terminal failure. The task stays
- * nonterminal and is flagged for reconciliation from supplier truth.
- */
-export async function parkForReconciliation(
-  taskId: string,
-  order: Pick<AdmittedOrder, "gatewayAudience" | "orderId">,
-): Promise<void> {
-  await pool.query(
-    `UPDATE transactions SET updated_at=now(),
-        metadata=metadata || '{"standard_reconciliation_required":true}'::jsonb
-      WHERE id=$1 AND standard_order_id=$2`,
-    [taskId, order.orderId],
-  );
-  await pool.query(
-    "UPDATE standard_dispatch_claims SET state='working' WHERE gateway_audience=$1 AND order_id=$2",
-    [order.gatewayAudience, order.orderId],
-  );
-  await recordStandardSecurityIncident({
-    kind: "ambiguous_supplier_outcome",
-    gatewayAudience: order.gatewayAudience,
-    orderId: order.orderId,
-    identity: { taskId, orderId: order.orderId },
-    details: { taskId },
-  });
-}
-
-/** Mark this executor as the one that starts the order; false when another already did. */
-async function claimStart(taskId: string, orderId: string, marker: Record<string, unknown>): Promise<boolean> {
-  const started = await pool.query(
-    `UPDATE transactions SET status='working',updated_at=now(),metadata=metadata || $3::jsonb
-      WHERE id=$1 AND standard_order_id=$2 AND status='submitted'`,
-    [taskId, orderId, JSON.stringify(marker)],
-  );
-  return started.rowCount === 1;
-}
-
-/**
- * Past its admitted fulfillment deadline an order nobody started fails as
- * never started: no service call was made, so the failure is definitive.
- * The start fence is taken first, so no executor can start it meanwhile.
- */
-export async function failUnstartedOrder(
-  taskId: string,
-  serviceId: string,
-  order: Pick<AdmittedOrder, "gatewayAudience" | "orderId">,
-): Promise<boolean> {
-  if (!await claimStart(taskId, order.orderId, { standard_start_refused: "fulfillment_deadline" })) return false;
-  await completeUnstartedFailure(taskId, serviceId, order);
-  return true;
-}
-
-/** Finish the failure of an order whose start was refused (also after a crash in between). */
-export async function completeUnstartedFailure(
-  taskId: string,
-  serviceId: string,
-  order: Pick<AdmittedOrder, "gatewayAudience" | "orderId">,
-): Promise<void> {
-  const expired = Object.assign(new Error("The admitted fulfillment deadline passed before the order started"), {
-    name: "FulfillmentDeadlineError",
-  });
-  await failAdmittedTask(taskId, serviceId, order, expired, "standard_fulfillment_expired");
-}
-
-/**
- * Fulfil an admitted paid order. A definite service failure before or during
- * execution becomes a recorded terminal failure; an ambiguous supplier
- * outcome stays nonterminal for reconciliation. A database or connection
- * failure before the service was called escapes and leaves the order
- * resumable by its fulfillment job; after the call it is ambiguous. Exactly
- * one executor wins the start fence; any other returns without acting. Once
- * the service has answered, its answer is persisted as given: an
- * infrastructure failure while persisting escapes (the caller answers
- * ambiguously) and is never rewritten into a failure.
+ * Fulfil an admitted paid order under its fulfillment-job lease. A definite
+ * service failure before or during execution becomes a recorded terminal
+ * failure; an ambiguous supplier outcome stays nonterminal for
+ * reconciliation. A database or connection failure before the service was
+ * called escapes and leaves the order resumable by its fulfillment job;
+ * after the call it is ambiguous. Every decision that ends or starts the
+ * order first wins its start fence (orderStart.ts); an executor that loses
+ * it returns without acting, and a pre-execute escalation fences the order
+ * under its own row lock. Once the service has answered, its answer is
+ * persisted as given: an infrastructure failure while persisting escapes
+ * (the caller answers ambiguously) and is never rewritten into a failure.
  */
 export async function fulfillAdmittedDispatch(args: {
   taskId: string;
@@ -172,30 +94,24 @@ export async function fulfillAdmittedDispatch(args: {
   skill: SkillRow;
   /** The handler of the contract the order was admitted under. */
   handler: FulfillmentAdapter;
+  /** Whether the admitted contract, not merely the current skill, requires asset ownership. */
+  requiresOwnership: boolean;
   supplierCostCeiling: SupplierCostCeiling | null;
-}): Promise<void> {
-  const { order, service, skill, taskId } = args;
+  /** The order's fulfillment-job lease this executor holds. */
+  lease: FulfillmentJobLease;
+}): Promise<FulfillmentStep> {
+  const { order, service, skill, taskId, lease } = args;
   const claimKey = [order.gatewayAudience, order.orderId];
   let asset: AssetRow | null;
+  let decision: PreExecuteDecision;
   try {
     const resolved = await resolveAsset({
       service, skillId: args.skillId, payer: order.payer, request: args.request,
-      requiresOwnership: skill.requires_asset_ownership,
+      requiresOwnership: args.requiresOwnership,
     });
     asset = resolved.asset;
     if (asset && resolved.linkOwnership) await setTransactionAsset(taskId, asset.id);
-    const decision = await consultPreExecuteAgent(service, skill, args.request, true, taskId, asset);
-    if (decision.action === "reject") {
-      await processAdapterResult(taskId, {
-        status: "failed", failureClass: "terminal", error: "standard_pre_execute_rejected",
-      }, service.id);
-      await pool.query(
-        `UPDATE standard_dispatch_claims SET state='failed',resolved_at=now(),response_hash=$3
-         WHERE gateway_audience=$1 AND order_id=$2`,
-        [...claimKey, bytes(canonicalHash(decision))],
-      );
-      return;
-    }
+    decision = await consultPreExecuteAgent(service, skill, args.request, true, taskId, asset);
     if (decision.action === "escalate") {
       const escalated = await markEscalated(taskId, decision.reviewQuestion, {
         service, skill, requestData: args.request, asset,
@@ -205,16 +121,25 @@ export async function fulfillAdmittedDispatch(args: {
          WHERE gateway_audience=$1 AND order_id=$2`,
         [...claimKey, escalated.status, bytes(canonicalHash(decision))],
       );
-      return;
+      return "settled";
     }
   } catch (error) {
     // Nothing was started: an infrastructure failure leaves the order for
-    // its fulfillment job to resume.
+    // its fulfillment job to resume; a definite one fails it as never
+    // started, unless another executor took the order meanwhile.
     if (isInfrastructureFailure(error)) throw error;
-    await failAdmittedTask(taskId, service.id, order, error);
-    return;
+    return step(await refuseStart({
+      taskId, serviceId: service.id, order, lease, refusal: "pre_start_failure", cause: error,
+    }));
   }
-  if (!await claimStart(taskId, order.orderId, { supplier_mutation_started: true })) return;
+  if (decision.action === "reject") {
+    return step(await refuseStart({
+      taskId, serviceId: service.id, order, lease, refusal: "pre_execute_rejected",
+      responseHash: bytes(canonicalHash(decision)),
+    }));
+  }
+  const fence = await claimStart(taskId, order.orderId, lease, { supplier_mutation_started: true });
+  if (fence !== "started") return step(fence);
   let result: AdapterResult;
   try {
     result = await args.handler.execute(
@@ -236,7 +161,7 @@ export async function fulfillAdmittedDispatch(args: {
     } else {
       await failAdmittedTask(taskId, service.id, order, error);
     }
-    return;
+    return "settled";
   }
   const processed = await processAdapterResult(taskId, result, service.id);
   await pool.query(
@@ -244,4 +169,5 @@ export async function fulfillAdmittedDispatch(args: {
      WHERE gateway_audience=$1 AND order_id=$2`,
     [...claimKey, processed.status, bytes(canonicalHash(result))],
   );
+  return "settled";
 }

@@ -14,12 +14,18 @@ import { CHAIN_ID, fixedOutcome, fixtureConfig, provider, seedFixtureService } f
 // order's durable fulfillment job resumes a never-started order, a started
 // call is never repeated, the dispatch deadline never fails admitted work,
 // and only the admitted fulfillment deadline ends a never-started order.
+// One start fence, bound to the job lease, decides who starts or refuses an
+// order: a racing executor, a stale lease or a buyer's pending cancellation
+// never starts or fails an order another decision owns.
 vi.setConfig({ testTimeout: 30_000 });
 const h = vi.hoisted(() => ({
   pool: null as pg.Pool | null,
   executions: 0,
   result: { status: "completed", artifacts: [{ name: "note", data: { note: "done" } }] } as AdapterResult,
   preExecute: null as null | (() => Promise<unknown>),
+  executeGate: null as Promise<void> | null,
+  invariants: [] as string[],
+  module: null as unknown,
 }));
 vi.mock("../src/core/db/pool.js", () => ({
   pool: {
@@ -29,12 +35,12 @@ vi.mock("../src/core/db/pool.js", () => ({
 }));
 vi.mock("../src/core/serviceRegistry/registry.js", () => ({
   getAdapter: () => ({
-    execute: async () => { h.executions += 1; return h.result; },
+    execute: async () => { h.executions += 1; await h.executeGate; return h.result; },
     handleInput: vi.fn(),
     cancel: vi.fn(),
     quote: async () => ({ ok: true, amount: 250_000n, currency: "USDC" }),
   }),
-  getService: () => null,
+  getService: () => h.module,
   getAllServices: () => [],
 }));
 vi.mock("../src/core/engine/preExecuteRunner.js", () => ({
@@ -63,6 +69,36 @@ async function task(order: DispatchArgs) {
       WHERE t.standard_order_id=$1`,
     [order.dispatch.payload.orderId],
   )).rows[0];
+}
+
+/** The order's fulfillment-job lease, as a worker takes it. */
+async function claimFulfillment() {
+  const job = await claimDurableJob({ queue: "standard-paid-fulfillment", workerId: "test-worker", leaseSeconds: 300 });
+  expect(job).not.toBeNull();
+  return { id: job!.id, leaseToken: job!.lease_token };
+}
+
+/** A pre-execute review that waits for the test's verdict on its first call and proceeds on later ones. */
+function heldReview() {
+  let entered!: () => void;
+  let decide!: (decision: unknown) => void;
+  const reviewing = new Promise<void>((resolve) => { entered = resolve; });
+  const verdict = new Promise<unknown>((resolve) => { decide = resolve; });
+  let calls = 0;
+  h.preExecute = async () => {
+    calls += 1;
+    if (calls > 1) return { action: "proceed" };
+    entered();
+    return verdict;
+  };
+  return { reviewing, decide };
+}
+
+/** Hold the service call open until the returned release is called. */
+function heldExecution(): () => void {
+  let release!: () => void;
+  h.executeGate = new Promise<void>((resolve) => { release = resolve; });
+  return release;
 }
 
 /** Admit an order whose inline attempt dies before the service is called. */
@@ -106,6 +142,9 @@ afterAll(async () => {
 beforeEach(() => {
   h.executions = 0;
   h.preExecute = null;
+  h.executeGate = null;
+  h.invariants = [];
+  h.module = null;
   h.result = { status: "completed", artifacts: [{ name: "note", data: { note: "done" } }] };
 });
 
@@ -185,9 +224,106 @@ describe("admitted paid work", () => {
   it("starts an order once when two executors race for it", async () => {
     const order = await admittedButNotStarted();
     const taskId = (await task(order)).id as string;
-    await Promise.all([resumeAdmittedOrder(config, taskId), resumeAdmittedOrder(config, taskId)]);
+    const lease = await claimFulfillment();
+    await Promise.all([resumeAdmittedOrder(config, taskId, lease), resumeAdmittedOrder(config, taskId, lease)]);
     expect(h.executions).toBe(1);
     expect(await task(order)).toMatchObject({ status: "completed" });
+  });
+
+  it("never lets a later pre-start rejection end an order another executor started", async () => {
+    const order = await admittedButNotStarted();
+    const taskId = (await task(order)).id as string;
+    const lease = await claimFulfillment();
+    const { reviewing, decide } = heldReview();
+    const release = heldExecution();
+    const slow = resumeAdmittedOrder(config, taskId, lease);
+    await reviewing;
+    const fast = resumeAdmittedOrder(config, taskId, lease);
+    await vi.waitFor(() => expect(h.executions).toBe(1));
+    decide({ action: "reject" });
+    await expect(slow).resolves.toBe("done");
+    expect(await task(order)).toMatchObject({ status: "working", claim_state: "dispatching" });
+    release();
+    await expect(fast).resolves.toBe("done");
+    expect(await task(order)).toMatchObject({ status: "completed", claim_state: "completed" });
+  });
+
+  it("never lets a late definite pre-start failure end an order another executor started", async () => {
+    const order = await admittedButNotStarted();
+    const taskId = (await task(order)).id as string;
+    const lease = await claimFulfillment();
+    let entered!: () => void;
+    let fail!: () => void;
+    const reviewing = new Promise<void>((resolve) => { entered = resolve; });
+    const failure = new Promise<never>((_, reject) => {
+      fail = () => reject(new Error("The review refused the request"));
+    });
+    failure.catch(() => undefined);
+    let calls = 0;
+    h.preExecute = async () => {
+      calls += 1;
+      if (calls > 1) return { action: "proceed" };
+      entered();
+      return failure;
+    };
+    const release = heldExecution();
+    const slow = resumeAdmittedOrder(config, taskId, lease);
+    await reviewing;
+    const fast = resumeAdmittedOrder(config, taskId, lease);
+    await vi.waitFor(() => expect(h.executions).toBe(1));
+    fail();
+    await expect(slow).resolves.toBe("done");
+    expect(await task(order)).toMatchObject({ status: "working" });
+    release();
+    await expect(fast).resolves.toBe("done");
+    expect(await task(order)).toMatchObject({ status: "completed", claim_state: "completed" });
+  });
+
+  it("lets only the live lease holder start the order", async () => {
+    const order = await admittedButNotStarted();
+    const taskId = (await task(order)).id as string;
+    const stale = await claimFulfillment();
+    await database.pool.query(
+      "UPDATE durable_jobs SET lease_expires_at=now() - interval '1 second' WHERE id=$1", [stale.id],
+    );
+    await expect(resumeAdmittedOrder(config, taskId, stale)).resolves.toBe("done");
+    expect(h.executions).toBe(0);
+    expect(await task(order)).toMatchObject({ status: "submitted" });
+    await runPaidFulfillmentCycle(config, false);
+    expect(h.executions).toBe(1);
+    expect(await task(order)).toMatchObject({ status: "completed", job_status: "completed" });
+  });
+
+  it("never starts an order a buyer's cancellation holds, and starts it once the service refused that cancellation", async () => {
+    const order = await admittedButNotStarted();
+    const taskId = (await task(order)).id as string;
+    await database.pool.query(
+      `INSERT INTO standard_lifecycle_actions (transaction_id,action,identity_hash,request_hash,state,lease_expires_at)
+       VALUES ($1,'cancel',$2,$3,'claimed',now() + interval '60 seconds')`,
+      [taskId, randomBytes(32), randomBytes(32)],
+    );
+    await runPaidFulfillmentCycle(config, false);
+    expect(h.executions).toBe(0);
+    expect(await task(order)).toMatchObject({ status: "submitted", job_status: "retry" });
+    // The service refused the cancellation, which frees the order.
+    await database.pool.query("DELETE FROM standard_lifecycle_actions WHERE transaction_id=$1", [taskId]);
+    await database.pool.query("UPDATE durable_jobs SET available_at=now() WHERE queue='standard-paid-fulfillment'");
+    await runPaidFulfillmentCycle(config, false);
+    expect(h.executions).toBe(1);
+    expect(await task(order)).toMatchObject({ status: "completed", job_status: "completed" });
+  });
+
+  it("waits out a declared service outage instead of failing the order", async () => {
+    const order = await admittedButNotStarted();
+    h.module = { operations: { readiness: { checkInvariants: async () => h.invariants } } };
+    h.invariants = ["supplier outage"];
+    await runPaidFulfillmentCycle(config, false);
+    expect(h.executions).toBe(0);
+    expect(await task(order)).toMatchObject({ status: "submitted", job_status: "retry" });
+    h.invariants = [];
+    await database.pool.query("UPDATE durable_jobs SET available_at=now() WHERE queue='standard-paid-fulfillment'");
+    await runPaidFulfillmentCycle(config, false);
+    expect(await task(order)).toMatchObject({ status: "completed", job_status: "completed" });
   });
 
   it("queues admitted orders that have no job, as earlier releases left them", async () => {

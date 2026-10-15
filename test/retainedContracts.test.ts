@@ -18,6 +18,7 @@ const { orderSigningKeys, parseRetainedSigningKeys, SigningKeyUnavailableError }
   await import("../src/core/standardRail/signingKeys.js");
 const { admittedActionDefinition, retainAdmittedActionDefinitions } =
   await import("../src/core/standardRail/actionDefinitions.js");
+const { admittedOwnership } = await import("../src/core/standardRail/listingVersions.js");
 
 // F-T05, C-T06: an order or action runs only on the handler of the contract
 // it was admitted under; commercial terms alone never need a retained
@@ -128,6 +129,20 @@ describe("executable contracts", () => {
     await expect(retainedTaskHandler("notes", "write", "task-3")).rejects.toBeInstanceOf(RetainedHandlerUnavailableError);
     h.query.mockResolvedValueOnce({ rows: [{ listing: null, action_definition_hash: null }] });
     await expect(retainedTaskHandler("notes", "write", "task-4")).resolves.toEqual({ kind: "current" });
+  });
+});
+
+describe("admitted asset ownership", () => {
+  it("follows the contract an order was admitted under, not the current skill row", () => {
+    const version = {
+      listingManifestHash: `0x${"11".repeat(32)}` as Hex, serviceSlug: "notes", skillId: "write",
+      contract: contract({ title: text }, { requiresAssetOwnership: true }),
+      signingKey: privateKeyToAccount(`0x${"22".repeat(32)}`).address, dispatchSeconds: 300, fulfillmentSeconds: 43_200,
+    };
+    expect(admittedOwnership(version, { requires_asset_ownership: false })).toBe(true);
+    expect(admittedOwnership({ ...version, contract: earlier }, { requires_asset_ownership: true })).toBe(false);
+    // A head configured without the runtime catalog is the installed skill.
+    expect(admittedOwnership({ ...version, contract: null }, { requires_asset_ownership: true })).toBe(true);
   });
 });
 

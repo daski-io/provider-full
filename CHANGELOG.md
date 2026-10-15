@@ -48,9 +48,11 @@ All notable changes to this project will be documented here.
   names it instead of depending on a hosting platform's commit variable, and
   its capability manifest describes the same artifact. Boot, a registration
   run and its forecast check that manifest and the provider keys against
-  durable obligations; a servicing monitor rechecks when the catalog's
-  activation revision moves, refreshes the sold heads without a restart, and
-  fails readiness on any gap.
+  durable obligations, requiring a version's handler while it is unretired
+  with any provider quote; a servicing monitor rechecks when the catalog's
+  activation revision moves and every ten minutes, refreshes the sold heads
+  without a restart (again on the poll after a move), and fails readiness on
+  any gap.
 - The task watchdog no longer uses the boot catalog's 300-second dispatch
   deadline as a stall threshold, nor sets `standard_reconciliation_required`
   on stalls. It reads persisted per-order state for orders of any listing
@@ -67,9 +69,14 @@ All notable changes to this project will be documented here.
   `standard-paid-fulfillment` job leased to the admitting request. A new
   required worker resumes a never-started order after that request died,
   only on a build that can run its admitted contract, and parks a started
-  call whose answer was lost instead of repeating it. One start fence makes
-  `execute` run at most once, a database failure before the call no longer
-  signs a failure, and only a never-started order fails, as
+  call whose answer was lost instead of repeating it. One start fence, taken
+  only under the order's live job lease and never while a buyer's
+  cancellation holds the order, makes `execute` run at most once, and every
+  pre-start rejection or failure must win it first, so a racing or stale
+  executor never ends an order another one started. A database failure
+  before the call no longer signs a failure, the worker waits out a declared
+  service outage, an order runs with its admitted contract's asset-ownership
+  rule, and only a never-started order fails, as
   `standard_fulfillment_expired`, once its admitted fulfillment deadline
   passed; the dispatch deadline never fails admitted work.
 - Every promoted listing version stays resolvable by its commitment hash
@@ -86,11 +93,12 @@ All notable changes to this project will be documented here.
 - Retirement ends a paid version's dispatch support only with the gateway's
   signed `GatewayContractRetirementV1` receipt for that version and no open
   local obligation, now including unfinished durable jobs, claimed lifecycle
-  actions, unexpired quotes and quotes that may have been paid but were never
-  dispatched. It counts them after locking the version rows that a database
-  trigger makes every new order and quote lock, so a concurrent admission
-  either blocks it or is refused. `daski:register` gains `--retire-listing`
-  and `--gateway-receipt`; reads of retired versions are never retired.
+  actions and unexpired quotes; only the receipt ends a quote that may have
+  been paid but was never dispatched. It counts them after locking the
+  version rows that a database trigger makes every new order and quote lock,
+  so a concurrent admission either blocks it or is refused definitely.
+  `daski:register` gains `--retire-listing` and `--gateway-receipt`; reads of
+  retired versions are never retired.
 - Refreshed dependencies past current advisories: fast-uri 3.1.8, qs 6.16.0,
   js-yaml 4.3.2 (override), proxy-addr 2.0.8, source-map-js 1.2.2 and
   Vitest 4.1.11; `npm audit` reports no moderate or higher findings.

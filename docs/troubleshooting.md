@@ -574,6 +574,9 @@ lease expires, or 30 seconds after an attempt failed on the database. Check
 that the worker is healthy (`/health/ready`), that the job is not dead
 lettered, and that a replica's build can run the order's admitted contract:
 a job naming an executable definition no build retains is never claimed.
+The worker also waits while the service's readiness invariants fail and
+while a buyer's cancellation of the order is unresolved; an uncertain
+cancellation stays claimed until a later cancel attempt reconciles it.
 Once the order's admitted fulfillment duration passed with nothing started,
 it fails as never started (`standard_fulfillment_expired`); work that did
 start is never failed by that deadline.

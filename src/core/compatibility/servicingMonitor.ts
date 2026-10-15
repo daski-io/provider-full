@@ -18,9 +18,12 @@ import {
  * catalog's activation revision moves (another process promoted or retired
  * a version) or at least every ten minutes, the running build's capability
  * manifest and keys are checked against what durable state requires, and
- * the current heads are re-read so new sales follow the catalog. A gap
- * fails readiness and is logged once per change; work this build cannot
- * run is meanwhile refused before admission and never claimed.
+ * the current heads are re-read so new sales follow the catalog. The
+ * revision is a sequence, which can move before the promotion that moved it
+ * commits, so the heads are re-read again on the next poll and on every
+ * full check. A gap fails readiness and is logged once per change; work
+ * this build cannot run is meanwhile refused before admission and never
+ * claimed.
  */
 
 const POLL_MS = 60_000;
@@ -45,6 +48,7 @@ export function startServicingMonitor(
 ): () => void {
   let revision = validatedRevision;
   let checkedAt = Date.now();
+  let settling = false;
   let lastGaps = "";
   let running = false;
   const run = async () => {
@@ -53,11 +57,12 @@ export function startServicingMonitor(
     try {
       const current = await activationRevision(pool);
       const moved = current !== revision;
-      if (!moved && Date.now() - checkedAt < FULL_CHECK_MS) return;
-      if (moved && await refreshCatalogHeads(config, launchPolicy)) {
+      if (!moved && !settling && Date.now() - checkedAt < FULL_CHECK_MS) return;
+      if (config.providerControlProfileHash && await refreshCatalogHeads(config, launchPolicy)) {
         logInfo("Runtime catalog heads refreshed", { activationRevision: current });
       }
       const report = await checkRetainedServicing(config);
+      settling = moved;
       revision = current;
       checkedAt = Date.now();
       const gaps = report.gaps.map(describeGap).join(",");

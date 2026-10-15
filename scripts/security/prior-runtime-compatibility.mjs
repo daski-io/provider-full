@@ -158,7 +158,7 @@ try {
   const report = JSON.parse(check.stdout.trim().split("\n").at(-1) || "{}");
   expectThat(check.status === 0 && report.ok === true, "the compatibility check failed", report.gaps ?? check.stderr);
   const version = report.versions.find((entry) => entry.listingManifestHash === seeded.listing);
-  expectThat(version?.pendingTasks === 2 && version.terminalTasks === 1 && version.unadmittedQuotes === 1 &&
+  expectThat(version?.pendingTasks === 2 && version.terminalTasks === 1 && version.quotes === 1 &&
     version.requiresHandler && version.requiresSigningKey, "the retained obligations were not inventoried", version);
 
   const enqueued = await step("current enqueue", root, CURRENT_ENQUEUE);
@@ -183,7 +183,7 @@ try {
   process.stdout.write(`${JSON.stringify({
     priorRef: PRIOR_REF, migrations: upgraded.migrations.length, capabilityHash: report.capabilityHash,
     obligations: {
-      pendingTasks: version.pendingTasks, terminalTasks: version.terminalTasks, unadmittedQuotes: version.unadmittedQuotes,
+      pendingTasks: version.pendingTasks, terminalTasks: version.terminalTasks, quotes: version.quotes,
     },
     priorOverlap: overlap.refused, resumed: resumed.tasks[unstarted].status,
   })}\nprior-runtime compatibility proof passed\n`);

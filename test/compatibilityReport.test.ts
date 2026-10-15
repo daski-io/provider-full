@@ -107,7 +107,7 @@ describe("compatibility report (F-T16, C-T06)", () => {
     const result = await report([retainedModule()]);
     expect(result).toMatchObject({ artifactType: "ProviderCompatibilityReportV1", ok: true, gaps: [] });
     expect(result.versions).toEqual([
-      expect.objectContaining({ listingManifestHash: v1.runtimeCommitmentHash, head: false, unadmittedQuotes: 1,
+      expect.objectContaining({ listingManifestHash: v1.runtimeCommitmentHash, head: false, quotes: 1,
         requiresHandler: true, requiresSigningKey: true, signingKey: retainedWallet }),
       expect.objectContaining({ listingManifestHash: v2.runtimeCommitmentHash, head: true, requiresHandler: true }),
     ]);
@@ -149,6 +149,46 @@ describe("compatibility report (F-T16, C-T06)", () => {
     const result = await report([fixtureModule([])], new Set([provider.address]));
     expect(result.versions[0]).toMatchObject({ terminalTasks: 1, requiresHandler: false, requiresSigningKey: true });
     expect(result.gaps).toEqual([expect.objectContaining({ kind: "signing_key", signingKey: retainedWallet })]);
+  });
+
+  it("keeps requiring a version's handler after an admitted order used its quote, until the version is retired", async () => {
+    // An identical request quoted in the same second shares the quote, so a
+    // second paid order may still arrive for it.
+    const quoteHash = await persistProviderQuote({
+      outcomeId: SKILL, listingManifestHash: v1.runtimeCommitmentHash, requestHash: `0x${"aa".repeat(32)}`,
+      grossAmount: "250000", payer: null, issuedAt: 1_700_000_000, validBefore: 1_700_000_120,
+    }, { pricingMode: "fixed", supplierCostCeiling: null });
+    const customer = (await database.pool.query<{ id: string }>(
+      "INSERT INTO customers(wallet_address) VALUES ($1) ON CONFLICT (wallet_address) DO UPDATE SET last_seen_at=now() RETURNING id",
+      [payerA.toLowerCase()],
+    )).rows[0]!.id;
+    const service = (await database.pool.query<{ id: string }>(
+      `INSERT INTO services (name,slug,category_family,service_type,jurisdictions,service_description,adapter_name)
+       VALUES ('Fixture','fixture','other','other','["global"]'::jsonb,'Synthetic','fixture')
+       ON CONFLICT (slug,version) DO UPDATE SET name=EXCLUDED.name RETURNING id`,
+    )).rows[0]!.id;
+    const taskId = `task-${randomUUID()}`;
+    const orderId = `ord_${randomUUID()}`;
+    await database.pool.query(
+      `INSERT INTO transactions (id,customer_id,service_id,skill_id,status,standard_order_id,standard_payer,
+         standard_listing_manifest_hash,standard_order_key,standard_token,standard_gross_amount,
+         standard_provider_net_amount,standard_daski_commission_amount,completed_at)
+       VALUES ($1,$2,$3,$4,'completed',$5,$6,$7,$8,'0x6666666666666666666666666666666666666666',250000,237500,12500,now())`,
+      [taskId, customer, service, SKILL, orderId, payerA, Buffer.from(v1.runtimeCommitmentHash.slice(2), "hex"),
+        Buffer.alloc(32, 5)],
+    );
+    await database.pool.query(
+      `INSERT INTO standard_dispatch_claims (gateway_audience,order_id,dispatch_nonce,dispatch_hash,request_hash,payer,
+         state,transaction_id,provider_quote_hash)
+       VALUES ($1,$2,$3,$4,$5,$6,'completed',$7,$8)`,
+      [GATEWAY_AUDIENCE, orderId, Buffer.alloc(32, 6), Buffer.alloc(32, 7), Buffer.alloc(32, 8), payerA, taskId,
+        Buffer.from(quoteHash.slice(2), "hex")],
+    );
+    const result = await report([fixtureModule([])], new Set([provider.address]));
+    expect(result.versions[0]).toMatchObject({ quotes: 1, pendingTasks: 0, requiresHandler: true });
+    expect(result.gaps).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "handler", listingManifestHash: v1.runtimeCommitmentHash }),
+    ]));
   });
 
   it("runs as a read-only command without hosting, coordinator or signed rail variables", async () => {

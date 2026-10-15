@@ -6,9 +6,11 @@ import type { Queryable } from "../db/queryable.js";
  * durable local state. Execution obligations (pending orders, unfinished
  * jobs, unresolved supplier operations, reviews, reputation writes and
  * lifecycle actions) need the version's handler; terminal orders need only
- * its signing key and frozen results, forever. Provider quotes with no
- * admitted claim may already have been paid: only the gateway can prove they
- * will never be dispatched, so they keep the version's dispatch support.
+ * its signing key and frozen results, forever. Any provider quote of the
+ * version may still be paid and dispatched, even after an order was
+ * admitted with it (an identical request quoted in the same second shares a
+ * quote): only the gateway can prove no more dispatches will come, so
+ * quotes keep the version's dispatch support until it is retired.
  */
 
 export interface VersionObligations {
@@ -26,7 +28,7 @@ export interface VersionObligations {
   pendingReputation: number;
   unresolvedLifecycleActions: number;
   unexpiredQuotes: number;
-  unadmittedQuotes: number;
+  quotes: number;
 }
 
 /** Counts that block ending a version's dispatch and execution support. */
@@ -50,7 +52,7 @@ interface ObligationRow {
   pending_reputation: number;
   unresolved_lifecycle_actions: number;
   unexpired_quotes: number;
-  unadmitted_quotes: number;
+  quotes: number;
 }
 
 const hex = (value: Buffer): Hex => `0x${value.toString("hex")}`;
@@ -79,9 +81,7 @@ const OBLIGATIONS_SQL = `
          (SELECT count(*)::int FROM standard_provider_quotes q
            WHERE q.listing_manifest_hash=v.runtime_commitment_hash AND q.valid_before>now()) AS unexpired_quotes,
          (SELECT count(*)::int FROM standard_provider_quotes q
-           WHERE q.listing_manifest_hash=v.runtime_commitment_hash
-             AND NOT EXISTS (SELECT 1 FROM standard_dispatch_claims c
-                              WHERE c.provider_quote_hash=q.quote_hash)) AS unadmitted_quotes
+           WHERE q.listing_manifest_hash=v.runtime_commitment_hash) AS quotes
     FROM provider_runtime_listing_versions v
    CROSS JOIN LATERAL (
      SELECT count(*) FILTER (WHERE t.status IN ('submitted','working','input-required'))::int AS pending_tasks,
@@ -123,7 +123,7 @@ export async function loadVersionObligations(db: Queryable, args: {
     pendingReputation: row.pending_reputation,
     unresolvedLifecycleActions: row.unresolved_lifecycle_actions,
     unexpiredQuotes: row.unexpired_quotes,
-    unadmittedQuotes: row.unadmitted_quotes,
+    quotes: row.quotes,
   }));
 }
 

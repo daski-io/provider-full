@@ -113,15 +113,17 @@ was given one) that `scripts/copy-assets.mjs` embeds in
 The compatibility report (`compatibility/compatibilityReport.ts`) compares
 the manifest and the deployment's provider keys with durable state alone. A
 listing version needs its handler while it is sold, while it is unretired
-with a provider quote that may already have been paid, or while it has
-pending orders, jobs, supplier operations, reviews or lifecycle actions; it
-needs its signing key while any order of it can be read. An open asset
-action needs its admitted definition and that definition's handler. Boot
-runs the check, and the servicing monitor reruns it when the catalog's
-activation revision moves or every ten minutes, re-reading the heads so new
-sales follow a promotion without a restart; a gap fails readiness. A
-registration run refuses to start while the registering build has a gap,
-and its `--check-only` forecast prints the same verdict. `npm run
+with any provider quote (a quote may still be paid, even by more than one
+order), or while it has pending orders, jobs, supplier operations, reviews
+or lifecycle actions; it needs its signing key while any order of it can be
+read. An open asset action needs its admitted definition and that
+definition's handler. Boot runs the check, and the servicing monitor reruns
+it when the catalog's activation revision moves or every ten minutes,
+re-reading the heads each time (and once more on the poll after a move, as
+the revision can move before its promotion commits) so new sales follow a
+promotion without a restart; a gap fails readiness. A registration run
+refuses to start while the registering build has a gap, and its
+`--check-only` forecast prints the same verdict. `npm run
 compatibility:check` (`node dist/checkCompatibility.js` in the image) prints
 the full report from read-only database sessions and needs only the
 database, the gateway origin and the provider keys.
@@ -305,10 +307,16 @@ over-ceiling operation without calling the supplier.
 Every admitted paid order owns one durable `standard-paid-fulfillment` job,
 created in the admission transaction and leased to the admitting request.
 Exactly one executor wins the order's start fence (`submitted` to
-`working`), so the service's `execute` runs at most once per order; a
-database or connection failure before the call leaves the order
-resumable, and the job's worker resumes it on any replica whose build can
-run the order's contract (a job names the executable definition it needs).
+`working`, `standardRail/orderStart.ts`), and only while it holds the job's
+live lease and no buyer cancellation holds the order, so the service's
+`execute` runs at most once per order. Every terminal decision taken before
+the call (a pre-execute rejection, a definite pre-start failure, the
+admitted deadline passing) wins the same fence first, so an executor that
+lost the race or its lease never ends an order another one started. A
+database or connection failure before the call leaves the order resumable,
+and the job's worker resumes it on any replica whose build can run the
+order's contract (a job names the executable definition it needs), waiting
+while the service declares an outage or a lifecycle action holds the order.
 A started call whose answer was never persisted is never repeated: the
 order is parked for reconciliation. Three clocks stay separate: the
 dispatch deadline bounds only when a new claim may commit, the job lease
