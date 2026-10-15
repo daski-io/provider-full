@@ -281,10 +281,17 @@ All notable changes to this project will be documented here.
   identity, catalog, registration, invariant or servicing trouble now stops
   new quotes in-process with `503 service_unavailable` instead of taking
   funded orders' reads off the network; dispatches, lifecycle calls and reads
-  are never gated by it. `/health/admission` answers 200 only while new sales
-  are admitted. The required workers of a paused or inactive service stay
-  required while it still owes nonterminal tasks or unresolved supplier
-  operations, and readiness logs each transition once.
+  are never gated by it. A service's own declared outage (its readiness
+  invariants) holds that service's new work as retryable, as it already
+  held a fresh dispatch and the fulfillment worker: buyer input answers
+  `lifecycle_unavailable` before its nonce is consumed, a wallet action or
+  destructive confirmation is refused as unavailable before anything is
+  claimed, and a free skill call answers the recoverable JSON-RPC error
+  `-32113`; reads, status, support, cancellation, action recovery and
+  canceling a staged action keep answering. `/health/admission` answers 200
+  only while new sales are admitted. The required workers of a paused or
+  inactive service stay required while it still owes nonterminal tasks or
+  unresolved supplier operations, and readiness logs each transition once.
 
 - Every failed outbound call is reported redacted and throttled
   (`outbound.request_failed`): supplier and email HTTP, the gateway

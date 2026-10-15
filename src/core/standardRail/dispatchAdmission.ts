@@ -2,8 +2,8 @@ import type { Hex } from "viem";
 import { getServiceBySlug } from "../db/queries/services.js";
 import { getSkillByServiceAndSkillId } from "../db/queries/skills.js";
 import { executableDefinitionHash } from "../serviceRegistry/executableContracts.js";
-import { serviceInvariantFailures } from "../serviceRegistry/readiness.js";
-import { getAdapter, getService } from "../serviceRegistry/registry.js";
+import { serviceDeclaresOutage } from "../serviceRegistry/readiness.js";
+import { getAdapter } from "../serviceRegistry/registry.js";
 import { contractHandler } from "../serviceRegistry/retainedHandlers.js";
 import type { FulfillmentAdapter } from "../serviceRegistry/types.js";
 import type { ProviderStandardRailConfig } from "./config.js";
@@ -103,8 +103,7 @@ export async function prepareDispatchAdmission(input: {
   // Fulfilment here is synchronous: executing during a declared product
   // outage would sign a terminal failure, whereas a refusal before admission
   // makes the gateway retry this funded order with a fresh envelope.
-  const module = getService(outcome.serviceSlug);
-  if (module && (await serviceInvariantFailures(module)).length > 0) {
+  if (await serviceDeclaresOutage(outcome.serviceSlug)) {
     throw new DispatchRejectedError("service_unavailable", "Service readiness invariants are failing");
   }
   const verified = await withDispatchRejection("evidence", () => evidence.verify({

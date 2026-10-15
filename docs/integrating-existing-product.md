@@ -356,8 +356,11 @@ specifically requires and protects them.
 A real service must make admission fail closed when it cannot fulfill new
 work: a failing service invariant or a dead required worker stops new quotes
 (the `admission` part of `/health/ready`) and degrades `servicing`, while the
-process stays routable for funded orders' persisted reads. Typical service
-checks include:
+process stays routable for funded orders' persisted reads. A failing
+invariant also holds the service's other new work (a fresh dispatch, the
+fulfillment worker, buyer input, wallet actions and free skill calls) as
+retryable until it passes, so an outage never becomes a failed order or
+action. Typical service checks include:
 
 - required credentials are present and valid for the selected product mode;
 - the configured mock, sandbox, charged-test, or live product environment
@@ -368,8 +371,10 @@ checks include:
 - circuit breaker or dependency outage makes new work unsafe; and
 - any custody, compliance, or human queue requirement is available.
 
-Avoid expensive supplier calls on every health request. Use bounded cached
-probes or worker-maintained evidence appropriate to the product.
+Avoid expensive supplier calls on every health request: core evaluates the
+invariants for each readiness probe and before each piece of new work. Use
+bounded cached probes or worker-maintained evidence appropriate to the
+product.
 
 ## Test the adapter in isolation
 

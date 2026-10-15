@@ -435,6 +435,18 @@ the admitted listing: re-register the changed contract. `service_unavailable`
 listing version fills `maxOpenOrders`) and `readiness_unavailable` clear on
 their own once the condition ends.
 
+### New work answers unavailable during a service outage
+
+While a service's readiness invariants fail, its new work waits instead of
+running into the outage: buyer input answers `503 lifecycle_unavailable`
+without consuming the buyer's authorization, a wallet action or destructive
+confirmation answers `PROVIDER_ASSET_QUERY_UNAVAILABLE` before anything is
+claimed, and a free skill call answers JSON-RPC `-32113` with
+`recoverable: true`. Retries succeed once the invariant passes; reads,
+status, support, cancellation and action recovery keep answering
+meanwhile. Fix the failing invariant, which the `Readiness transitioned`
+log line names under `serviceInvariantFailures`, rather than bypassing it.
+
 ### Dispatch refused with `dispatch_rejected`
 
 Nothing was admitted; the gateway sends a fresh envelope for the paid order.

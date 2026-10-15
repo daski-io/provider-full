@@ -96,6 +96,31 @@ describe("a fresh rail-contract proof before a lifecycle mutation (C05)", () => 
   });
 });
 
+describe("buyer actions during a declared service outage (C05)", () => {
+  it("refuses input without consuming its authorization while the service declares an outage, then accepts it", async () => {
+    await admittedOrder({ status: "input-required", message: "Confirm the title." });
+    await harness.at(T);
+    const body = await lifecycleBody({ action: "input", request: INPUT, form: "payer-signed", now: T });
+    wire.readinessFailures.push("supplier unreachable");
+    const refused = await harness.send({ url: LIFECYCLE_HTTP.url, headers: LIFECYCLE_HTTP.headers, body });
+    expect([refused.status, JSON.parse(refused.text)]).toEqual([503, { error: "lifecycle_unavailable" }]);
+    expect(calls.input).toBe(0);
+    expect(await actions()).toEqual([]);
+    wire.readinessFailures.length = 0;
+    const accepted = await harness.send({ url: LIFECYCLE_HTTP.url, headers: LIFECYCLE_HTTP.headers, body });
+    expect([accepted.status, JSON.parse(accepted.text).state]).toEqual([200, "working"]);
+    expect(calls.input).toBe(1);
+  });
+
+  it("still lets the buyer cancel, which cannot fail the order", async () => {
+    await admittedOrder({ status: "input-required", message: "Confirm the title." });
+    wire.readinessFailures.push("supplier unreachable");
+    const cancel = await call("cancel", {});
+    expect([cancel.status, cancel.body.state]).toEqual([200, "canceled"]);
+    expect(calls.cancel).toBe(1);
+  });
+});
+
 describe("cancellation idempotency (F-T09)", () => {
   it("answers a retried committed cancellation without repeating it, and refuses a different reason", async () => {
     await admittedOrder({ status: "working" });

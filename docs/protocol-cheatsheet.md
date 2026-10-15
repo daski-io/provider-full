@@ -313,11 +313,13 @@ Every failure is a refusal with exactly one key:
 | `409 {"error":"artifact_unavailable"}` | An artifact read before completed fulfilment, or one whose deliverable bytes are not retained |
 | `409 {"error":"unsupported_action"}` | Not available for this order now; nothing changed (for example cancelling a terminal order, input while not awaiting it, input that changes the committed request, an action this starter does not offer) |
 | `409 {"error":"action_conflict"}` | The action's durable identity is already bound to different content |
-| `503 {"error":"lifecycle_unavailable"}` | Temporarily unavailable, `Retry-After: 10`; asserts nothing about an earlier attempt's effect (a verification outage, a database fault, an uncertain cancellation or input, an unreconciled legacy terminal row) |
+| `503 {"error":"lifecycle_unavailable"}` | Temporarily unavailable, `Retry-After: 10`; asserts nothing about an earlier attempt's effect (a verification outage, a database fault, input while the service declares an outage, an uncertain cancellation or input, an unreconciled legacy terminal row) |
 
 Lifecycle calls, like status reads, are servicing traffic the gateway sends for
 every buyer from its own addresses: they skip the per-client and purchase rate
-limits and service readiness, keep the concurrency budget and body bound, and
+limits and sales admission, keep the concurrency budget and body bound (only
+buyer input also waits out its service's declared outage, before its nonce is
+consumed), and
 spend a separate 30-per-minute authentication-failure budget that only calls
 without a verified gateway grant count against, so one buyer's refused
 authorizations never exhaust lifecycle service for the others behind the same

@@ -39,6 +39,8 @@ export const DASKI_ERR = {
   CAPABILITY_REJECTED: -32108,
   PAYMENT_INSUFFICIENT: -32111,
   PROVIDER_IDENTITY_UNAVAILABLE: -32112,
+  /** The service declares an outage; recoverable, so call again later. */
+  SERVICE_UNAVAILABLE: -32113,
 } as const;
 
 export function jsonRpcSuccess(res: Response, id: string | number | null, result: unknown): void {

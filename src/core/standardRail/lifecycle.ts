@@ -1,5 +1,7 @@
 import { revealFrozenTaskProjection } from "../a2a/responseBuilder.js";
 import { pool } from "../db/pool.js";
+import { getServiceById } from "../db/queries/services.js";
+import { serviceDeclaresOutage } from "../serviceRegistry/readiness.js";
 import type { ProviderStandardRailConfig } from "./config.js";
 import { authenticateLifecycleCall, type LifecycleCall } from "./lifecycleAuthorization.js";
 import type { ContractIntegrityCheck } from "./contractIntegrity.js";
@@ -41,6 +43,12 @@ export class StandardLifecycleService {
         throw lifecycleUnavailable("The rail contracts could not be verified");
       });
     }
+    // Input waits out an outage its service declares, also before the nonce:
+    // the service could answer it with a failure the order need not take.
+    // Cancellation, which cannot fail the order, still answers.
+    if (call.action === "input" && await this.declaresOutage(task)) {
+      throw lifecycleUnavailable("The service declares an outage");
+    }
     await consumeLifecycleNonce(task, call);
     const order = { orderId: task.standard_order_id, taskId: task.id };
     switch (call.action) {
@@ -59,6 +67,11 @@ export class StandardLifecycleService {
         await applyLifecycleCancel(this.config, task, call, () => this.publicState(task));
         return signedLifecycleAnswer(this.config, order);
     }
+  }
+
+  private async declaresOutage(task: StandardTaskRow): Promise<boolean> {
+    const service = await getServiceById(task.service_id);
+    return service !== null && await serviceDeclaresOutage(service.slug);
   }
 
   private async publicState(task: StandardTaskRow): Promise<string> {

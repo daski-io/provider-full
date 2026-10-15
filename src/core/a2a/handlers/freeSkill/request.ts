@@ -4,6 +4,7 @@ import { isPaymentRequired } from "../../../pricing/index.js";
 import { extractDataFromParts } from "../../parts.js";
 import { DASKI_ERR, JSON_RPC } from "../../jsonrpc.js";
 import { missingRequiredFields } from "../requiredFields.js";
+import { serviceDeclaresOutage } from "../../../serviceRegistry/readiness.js";
 import {
   getService,
   validateSkillInput,
@@ -108,6 +109,16 @@ export async function resolveFreeSkillRequest(args: {
       ok: false,
       code: JSON_RPC.INVALID_PARAMS,
       message: `Missing required fields: ${missing.join(", ")}`,
+    };
+  }
+  // A valid call waits out an outage the service declares instead of
+  // running into it.
+  if (await serviceDeclaresOutage(args.serviceSlug)) {
+    return {
+      ok: false,
+      code: DASKI_ERR.SERVICE_UNAVAILABLE,
+      message: "Service is temporarily unavailable",
+      data: { recoverable: true },
     };
   }
   return {

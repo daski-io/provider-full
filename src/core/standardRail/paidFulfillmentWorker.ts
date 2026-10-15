@@ -16,8 +16,8 @@ import { errorExtra, logError, logInfo, logWarn } from "../logger.js";
 import { ConditionTracker } from "../observability/conditionTracker.js";
 import { workerCycleFailed, workerCycleSucceeded } from "../observability/workerConditions.js";
 import { executableDefinitionHash } from "../serviceRegistry/executableContracts.js";
-import { serviceInvariantFailures } from "../serviceRegistry/readiness.js";
-import { getAdapter, getService } from "../serviceRegistry/registry.js";
+import { serviceDeclaresOutage } from "../serviceRegistry/readiness.js";
+import { getAdapter } from "../serviceRegistry/registry.js";
 import { contractHandler, registeredExecutableHashes } from "../serviceRegistry/retainedHandlers.js";
 import { admittedSupplierCostCeiling } from "../serviceRegistry/supplierCostCeiling.js";
 import type { ProviderStandardRailConfig } from "./config.js";
@@ -112,8 +112,7 @@ export async function resumeAdmittedOrder(
   if (!version || !choice) return "defer";
   // During a declared outage running now would sign a terminal failure the
   // order need not take, so it waits, as admission refuses meanwhile.
-  const module = getService(version.serviceSlug);
-  if (module && (await serviceInvariantFailures(module)).length > 0) return "defer";
+  if (await serviceDeclaresOutage(version.serviceSlug)) return "defer";
   const [service, skill] = await Promise.all([
     getServiceById(row.service_id), getSkillByServiceAndSkillId(row.service_id, row.skill_id),
   ]);

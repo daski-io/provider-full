@@ -24,6 +24,8 @@ export const assetWire = {
   assets: {} as NonNullable<ServiceModule["assets"]>,
   /** Runs before each provider statement, e.g. to hold a transaction at one step. */
   beforeQuery: null as ((text: string) => Promise<void>) | null,
+  /** The synthetic service's declared readiness invariant failures; none unless a test adds one. */
+  readinessFailures: [] as string[],
 };
 
 async function hook(text: unknown): Promise<void> {
@@ -58,7 +60,11 @@ export function registryModule() {
   return {
     getAdapter: () => assetWire.adapter,
     getService: (slug: string) => (slug === SERVICE_SLUG
-      ? { manifest: { slug: SERVICE_SLUG, version: "1" }, assets: assetWire.assets } as unknown as ServiceModule
+      ? {
+          manifest: { slug: SERVICE_SLUG, version: "1" },
+          assets: assetWire.assets,
+          operations: { readiness: { checkInvariants: async () => [...assetWire.readinessFailures] } },
+        } as unknown as ServiceModule
       : null),
     getAllServices: () => [],
   };
@@ -331,6 +337,7 @@ export async function startAssetHarness(label: string): Promise<AssetHarness> {
       }
     },
     async reset() {
+      assetWire.readinessFailures.length = 0;
       const tables = (await database.pool.query<{ tablename: string }>(
         "SELECT tablename FROM pg_tables WHERE schemaname='public'",
       )).rows.map((row) => row.tablename).filter((table) => !KEPT_TABLES.has(table));

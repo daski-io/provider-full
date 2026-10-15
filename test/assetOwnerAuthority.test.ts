@@ -192,6 +192,58 @@ describe("a fresh rail-contract proof before an action (C05)", () => {
   });
 });
 
+describe("wallet actions during a declared service outage (C05)", () => {
+  it("refuses a new action before anything is claimed, then serves the same request once the outage clears", async () => {
+    const note = await harness.ownedNote(payerA, { identifier: "note-a" });
+    const body = await signedAction({ action: ACTIONS.touch, providerAssetId: note, input: { note: "note-a" } });
+    assetWire.readinessFailures.push("supplier unreachable");
+    const refused = await rejection(actions().perform(body));
+    expect(refused.message).toBe("asset action unavailable: the service declares an outage");
+    expect(classifyProviderAssetError(refused)).toMatchObject({ status: 503, code: "PROVIDER_ASSET_QUERY_UNAVAILABLE" });
+    expect(await count("standard_asset_action_executions")).toBe(0);
+    expect(await count("standard_wallet_action_nonces")).toBe(0);
+    expect(executed).toEqual([]);
+    assetWire.readinessFailures.length = 0;
+    await expect(actions().perform(body)).resolves.toMatchObject({ payload: { status: "completed" } });
+    expect(executed).toHaveLength(1);
+  });
+
+  it("holds a destructive confirmation until the outage clears, while a staged action can still be canceled", async () => {
+    const kept = await harness.ownedNote(payerA, { identifier: "note-kept" });
+    const gone = await harness.ownedNote(payerA, { identifier: "note-gone" });
+    vi.useFakeTimers({ toFake: ["Date"], now: Date.now() });
+    const stage = async (providerAssetId: string, note: string) => await actions().perform(await signedAction({
+      action: ACTIONS.remove, providerAssetId, input: { note },
+    })) as { payload: { actionExecutionId: string; confirmationHash: string } };
+    const followUp = (providerAssetId: string, staged: Awaited<ReturnType<typeof stage>>, operation: string) =>
+      signedAction({
+        action: ACTIONS.remove, providerAssetId,
+        input: {
+          operation, actionExecutionId: staged.payload.actionExecutionId,
+          confirmationHash: staged.payload.confirmationHash,
+        },
+      });
+    const removal = await stage(gone, "note-gone");
+    const keeping = await stage(kept, "note-kept");
+    vi.setSystemTime(Date.now() + 601_000);
+    const confirm = await followUp(gone, removal, "confirm-destructive");
+    assetWire.readinessFailures.push("supplier unreachable");
+    const nonces = await count("standard_wallet_action_nonces");
+    const refused = await rejection(actions().perform(confirm));
+    expect(classifyProviderAssetError(refused).status).toBe(503);
+    expect(await count("standard_wallet_action_nonces")).toBe(nonces);
+    expect(await count("standard_destructive_followup_executions")).toBe(0);
+    // Canceling a staged action runs no supplier work: it still answers.
+    const canceled = await actions().perform(await followUp(kept, keeping, "cancel-staged-action"));
+    expect(canceled).toMatchObject({ payload: { status: "canceled" } });
+    expect(executed).toEqual([]);
+    assetWire.readinessFailures.length = 0;
+    onExecute = async () => receipt("removed");
+    await expect(actions().perform(confirm)).resolves.toMatchObject({ payload: { status: "completed" } });
+    expect(executed).toEqual([{ skillId: "remove-note", assetId: gone }]);
+  });
+});
+
 describe("wrong target (F-T08)", () => {
   it("never acts on another payer's asset, another type, another identifier or an ineligible state", async () => {
     const mine = await harness.ownedNote(payerA, { identifier: "note-mine" });

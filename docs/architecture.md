@@ -108,7 +108,15 @@ tasks or unresolved supplier operations, and whether this build serves every
 retained obligation. Each part carries stable codes; which worker or gate
 failed is logged once per transition, never per probe. When admission
 stops, new quotes are refused in-process (`503 service_unavailable`); funded
-dispatches, lifecycle calls and reads are never gated by it. A load
+dispatches, lifecycle calls and reads are never gated by it. A service's own
+declared outage (its readiness invariants) holds only that service's new
+work, which could otherwise end failed on the outage: a fresh dispatch is
+refused before admission, the fulfillment worker waits, buyer input answers
+`lifecycle_unavailable` before its nonce is consumed, a wallet action or
+destructive confirmation is refused as unavailable before anything is
+claimed, and a free skill call answers the recoverable JSON-RPC error
+`-32113`. Reads, status, support, cancellation, action recovery and
+canceling a staged action still answer. A load
 balancer that routes new sales separately can use `/health/admission`, which
 answers 200 only while admission is open. `/health` names the build's
 embedded source digest and commit.

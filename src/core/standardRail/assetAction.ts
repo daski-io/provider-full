@@ -2,6 +2,7 @@ import { getAddress, type Hex } from "viem";
 import { getStandardPayerAsset } from "../db/queries/assetOwnership.js";
 import { getServiceBySlug } from "../db/queries/services.js";
 import { getSkillByServiceAndSkillId } from "../db/queries/skills.js";
+import { serviceDeclaresOutage } from "../serviceRegistry/readiness.js";
 import { assertExactKeys } from "./canonical.js";
 import { compileProviderSchema, validateProviderRequest } from "./schema.js";
 import type { ProviderStandardRailConfig } from "./config.js";
@@ -94,6 +95,12 @@ export class ProviderAssetActionService {
       await this.contractIntegrity().catch(() => {
         throw new Error("asset action unavailable: the rail contracts could not be verified");
       });
+    }
+    // New work waits out an outage its service declares, before anything is
+    // claimed: running it now could end the action failed on the outage.
+    // Recovery and cancelling a staged action still answer.
+    if ((operation === null || operation === "confirm") && await serviceDeclaresOutage(definition.serviceSlug)) {
+      throw new Error("asset action unavailable: the service declares an outage");
     }
     if (operation === "recover") {
       return recoverAssetAction({
