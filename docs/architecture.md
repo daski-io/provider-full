@@ -472,6 +472,11 @@ inside its evidence verification. Nonce-gap recovery reads the chain only
 while the database holds unresolved provider writes; every new submission
 still reads both account nonces.
 
+Rate-limit buckets are throttling state, not records: the single statement
+that spends a token commits without waiting for the WAL flush
+(`security/rateLimit.ts`), so a slow storage flush never delays limited
+requests, and no other write relaxes its durability.
+
 Outbound calls are observable without leaking data
 (`observability/outboundFailures.ts`): supplier and email HTTP through
 `boundedFetch`, the gateway registration fetch, every chain RPC endpoint

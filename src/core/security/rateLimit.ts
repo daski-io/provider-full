@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction } from "express";
 import { isIP } from "node:net";
 import { pool } from "../db/pool.js";
+import type { Queryable } from "../db/queryable.js";
 import { createHmac } from "node:crypto";
 import { config } from "../config.js";
 
@@ -104,6 +105,50 @@ export function requestClientIp(req: Request): string {
   return normalizeIp(req.clientAddress || req.ip || req.socket.remoteAddress || "unknown");
 }
 
+/**
+ * Spend one token from the bucket at `key`, refilled at `perMinute` up to
+ * `capacity`; false when the bucket is empty.
+ *
+ * A bucket is throttling state, not a record: a database crash that loses
+ * its last spends lets a client through a few requests early, whereas
+ * waiting for the WAL flush put storage write latency in front of every
+ * limited request. set_config(..., true) holds only until the end of the
+ * transaction the statement runs in, so this runs on the pool, as its own
+ * implicit transaction, and never inside a transaction whose writes must be
+ * durable; every financial, evidence, job and result write stays fully
+ * durable.
+ */
+export async function takeRateLimitToken(
+  db: Queryable,
+  key: string,
+  capacity: number,
+  perMinute: number,
+): Promise<boolean> {
+  const result = await db.query(
+    `INSERT INTO rate_limit_buckets (bucket_key, tokens, last_refill, expires_at)
+     SELECT $1::text, $2::double precision - 1, now(), now() + interval '10 minutes'
+       FROM (SELECT set_config('synchronous_commit', 'off', true)) AS async_commit
+     ON CONFLICT (bucket_key) DO UPDATE
+       SET tokens = LEAST(
+             $2::double precision,
+             rate_limit_buckets.tokens
+               + EXTRACT(EPOCH FROM (now() - rate_limit_buckets.last_refill))
+                 * ($3::double precision / 60.0)
+           ) - 1,
+           last_refill = now(),
+           expires_at = now() + interval '10 minutes'
+     WHERE LEAST(
+             $2::double precision,
+             rate_limit_buckets.tokens
+               + EXTRACT(EPOCH FROM (now() - rate_limit_buckets.last_refill))
+                 * ($3::double precision / 60.0)
+           ) >= 1
+     RETURNING tokens`,
+    [key, capacity, perMinute],
+  );
+  return result.rows.length > 0;
+}
+
 export function makeRateLimiter(cfg: RateLimitConfig) {
   if (!(cfg.capacity > 0) || !(cfg.perMinute > 0)) {
     throw new Error(`invalid rate limit configuration for '${cfg.namespace}'`);
@@ -126,28 +171,7 @@ export function makeRateLimiter(cfg: RateLimitConfig) {
       .digest("hex");
     const key = `${cfg.namespace}:${identity}`;
     try {
-      const result = await pool.query(
-        `INSERT INTO rate_limit_buckets (bucket_key, tokens, last_refill, expires_at)
-         VALUES ($1, $2::double precision - 1, now(), now() + interval '10 minutes')
-         ON CONFLICT (bucket_key) DO UPDATE
-           SET tokens = LEAST(
-                 $2::double precision,
-                 rate_limit_buckets.tokens
-                   + EXTRACT(EPOCH FROM (now() - rate_limit_buckets.last_refill))
-                     * ($3::double precision / 60.0)
-               ) - 1,
-               last_refill = now(),
-               expires_at = now() + interval '10 minutes'
-         WHERE LEAST(
-                 $2::double precision,
-                 rate_limit_buckets.tokens
-                   + EXTRACT(EPOCH FROM (now() - rate_limit_buckets.last_refill))
-                     * ($3::double precision / 60.0)
-               ) >= 1
-         RETURNING tokens`,
-        [key, cfg.capacity, cfg.perMinute],
-      );
-      if (result.rows.length === 0) {
+      if (!(await takeRateLimitToken(pool, key, cfg.capacity, cfg.perMinute))) {
         const retryAfterSec = Math.max(1, Math.ceil(60 / cfg.perMinute));
         res.setHeader("Retry-After", String(retryAfterSec));
         res.status(429).json({

@@ -317,6 +317,11 @@ All notable changes to this project will be documented here.
   of proxy hops and ranges. The admin SIWE nonce and sign-in now use the same
   normalized client address as rate limits and the concurrency budget.
 
+- A rate-limit token spend commits without waiting for the WAL flush, for
+  that single statement's own transaction only (a crash may lose the last
+  fraction of a second of spends); every financial, evidence, job and result
+  write stays fully durable. A PostgreSQL test pins the statement's scope.
+
 ### Fixed
 
 - The provider-write reconciler stays ready while another replica's live
