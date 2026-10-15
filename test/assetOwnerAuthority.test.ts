@@ -148,6 +148,32 @@ describe("one owner authority with an admitted owner version", () => {
   });
 });
 
+describe("a pre-execute review of a wallet action", () => {
+  it("opens bound to the action's signed request and refuses any other input", async () => {
+    const { createPreExecuteEscalation } = await import("../src/core/engine/escalationResolutionStore.js");
+    const { getServiceById } = await import("../src/core/db/queries/services.js");
+    const { getSkillByServiceAndSkillId } = await import("../src/core/db/queries/skills.js");
+    const { getTransactionById } = await import("../src/core/db/queries/transactions.js");
+    const { getAssetById } = await import("../src/core/db/queries/assets.js");
+    const note = await harness.ownedNote(payerA, { identifier: "note-reviewed" });
+    const opened: unknown[] = [];
+    review.during = async () => {
+      const taskId = (await rows("SELECT id FROM transactions WHERE standard_action_execution_id IS NOT NULL"))[0]!.id;
+      const [service, skill, transaction, asset] = await Promise.all([
+        getServiceById(harness.serviceId), getSkillByServiceAndSkillId(harness.serviceId, "touch-note"),
+        getTransactionById(taskId), getAssetById(note),
+      ]);
+      const escalate = (requestData: Record<string, unknown>) => createPreExecuteEscalation({
+        transaction: transaction!, service: service!, skill: skill!, asset, requestData, question: "Review it.",
+      });
+      await expect(escalate({ note: "note-other" })).rejects.toThrow(/differs from the wallet action's admitted request/);
+      opened.push(await escalate({ note: "note-reviewed" }));
+    };
+    await actions().perform(await signedAction({ action: ACTIONS.touch, providerAssetId: note, input: { note: "note-reviewed" } }));
+    expect(opened).toEqual([expect.objectContaining({ source: "pre_execute", status: "pending" })]);
+  });
+});
+
 describe("a fresh rail-contract proof before an action (C05)", () => {
   it("refuses an action whose contract proof fails before anything is consumed, then serves its retry", async () => {
     const note = await harness.ownedNote(payerA, { identifier: "note-a" });

@@ -93,8 +93,11 @@ export async function createPreExecuteEscalation(args: {
       status: string;
       canonical_request_hash: Buffer | null;
       standard_order_id: string | null;
+      asset_id: string | null;
+      standard_action_execution_id: Buffer | null;
     }>(
-      `SELECT service_id, skill_id, customer_id, status, canonical_request_hash, standard_order_id
+      `SELECT service_id, skill_id, customer_id, status, canonical_request_hash, standard_order_id,
+              asset_id, standard_action_execution_id
          FROM transactions WHERE id = $1 FOR UPDATE`,
       [args.transaction.id],
     );

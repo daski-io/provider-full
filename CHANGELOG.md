@@ -357,7 +357,10 @@ All notable changes to this project will be documented here.
   fail-closed or flagged paid order failed as never started instead of
   waiting for its reviewer. The review still wins the order's start fence in
   its own transaction, so an order another executor started is never
-  escalated.
+  escalated. A wallet action's review is likewise bound to its signed
+  request (`{actionId, providerAssetId, input}`) instead of being compared
+  with the input's own hash, which left a flagged action in attention with no
+  review to resolve it.
 - A transient fault before a funded order starts no longer fails it as never
   started. A fetch or DNS failure, a timeout, an outbound circuit or
   concurrency refusal, an HTTP 408, 429 or 5xx, a supplier's temporary,
