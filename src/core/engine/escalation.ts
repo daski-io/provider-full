@@ -30,7 +30,9 @@ import { inTransaction, type Queryable } from "../db/queryable.js";
 
 /// Pre-execute LLM hook flagged the request for human review. Inserts an
 /// `escalations` row (status='pending') and bridges the transaction to
-/// 'working' so the buyer's poll sees activity.
+/// 'working' so the buyer's poll sees activity. `claimStart`, when given,
+/// is that bridge, taken in the escalation's own transaction; when it
+/// refuses, nothing is written and EscalationStartRefusedError escapes.
 export async function markEscalated(
   transactionId: string,
   reviewQuestion: string,
@@ -39,6 +41,7 @@ export async function markEscalated(
     skill: SkillRow;
     requestData: Record<string, unknown>;
     asset: AssetRow | null;
+    claimStart?: (db: Queryable) => Promise<boolean>;
   },
 ): Promise<TransactionRow> {
   const current = await getTransactionById(transactionId);
@@ -52,6 +55,7 @@ export async function markEscalated(
     requestData: context.requestData,
     asset: context.asset,
     question: reviewQuestion,
+    ...(context.claimStart ? { claimStart: context.claimStart } : {}),
   });
   const after = await getTransactionById(transactionId);
   if (!after) throw new Error(`markEscalated: transaction vanished mid-flow`);

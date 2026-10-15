@@ -2,6 +2,8 @@ import { pool } from "../db/pool.js";
 import type { AssetOwner } from "../db/queries/assetOwnership.js";
 import { inTransaction, type Queryable } from "../db/queryable.js";
 import { admitAssetOwner, admittedOwnerOf, assertAdmittedOwnerCurrent } from "./assetOwnerFence.js";
+import type { FulfillmentJobLease } from "./fulfillmentJobs.js";
+import { ownedLease } from "./orderStart.js";
 
 // Owner-only paid work on an existing asset is admitted under the asset owner
 // fence like an asset action: dispatch links the order to its asset only
@@ -27,21 +29,31 @@ async function taskAdmission(db: Queryable, taskId: string): Promise<TaskAdmissi
   return row;
 }
 
-/** Link an owner-only paid order to its asset under the fence, recording the admitted owner. */
+/**
+ * Link an owner-only paid order to its asset under the fence, recording the
+ * admitted owner. Only the executor that may still start the order admits
+ * it: the order is unstarted and the executor holds its live
+ * fulfillment-job lease, so an executor that lost the order never moves the
+ * owner a started call was admitted under.
+ */
 export async function admitPaidTaskForAsset(args: {
   taskId: string;
   assetId: string;
   payer: string;
+  lease: FulfillmentJobLease;
 }): Promise<AssetOwner> {
   return inTransaction(pool, async (db) => {
     const owner = await admitAssetOwner(db, args.assetId, args.payer);
     const linked = await db.query(
-      `UPDATE transactions
+      `UPDATE transactions t
           SET asset_id=$2,admitted_owner=$3,admitted_owner_version=$4,updated_at=now()
-        WHERE id=$1 AND standard_order_id IS NOT NULL AND (asset_id IS NULL OR asset_id=$2)`,
-      [args.taskId, args.assetId, owner.payer, owner.version],
+        WHERE t.id=$1 AND t.standard_order_id IS NOT NULL AND (t.asset_id IS NULL OR t.asset_id=$2)
+          AND t.status='submitted' AND ${ownedLease("$5", "$6")}`,
+      [args.taskId, args.assetId, owner.payer, owner.version, args.lease.id, args.lease.leaseToken],
     );
-    if (linked.rowCount !== 1) throw new Error(`Transaction ${args.taskId} is already bound to another asset`);
+    if (linked.rowCount !== 1) {
+      throw new Error(`Transaction ${args.taskId} is started, leased to another executor or bound to another asset`);
+    }
     return owner;
   });
 }

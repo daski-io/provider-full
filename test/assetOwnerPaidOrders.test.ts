@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import type { PrivateKeyAccount } from "viem/accounts";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AdapterResult } from "../src/core/serviceRegistry/types.js";
+import type { FulfillmentJobLease } from "../src/core/standardRail/fulfillmentJobs.js";
 
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 120_000 });
 vi.mock("../src/core/db/pool.js", async () => (await import("./assetActionHarness.js")).poolModule());
@@ -68,15 +69,14 @@ async function paidOrder(payer: PrivateKeyAccount, note: string) {
   });
   const service = (await getServiceById(harness.serviceId))!;
   const skill = (await getSkillByServiceAndSkillId(harness.serviceId, "touch-note"))!;
-  return {
+  /** One executor's attempt, under the lease it holds. */
+  const runAs = (executor: FulfillmentJobLease) => fulfillAdmittedDispatch({
     taskId,
-    run: () => fulfillAdmittedDispatch({
-      taskId,
-      order: { gatewayAudience: standard.gatewayAudience, orderId, payer: payer.address },
-      request: { note }, skillId: "touch-note", service, skill, handler: assetWire.adapter,
-      requiresOwnership: true, supplierCostCeiling: null, lease,
-    }),
-  };
+    order: { gatewayAudience: standard.gatewayAudience, orderId, payer: payer.address },
+    request: { note }, skillId: "touch-note", service, skill, handler: assetWire.adapter,
+    requiresOwnership: true, supplierCostCeiling: null, lease: executor,
+  });
+  return { taskId, lease, runAs, run: () => runAs(lease) };
 }
 
 beforeAll(async () => {
@@ -148,6 +148,28 @@ describe("owner-only paid orders (F-T08)", () => {
     expect((await harness.database.pool.query(
       "SELECT state FROM standard_terminal_results WHERE transaction_id=$1", [taskId],
     )).rows).toEqual([{ state: "failed" }]);
+  });
+
+  it("never lets an executor that lost the order move the owner its started call was admitted under", async () => {
+    const note = await harness.ownedNote(payerA, { identifier: "note-late-executor" });
+    const { taskId, lease, run, runAs } = await paidOrder(payerA, "note-late-executor");
+    let late: unknown = null;
+    onExecute = async () => {
+      // The owner moves away and back during the started call, and an
+      // executor whose lease was taken over reaches the order's admission.
+      await harness.changeOwner(note, payerB, 1);
+      await harness.changeOwner(note, payerA, 2);
+      late = await runAs({ id: lease.id, leaseToken: randomUUID() }).catch((error: unknown) => error);
+      return receipt();
+    };
+    await run();
+    expect(executed).toBe(1);
+    expect(late).toMatchObject({ name: "OwnerStepUndecidedError" });
+    // The started call's admission stands, so its deliverable is withheld.
+    expect(await order(taskId)).toMatchObject({ status: "failed", admitted_owner_version: 0 });
+    expect((await harness.database.pool.query(
+      "SELECT 1 FROM events WHERE transaction_id=$1 AND type='transaction.artifact.created'", [taskId],
+    )).rows).toHaveLength(0);
   });
 
   it("leaves an order unstarted, never failed, when its owner admission reaches no decision", async () => {

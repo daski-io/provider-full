@@ -52,6 +52,7 @@ const { ProviderEvidenceVerifier } = await import("../src/core/standardRail/evid
 const { enqueueUnqueuedAdmissions, resumeAdmittedOrder, runPaidFulfillmentCycle } =
   await import("../src/core/standardRail/paidFulfillmentWorker.js");
 const { claimDurableJob, enqueueDurableJob } = await import("../src/core/db/queries/durableJobs.js");
+const { isInfrastructureFailure } = await import("../src/core/standardRail/dispatchExecution.js");
 
 const config = fixtureConfig([fixedOutcome]);
 const request = { item: "widget" };
@@ -175,6 +176,28 @@ describe("admitted paid work", () => {
     expect(h.executions).toBe(1);
     expect(await task(order)).toMatchObject({ status: "completed", job_status: "completed" });
     expect((await status(order)).body.state).toBe("completed");
+  });
+
+  it("keeps an order resumable when a pre-start query times out in the database client", async () => {
+    const order = await paidOrder();
+    // node-postgres's own query timeout carries no SQLSTATE and fires before the server's.
+    h.preExecute = async () => { throw new Error("Query read timeout"); };
+    const answer = await postJson(`${rail.base}/dispatch`, order);
+    h.preExecute = null;
+    expect([answer.status, await answer.text()]).toEqual([503, ""]);
+    expect(await task(order)).toMatchObject({ status: "submitted", job_status: "retry" });
+    await database.pool.query("UPDATE durable_jobs SET available_at=now() WHERE queue='standard-paid-fulfillment'");
+    await runPaidFulfillmentCycle(config, false);
+    expect(h.executions).toBe(1);
+    expect(await task(order)).toMatchObject({ status: "completed", job_status: "completed" });
+    for (const error of [
+      Object.assign(new Error("could not obtain lock on row"), { code: "55P03" }),
+      Object.assign(new Error("getaddrinfo EAI_AGAIN database"), { code: "EAI_AGAIN" }),
+      new Error("Client was closed and is not queryable"),
+    ]) expect(isInfrastructureFailure(error), error.message).toBe(true);
+    expect(isInfrastructureFailure(new Error("Standard managed asset was not found"))).toBe(false);
+    expect(isInfrastructureFailure(Object.assign(new Error("invalid argument"), { code: "ERR_INVALID_ARG_TYPE" })))
+      .toBe(false);
   });
 
   it("never repeats a started call whose answer was lost: it parks the order for reconciliation", async () => {

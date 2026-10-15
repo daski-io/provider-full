@@ -311,13 +311,15 @@ Every transition that starts or resumes owner-only work takes
 records the owner it admitted, with its version: an asset-action claim or
 staging, a destructive confirmation, the resumption of an action after review,
 the dispatch link of an owner-only paid order and its resumption after buyer
-input or a review, and a delivery admission. The lock order is fixed: a
-request's own advisory lock and endpoint rate buckets, then the fence, then
-the execution row, then its transaction; the expiry sweep purges spent
-nonces and rate buckets apart from the transaction that holds execution rows.
-These transactions run read committed, so a read after the fence sees what
-committed before it was granted. A fence holder uses only its own connection and never waits on a
-network call.
+input or a review, and a delivery admission. Only the executor that holds an
+unstarted order's live fulfillment-job lease links it, so an executor that
+lost the order never moves the owner a started call was admitted under. The
+lock order is fixed: a request's own advisory lock and endpoint rate
+buckets, then the fence, then the execution row, then its transaction; the
+expiry sweep purges spent nonces and rate buckets apart from the transaction
+that holds execution rows. These transactions run read committed, so a read
+after the fence sees what committed before it was granted. A fence holder
+uses only its own connection and never waits on a network call.
 
 The admitted owner is compared with the current one at three boundaries:
 
@@ -405,11 +407,14 @@ created in the admission transaction and leased to the admitting request.
 Exactly one executor wins the order's start fence (`submitted` to
 `working`, `standardRail/orderStart.ts`), and only while it holds the job's
 live lease and no buyer cancellation holds the order, so the service's
-`execute` runs at most once per order. Every terminal decision taken before
-the call (a pre-execute rejection, a definite pre-start failure, the
-admitted deadline passing) wins the same fence first, so an executor that
-lost the race or its lease never ends an order another one started. A
-database or connection failure before the call leaves the order resumable,
+`execute` runs at most once per order. Every decision taken before the call
+(a pre-execute rejection or escalation, a definite pre-start failure such
+as a stale or foreign asset owner, the admitted deadline passing) wins the
+same fence first, an escalation inside its own transaction, so an executor
+that lost the race or its lease never ends or escalates an order another
+one started. A database or connection failure (the database client's own
+query timeout included), or an asset owner check that reached no decision,
+before the call leaves the order resumable,
 and the job's worker resumes it on any replica whose build can run the
 order's contract (a job names the executable definition it needs), waiting
 while the service declares an outage or a lifecycle action holds the order.

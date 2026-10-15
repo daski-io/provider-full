@@ -5,6 +5,7 @@ import type { TransactionRow } from "../src/core/db/queries/transactions.js";
 
 const state = vi.hoisted(() => ({
   taskStatus: "submitted",
+  builtInStart: false,
   canonicalRequestHash: null as Buffer | null,
   escalation: null as Record<string, unknown> | null,
   failEscalationInsert: false,
@@ -27,6 +28,7 @@ const db = vi.hoisted(() => ({
       };
     }
     if (text.includes("SET status = 'working'")) {
+      state.builtInStart = true;
       if (state.taskStatus !== "submitted") return { rows: [], rowCount: 0 };
       state.taskStatus = "working";
       return { rows: [{ id: values[0] }], rowCount: 1 };
@@ -87,7 +89,10 @@ vi.mock("../src/core/events/emitter.js", () => ({
   }),
 }));
 
-import { createPreExecuteEscalation } from "../src/core/engine/escalationResolutionStore.js";
+import {
+  createPreExecuteEscalation,
+  EscalationStartRefusedError,
+} from "../src/core/engine/escalationResolutionStore.js";
 import { computeRequestHash } from "../src/core/auth/requestHash.js";
 
 const service = {
@@ -119,6 +124,7 @@ const requestData = { customerName: "Protected Customer", secretToken: "private-
 
 beforeEach(() => {
   state.taskStatus = "submitted";
+  state.builtInStart = false;
   state.canonicalRequestHash = Buffer.from(computeRequestHash(requestData).slice(2), "hex");
   state.escalation = null;
   state.failEscalationInsert = false;
@@ -177,6 +183,33 @@ describe("atomic pre-execute escalation creation", () => {
     expect(state.taskStatus).toBe("submitted");
     expect(state.escalation).toBeNull();
     expect(state.audits).toEqual([]);
+  });
+
+  it("starts the task only through the caller's start step when one is given", async () => {
+    const claimStart = vi.fn(async (client: unknown) => {
+      expect(client).toBe(db);
+      state.taskStatus = "working";
+      return true;
+    });
+    await createPreExecuteEscalation({
+      transaction, service, skill, asset: null, requestData, question: "review", claimStart,
+    });
+    expect(claimStart).toHaveBeenCalledOnce();
+    expect(state.builtInStart).toBe(false);
+    expect(state.escalation?.status).toBe("pending");
+  });
+
+  it("writes nothing when the caller's start step refuses, also for a task another executor started", async () => {
+    for (const status of ["submitted", "working"]) {
+      state.taskStatus = status;
+      await expect(createPreExecuteEscalation({
+        transaction, service, skill, asset: null, requestData, question: "review", claimStart: async () => false,
+      })).rejects.toBeInstanceOf(EscalationStartRefusedError);
+      expect(state.taskStatus).toBe(status);
+      expect(state.builtInStart).toBe(false);
+      expect(state.escalation).toBeNull();
+      expect(state.audits).toEqual([]);
+    }
   });
 
   it("loses safely when another transition reaches a terminal state first", async () => {

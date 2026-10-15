@@ -73,11 +73,13 @@ All notable changes to this project will be documented here.
   call whose answer was lost instead of repeating it. One start fence, taken
   only under the order's live job lease and never while a buyer's
   cancellation holds the order, makes `execute` run at most once, and every
-  pre-start rejection or failure must win it first, so a racing or stale
-  executor never ends an order another one started. A database failure
-  before the call no longer signs a failure, the worker waits out a declared
-  service outage, an order runs with its admitted contract's asset-ownership
-  rule, and only a never-started order fails, as
+  pre-start rejection, escalation or failure must win it first (an
+  escalation in its own transaction), so a racing or stale executor never
+  ends or escalates an order another one started. A database failure before
+  the call, the database client's own query timeout included, no longer
+  signs a failure, the worker waits out a declared service outage, an order
+  runs with its admitted contract's asset-ownership rule, and only a
+  never-started order fails, as
   `standard_fulfillment_expired`, once its admitted fulfillment deadline
   passed; the dispatch deadline never fails admitted work.
 - Every promoted listing version stays resolvable by its commitment hash
@@ -184,15 +186,17 @@ All notable changes to this project will be documented here.
   derivation. Owner-only work is admitted under a per-asset owner fence that
   records the owner's version: asset-action claims, staging, destructive
   confirmations and post-review resumptions, and owner-only paid orders at
-  dispatch, buyer input and reviewed execution. The supplier call, result
-  persistence and every signed asset-action response compare that version
-  with the current owner under the fence; a stale owner's result is withheld
-  from both owners and ends `failed` with `asset_owner_changed`; a stale
-  owner's replay or recovery is refused before any nonce is consumed, and an
-  asset action's task result and execution settle in one transaction.
-  Fenced wallet-action transactions now run read committed so a read after
-  the fence sees what committed before it, and the expiry sweep purges spent
-  nonces and rate buckets apart from the rows it updates.
+  dispatch (only by the executor that holds the order's live fulfillment
+  job lease, before it starts), buyer input and reviewed execution. The
+  supplier call, result persistence and every signed asset-action response
+  compare that version with the current owner under the fence; a stale
+  owner's result is withheld from both owners and ends `failed` with
+  `asset_owner_changed`; a stale owner's replay or recovery is refused
+  before any nonce is consumed, and an asset action's task result and
+  execution settle in one transaction. Fenced wallet-action transactions now
+  run read committed so a read after the fence sees what committed before
+  it, and the expiry sweep purges spent nonces and rate buckets apart from
+  the rows it updates.
 - Each AgentCard publishes the payer account policy exactly as the verifier
   enforces it (`auth.payerAccounts`, never counterfactual accounts),
   `PAYER_ACCOUNT_TYPES` with `contract` is refused at boot in mock chain

@@ -4,6 +4,7 @@ import { getActiveAssetByIdentifier, getAssetByIdentifierWithStatuses, type Asse
 import type { ServiceRow } from "../db/queries/services.js";
 import type { SkillRow } from "../db/queries/skills.js";
 import { markEscalated } from "../engine/escalation.js";
+import { EscalationStartRefusedError } from "../engine/escalationResolutionStore.js";
 import { consultPreExecuteAgent } from "../engine/preExecuteRunner.js";
 import { processAdapterResult } from "../engine/taskFinalization.js";
 import { getService } from "../serviceRegistry/registry.js";
@@ -18,7 +19,8 @@ import { AssetOwnerChangedError } from "./assetOwnerFence.js";
 import { ASSET_OWNER_CHANGED_RESULT } from "./assetOwnerOutcome.js";
 import type { FulfillmentJobLease } from "./fulfillmentJobs.js";
 import {
-  claimStart, failAdmittedTask, parkForReconciliation, refuseStart, type AdmittedOrder,
+  claimStart, failAdmittedTask, parkForReconciliation, refuseStart, startFenceRefusal, takeStartFence,
+  type AdmittedOrder,
 } from "./orderStart.js";
 
 const bytes = (value: Hex): Buffer => Buffer.from(value.slice(2), "hex");
@@ -73,8 +75,15 @@ async function ownerStep(step: () => Promise<unknown>): Promise<void> {
   }
 }
 
-const INFRASTRUCTURE_CODES = /^(?:08|25P03|40|53|57|58)/;
-const INFRASTRUCTURE_MESSAGES = /connection terminated|connection error|timeout exceeded when trying to connect|ECONN|ETIMEDOUT|EPIPE/i;
+/** SQLSTATEs of a database that could not answer: connection, rollback, resources, lock, operator, system. */
+const INFRASTRUCTURE_CODES = /^(?:08|25P03|40|53|55P03|57|58)/;
+/** System error codes (ECONNRESET, EAI_AGAIN, ...). */
+const SYSTEM_ERROR_CODE = /^E(?:AI_)?[A-Z]+$/;
+/** node-postgres's own errors, which carry no code: its query timeout fires before the server's. */
+const INFRASTRUCTURE_MESSAGES = new RegExp([
+  "connection terminated", "connection error", "timeout exceeded when trying to connect", "query read timeout",
+  "not queryable", "cannot use a pool after calling end", "ECONN", "ETIMEDOUT", "EPIPE",
+].join("|"), "i");
 
 /**
  * A database, connection or handler-resolution failure says nothing about
@@ -84,7 +93,7 @@ const INFRASTRUCTURE_MESSAGES = /connection terminated|connection error|timeout 
 export function isInfrastructureFailure(error: unknown): boolean {
   if (error instanceof RetainedHandlerUnavailableError) return true;
   const code = (error as { code?: unknown } | null)?.code;
-  if (typeof code === "string" && (INFRASTRUCTURE_CODES.test(code) || /^E[A-Z]+$/.test(code))) return true;
+  if (typeof code === "string" && (INFRASTRUCTURE_CODES.test(code) || SYSTEM_ERROR_CODE.test(code))) return true;
   return error instanceof Error && INFRASTRUCTURE_MESSAGES.test(error.message);
 }
 
@@ -117,14 +126,15 @@ async function refuseBeforeStart(error: unknown, args: {
  * called escapes and leaves the order resumable by its fulfillment job;
  * after the call it is ambiguous. Every decision that ends or starts the
  * order first wins its start fence (orderStart.ts); an executor that loses
- * it returns without acting, and a pre-execute escalation fences the order
- * under its own row lock. Owner-only work is admitted under the asset owner
- * fence for the order's payer and checked once more right before the start;
- * a stale or foreign owner refuses the start. Once the service has
- * answered, its answer is persisted as given: an infrastructure failure
- * while persisting escapes (the caller answers ambiguously) and is never
- * rewritten into a failure, and a deliverable whose owner went stale
- * meanwhile is withheld and the order ends failed.
+ * it returns without acting, and a pre-execute escalation wins it in the
+ * escalation's own transaction. Owner-only work is admitted under the asset
+ * owner fence for the order's payer, only by the executor that may still
+ * start the order, and checked once more right before the start; a stale or
+ * foreign owner refuses the start. Once the service has answered, its
+ * answer is persisted as given: an infrastructure failure while persisting
+ * escapes (the caller answers ambiguously) and is never rewritten into a
+ * failure, and a deliverable whose owner went stale meanwhile is withheld
+ * and the order ends failed.
  */
 export async function fulfillAdmittedDispatch(args: {
   taskId: string;
@@ -157,12 +167,20 @@ export async function fulfillAdmittedDispatch(args: {
     // is the current owner, recording the owner the work is admitted under.
     const owned = resolved.linkOwnership ? resolved.asset : null;
     ownerOnly = owned !== null;
-    if (owned) await ownerStep(() => admitPaidTaskForAsset({ taskId, assetId: owned.id, payer: order.payer }));
+    if (owned) {
+      await ownerStep(() => admitPaidTaskForAsset({ taskId, assetId: owned.id, payer: order.payer, lease }));
+    }
     decision = await consultPreExecuteAgent(service, skill, args.request, true, taskId, asset);
     if (decision.action === "escalate") {
+      // Escalating starts the order for review: only with its start fence.
       const escalated = await markEscalated(taskId, decision.reviewQuestion, {
         service, skill, requestData: args.request, asset,
+        claimStart: (db) => takeStartFence(db, taskId, order.orderId, lease, {}),
+      }).catch((error: unknown) => {
+        if (error instanceof EscalationStartRefusedError) return null;
+        throw error;
       });
+      if (!escalated) return step(await startFenceRefusal(taskId, order.orderId, lease));
       await pool.query(
         `UPDATE standard_dispatch_claims SET state=$3,response_hash=$4
          WHERE gateway_audience=$1 AND order_id=$2`,

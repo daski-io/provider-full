@@ -44,6 +44,14 @@ export interface PreExecuteEscalationRow extends EscalationRow, SnapshotEvidence
   resolution_error: string | null;
 }
 
+/** The caller's start step refused the task's escalation; nothing was written. */
+export class EscalationStartRefusedError extends Error {
+  constructor() {
+    super("The task's escalation was refused its start");
+    this.name = "EscalationStartRefusedError";
+  }
+}
+
 export async function createPreExecuteEscalation(args: {
   transaction: TransactionRow;
   service: ServiceRow;
@@ -51,6 +59,14 @@ export async function createPreExecuteEscalation(args: {
   asset: AssetRow | null;
   requestData: Record<string, unknown>;
   question: string;
+  /**
+   * Moves the task from submitted to working inside the escalation's own
+   * transaction, under the caller's conditions (a funded standard order's
+   * start fence); false refuses the escalation with
+   * EscalationStartRefusedError. Without it a submitted task starts here
+   * and a working one escalates as it is.
+   */
+  claimStart?: (db: Queryable) => Promise<boolean>;
 }): Promise<PreExecuteEscalationRow> {
   if (args.transaction.service_id !== args.service.id ||
       args.transaction.skill_id !== args.skill.skill_id ||
@@ -91,7 +107,9 @@ export async function createPreExecuteEscalation(args: {
         throw new Error("canonical request changed before escalation snapshot was persisted");
       }
     }
-    if (task.status === "submitted") {
+    if (args.claimStart) {
+      if (!await args.claimStart(db)) throw new EscalationStartRefusedError();
+    } else if (task.status === "submitted") {
       const transitioned = await db.query(
         `UPDATE transactions
             SET status = 'working', updated_at = now(), version = version + 1

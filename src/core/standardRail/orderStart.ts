@@ -1,18 +1,19 @@
 import type { Hex } from "viem";
 import { pool } from "../db/pool.js";
+import type { Queryable } from "../db/queryable.js";
 import { processAdapterResult } from "../engine/taskFinalization.js";
 import type { FulfillmentJobLease } from "./fulfillmentJobs.js";
 import { recordStandardSecurityIncident } from "./incidents.js";
 
 /*
  * The start fence of an admitted paid order. Exactly one executor moves a
- * submitted order to working, either to call the service or to refuse the
- * order a start, and only while it holds the order's fulfillment-job lease
- * and no buyer lifecycle action (a cancellation) holds the order. Every
- * terminal decision taken before the service was called takes this fence
- * first, so an executor that lost the race, or its lease, never ends an
- * order another one started. The version bump invalidates a lifecycle claim
- * taken from the pre-start snapshot.
+ * submitted order to working, either to call the service, to escalate it
+ * for review or to refuse the order a start, and only while it holds the
+ * order's fulfillment-job lease and no buyer lifecycle action (a
+ * cancellation) holds the order. Every terminal decision taken before the
+ * service was called takes this fence first, so an executor that lost the
+ * race, or its lease, never ends an order another one started. The version
+ * bump invalidates a lifecycle claim taken from the pre-start snapshot.
  */
 
 /** The admitted order a fulfilment acts for. */
@@ -50,8 +51,44 @@ export function startRefusal(marker: unknown): StartRefusal | null {
 }
 
 /** The executor's fulfillment-job lease is still live, given the parameters holding its id and token. */
-const ownedLease = (id: string, token: string) => `EXISTS (SELECT 1 FROM durable_jobs j
+export const ownedLease = (id: string, token: string) => `EXISTS (SELECT 1 FROM durable_jobs j
   WHERE j.id=${id} AND j.lease_token=${token} AND j.status='running' AND j.lease_expires_at > now())`;
+
+/**
+ * Win the start fence inside the caller's transaction: move a submitted
+ * order to working under this executor's lease, recording why. False when
+ * the fence was not won; nothing changed then.
+ */
+export async function takeStartFence(
+  db: Queryable,
+  taskId: string,
+  orderId: string,
+  lease: FulfillmentJobLease,
+  marker: Record<string, unknown>,
+): Promise<boolean> {
+  const started = await db.query(
+    `UPDATE transactions t SET status='working',updated_at=now(),version=version+1,metadata=metadata || $3::jsonb
+      WHERE t.id=$1 AND t.standard_order_id=$2 AND t.status='submitted' AND ${ownedLease("$4", "$5")}
+        AND NOT EXISTS (SELECT 1 FROM standard_lifecycle_actions a WHERE a.transaction_id=t.id AND a.state='claimed')`,
+    [taskId, orderId, JSON.stringify(marker), lease.id, lease.leaseToken],
+  );
+  return started.rowCount === 1;
+}
+
+/** Why this executor did not win the fence. */
+export async function startFenceRefusal(
+  taskId: string,
+  orderId: string,
+  lease: FulfillmentJobLease,
+): Promise<"lost" | "busy"> {
+  // Still submitted under this executor's live lease: only a lifecycle action held it back.
+  const state = (await pool.query<{ waiting: boolean }>(
+    `SELECT t.status='submitted' AND ${ownedLease("$3", "$4")} AS waiting
+       FROM transactions t WHERE t.id=$1 AND t.standard_order_id=$2`,
+    [taskId, orderId, lease.id, lease.leaseToken],
+  )).rows[0];
+  return state?.waiting ? "busy" : "lost";
+}
 
 /** Move a submitted order to working under this executor's lease, recording why. */
 export async function claimStart(
@@ -60,20 +97,8 @@ export async function claimStart(
   lease: FulfillmentJobLease,
   marker: Record<string, unknown>,
 ): Promise<StartFence> {
-  const started = await pool.query(
-    `UPDATE transactions t SET status='working',updated_at=now(),version=version+1,metadata=metadata || $3::jsonb
-      WHERE t.id=$1 AND t.standard_order_id=$2 AND t.status='submitted' AND ${ownedLease("$4", "$5")}
-        AND NOT EXISTS (SELECT 1 FROM standard_lifecycle_actions a WHERE a.transaction_id=t.id AND a.state='claimed')`,
-    [taskId, orderId, JSON.stringify(marker), lease.id, lease.leaseToken],
-  );
-  if (started.rowCount === 1) return "started";
-  // Still submitted under this executor's live lease: only a lifecycle action held it back.
-  const state = (await pool.query<{ waiting: boolean }>(
-    `SELECT t.status='submitted' AND ${ownedLease("$3", "$4")} AS waiting
-       FROM transactions t WHERE t.id=$1 AND t.standard_order_id=$2`,
-    [taskId, orderId, lease.id, lease.leaseToken],
-  )).rows[0];
-  return state?.waiting ? "busy" : "lost";
+  if (await takeStartFence(pool, taskId, orderId, lease, marker)) return "started";
+  return startFenceRefusal(taskId, orderId, lease);
 }
 
 export async function failAdmittedTask(

@@ -20,6 +20,8 @@ const {
 const { ProviderAssetActionService } = await import("../src/core/standardRail/assetAction.js");
 const { AssetOwnerChangedError } = await import("../src/core/standardRail/assetOwnerFence.js");
 const { admitPaidTaskForAsset } = await import("../src/core/standardRail/assetOwnerAdmission.js");
+const { insertAdmittedFulfillmentJob } = await import("../src/core/standardRail/fulfillmentJobs.js");
+const { claimStart } = await import("../src/core/standardRail/orderStart.js");
 const { processAdapterResult } = await import("../src/core/engine/taskFinalization.js");
 const { classifyProviderAssetError } = await import("../src/core/standardRail/routes.js");
 
@@ -314,17 +316,22 @@ describe("stale owner version (F-T08)", () => {
   it("withholds an owner-only paid order's deliverable when its admitted owner went stale", async () => {
     const note = await harness.ownedNote(payerA);
     const taskId = `task-${randomUUID()}`;
+    const orderId = `0x${randomBytes(32).toString("hex")}`;
     const customer = (await rows("SELECT id FROM customers WHERE wallet_address=$1", [lower(payerA)]))[0].id;
     await harness.database.pool.query(
       `INSERT INTO transactions (id,service_id,skill_id,status,customer_id,standard_order_id,standard_payer,
          standard_order_key,standard_token,standard_gross_amount,standard_provider_net_amount,
          standard_daski_commission_amount)
-       VALUES ($1,$2,'touch-note','working',$3,$4,$5,$6,'0x7777777777777777777777777777777777777777',1000,950,50)`,
-      [taskId, harness.serviceId, customer, `0x${randomBytes(32).toString("hex")}`, lower(payerA), randomBytes(32)],
+       VALUES ($1,$2,'touch-note','submitted',$3,$4,$5,$6,'0x7777777777777777777777777777777777777777',1000,950,50)`,
+      [taskId, harness.serviceId, customer, orderId, lower(payerA), randomBytes(32)],
     );
-    await expect(admitPaidTaskForAsset({ taskId, assetId: note, payer: payerB.address }))
+    const lease = await insertAdmittedFulfillmentJob(harness.database.pool, {
+      taskId, orderId, gatewayAudience: standard.gatewayAudience, capability: null,
+    });
+    await expect(admitPaidTaskForAsset({ taskId, assetId: note, payer: payerB.address, lease }))
       .rejects.toBeInstanceOf(AssetOwnerChangedError);
-    await admitPaidTaskForAsset({ taskId, assetId: note, payer: payerA.address });
+    await admitPaidTaskForAsset({ taskId, assetId: note, payer: payerA.address, lease });
+    await expect(claimStart(taskId, orderId, lease, { supplier_mutation_started: true })).resolves.toBe("started");
     await harness.changeOwner(note, payerB, 1);
     await expect(processAdapterResult(taskId, receipt("report"), harness.serviceId))
       .rejects.toBeInstanceOf(AssetOwnerChangedError);
