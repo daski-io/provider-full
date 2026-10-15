@@ -37,12 +37,13 @@ All notable changes to this project will be documented here.
 
 - Processes built for an older schema can no longer write (core migration
   011): every session declares this build's runtime epoch when it connects,
-  and every core table refuses insert, update, delete and truncate
-  statements from a session below the schema's minimum. An earlier image left
-  running after the upgrade fails before it registers, admits, claims a job
-  or sweeps tasks, and a build refuses to start on a schema whose minimum
-  epoch is above its own. Manual maintenance SQL must declare the epoch, and
-  transaction-mode connection pooling is not supported.
+  and every core table, the asset owner tables of core migrations 012 and
+  013 included (core migration 014), refuses insert, update, delete and
+  truncate statements from a session below the schema's minimum. An earlier
+  image left running after the upgrade fails before it registers, admits,
+  claims a job or sweeps tasks, and a build refuses to start on a schema
+  whose minimum epoch is above its own. Manual maintenance SQL must declare
+  the epoch, and transaction-mode connection pooling is not supported.
 - Each build embeds its source digest (and the commit given in the
   `SOURCE_COMMIT` build argument) in `dist/build-identity.json`; `/health`
   names it instead of depending on a hosting platform's commit variable, and

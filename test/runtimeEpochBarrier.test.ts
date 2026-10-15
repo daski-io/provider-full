@@ -40,6 +40,9 @@ describe("runtime epoch barrier (C-T07)", () => {
       "UPDATE provider_runtime_listing_versions SET superseded_at=now() WHERE false",
       "UPDATE emails_outbound SET delivery_status='sent' WHERE false",
       "TRUNCATE standard_security_incidents",
+      // The asset owner tables (core migrations 012 and 013, guarded by 014).
+      "DELETE FROM asset_owner_overrides WHERE false",
+      "UPDATE asset_delivery_admissions SET revoked_at=now() WHERE false",
     ]) {
       await expect(legacy.query(statement), statement).rejects.toMatchObject({
         code: "55000", message: expect.stringMatching(/predates the database schema/),

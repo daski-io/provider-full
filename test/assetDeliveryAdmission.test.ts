@@ -1,5 +1,6 @@
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { RUNTIME_EPOCH_OPTION } from "./postgresHarness.js";
 
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 120_000 });
 vi.mock("../src/core/db/pool.js", async () => (await import("./assetActionHarness.js")).poolModule());
@@ -195,7 +196,8 @@ describe("asset delivery admission (F-T08)", () => {
 
   it("never needs a second connection while it holds the fence", async () => {
     const note = await harness.ownedNote(payerA);
-    const single = new pg.Pool({ connectionString: harness.database.url, max: 1 });
+    // A provider session declares this release's runtime epoch (core migration 011).
+    const single = new pg.Pool({ connectionString: harness.database.url, max: 1, options: RUNTIME_EPOCH_OPTION });
     const shared = assetWire.pool;
     assetWire.pool = single;
     try {

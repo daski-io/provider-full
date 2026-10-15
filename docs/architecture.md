@@ -141,8 +141,9 @@ ledgers stay writable. A build also refuses to finish migrating a schema
 whose minimum epoch is above its own. A change that breaks this release's
 runtimes raises both the database minimum and `RUNTIME_SCHEMA_EPOCH`; every
 later migration that creates a table guards it with the same statement
-trigger. `scripts/security/prior-runtime-compatibility.mjs` proves the upgrade
-and overlap against the prior release's own compiled code.
+trigger (core migration 014 guards the asset owner tables of 012 and 013).
+`scripts/security/prior-runtime-compatibility.mjs` proves the upgrade and
+overlap against the prior release's own compiled code.
 
 ## Discovery and free A2A
 
