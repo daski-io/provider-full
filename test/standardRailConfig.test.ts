@@ -128,9 +128,12 @@ describe("provider standard rail configuration", () => {
   });
 
   it("carries the Option A slot layout end to end", async () => {
-    const config = await loadConfig();
+    // One set of heads: a fixture's validity is stamped from the clock, so
+    // heads built in another second carry another commitment.
+    const heads = fixtureHeads();
+    const config = await loadConfig(environment(), heads);
     const outcome = config.outcomes.get("paid-beta")!;
-    const head = fixtureHeads().find((entry) => entry.skillId === "paid-beta")!;
+    const head = heads.find((entry) => entry.skillId === "paid-beta")!;
     expect(outcome.listingManifestHash).toBe(head.runtimeCommitmentHash);
     expect(outcome.providerOfferHash).toBe(head.runtimeCommitment.providerIntentHash);
     expect(outcome.outcomeIdHash).toBe(head.listingKey);
