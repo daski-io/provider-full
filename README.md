@@ -11,14 +11,27 @@ provider.
 
 ## Choose the right starter
 
-| Starter | Use it when |
+Pick the path from the product's facts, not from how long a call takes:
+
+| Path | Use it when every paid operation |
 | --- | --- |
-| [`provider`](https://github.com/daski-io/provider) | Every operation is fixed-price, fully automated, one-shot, terminal within 50 seconds, and needs no durable asset/lifecycle or later reconciliation. |
-| `provider-full` (this repository) | Any operation needs dynamic quotes, long-running jobs, later input, cancellation, durable assets/actions, human review, email, admin, direct A2A, protected-data workflows, or multi-replica recovery. |
+| [`provider`](https://github.com/daski-io/provider), synchronous mode | Is fixed-price and automated, returns its terminal result within that starter's 50-second synchronous budget, and needs no later buyer, asset or operator step. |
+| [`provider`](https://github.com/daski-io/provider), external-job mode (in releases that include it) | Is fixed-price and automated, and the product already runs the paid work as its own job that can be started safely, found again after a lost response, and polled until a bounded report. No later buyer input, cancellation, asset or operator workflow. |
+| `provider-full` (this repository) | Needs dynamic pricing, provider-owned multi-step workflows, later input or cancellation, durable assets and owner actions, human or operator review, richer protected data, email, admin, direct A2A, or intentional multi-replica operation. |
+
+Duration alone does not select `provider-full`, and choosing it does not
+supply a missing product guarantee: if a lost submission cannot be reconciled
+with the product, that is an integration gap to close first in either
+starter. A product's own x402 endpoint does not make it compatible by itself:
+Daski's managed payment is the purchase, and the provider starts work only for
+a verified, paid Daski order. A full provider can still wrap a job-based
+product beside richer services; see
+[Wrapping a product that returns a job id](docs/existing-async-products.md).
 
 The starters share the standard Exact-EVM rail but are alternatives, not
 layers. The portable agent skill is published only by `provider`; this full
-repository links to that canonical copy instead of maintaining a duplicate.
+repository links to that canonical copy instead of maintaining a duplicate
+([agent skill](docs/agent-skill.md)).
 
 The starter is intentionally generic. Its only marketplace service is
 `src/services/dummy`, a small reference with a free `echo` skill and a paid
@@ -89,8 +102,10 @@ values, and explains which onboarding inputs still block a full boot.
 ## How an order reaches your product
 
 1. The provider publishes your service manifest and skill contracts.
-2. Daski requests a quote; your adapter validates the buyer input and returns
-   an exact atomic-USDC amount or structured field errors.
+2. Daski requests a payer-bound readiness quote; your adapter validates the
+   buyer input and, for a dynamic listing, prices it in atomic USDC, or
+   returns structured field errors. A fixed listing always quotes its
+   admitted price, and a quote never starts work.
 3. The gateway admits and verifies the standard payment requirements.
 4. The gateway sends a signed dispatch bound to the provider, service, skill,
    payer, request, order, audience, recipe, and deadline.
@@ -104,6 +119,14 @@ If an external mutation times out after dispatch, the provider must reconcile
 the product's authoritative state before retrying. It must never guess whether
 a purchase, provisioning request, filing, or other non-convergent action
 succeeded.
+
+An HTTP call and a fulfillment are different clocks. The gateway's dispatch
+call is short: the adapter returns a terminal result, or `working` while its
+own durable job continues. The order's fulfillment duration, declared by each
+skill contract, is how long the provider may take to deliver; buyers follow
+the order through the gateway, which reads its signed status and artifact
+from this provider for as long as the order exists. Work past that duration
+is marked overdue and stays open for a late result.
 
 ## Repository map
 
@@ -185,6 +208,19 @@ contracts are healthy. A process that cannot take new sales refuses new
 quotes itself, so a dependency or worker outage never takes reads off the
 network; `/health/admission` answers 200 only while new sales are admitted,
 for a load balancer that routes quotes separately.
+
+## Compatibility
+
+This release implements the gateway's current provider contract: payer-bound
+readiness quotes for fixed and dynamic listings, dispatch and status answers
+with signed `operations` observations, the no-claim and refusal rules, the
+lifecycle grant and named refusals, support receipts and frozen terminal
+identities. Its tests vendor the gateway's canonical provider-wire fixtures at
+the gateway commit recorded in `test/fixtures/provider-wire.source.json` and
+verify them offline, byte for byte. Run it against a gateway at or after that
+revision, including its fulfillment-deadline and named lifecycle-refusal
+changes; upgrade an existing deployment as [Releasing](docs/releasing.md)
+describes.
 
 ## Register with Daski
 

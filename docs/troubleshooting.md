@@ -536,17 +536,38 @@ different message is refused as `action_conflict`: the buyer needs a new
 
 The order became terminal before frozen terminal results existed, recorded
 evidence contradicts its identity, or its deliverables have no canonical JSON
-form (a `noncanonical_terminal_result` security incident: an artifact key such
-as `constructor` or `prototype`, a broken surrogate pair in a message, or
-nesting deeper than 64 levels). The order still reached its terminal state;
-fix the service so it never emits such deliverables. List these rows with
+form (next section). List these rows with
 `GET /admin/standard-rail/terminal-results/unresolved` (bearer `ADMIN_TOKEN`);
-each carries a stable diagnostic. Obtain the terminal attestation the gateway
-retained for the order (or its statement that it retained none) through the
-gateway migration handoff and record it with
-`POST /admin/standard-rail/terminal-results/<taskId>/evidence`. Never insert a
-frozen row by hand or re-hash current events: the gateway rejects any
-terminal identity other than the one it stored first.
+each carries a stable diagnostic. For a row from an earlier release, obtain
+the terminal attestation the gateway retained for the order (or its
+statement that it retained none) through the gateway migration handoff and
+record it with `POST /admin/standard-rail/terminal-results/<taskId>/evidence`.
+Never insert a frozen row by hand or re-hash current events: the gateway
+rejects any terminal identity other than the one it stored first.
+
+### A terminal order with noncanonical deliverables stays unanswered
+
+A `noncanonical_terminal_result` security incident names an order whose
+service returned a deliverable with no canonical JSON form: an artifact key
+such as `__proto__`, `constructor` or `prototype`, a broken surrogate pair, or
+nesting deeper than 64 levels. The order still reached its terminal state, but
+no terminal identity could be frozen, so this provider never signed one and
+answers its status and artifact reads as retryably unavailable. That is
+deliberate, and there is no provider-side repair that would not invent
+evidence:
+
+1. Fix the service so it never returns such a deliverable, and add a
+   regression test with the offending shape.
+2. Do not edit the order's events, rewrite its deliverable or insert a frozen
+   row: any identity computed now would be signed as evidence the order never
+   had. Recording the gateway's no-identity statement with `kind: "unobserved"`
+   keeps the audit trail but cannot freeze it either; the row then shows
+   `legacy_projection_noncanonical`.
+3. Leave the order to the gateway's own fulfillment-deadline handling and
+   resolve the buyer's outcome through Daski support; recovery after a
+   provider-terminal paid order is not part of this release.
+
+The row stays listed as unresolved, and every other order stays serviceable.
 
 ### A paid task stays `working` with `standard_reconciliation_required`
 

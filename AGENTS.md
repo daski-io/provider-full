@@ -10,11 +10,16 @@ This is the full-featured generic Express + TypeScript starter for offering
 services through Daski. It receives discovery, quote, signed dispatch,
 lifecycle, wallet-action, and evidence calls over the standard Exact-EVM rail.
 
-Use this repository for dynamic quotes, durable jobs, later input/cancellation,
-assets/actions, human review, email/admin, direct A2A, protected-data workflows,
-or multi-replica recovery. When every operation is fixed-price, automated,
-one-shot, and terminal within 50 seconds, prefer the smaller
-`https://github.com/daski-io/provider` starter.
+Use this repository for dynamic pricing, provider-owned multi-step workflows,
+later input or cancellation, assets and owner actions, human or operator
+review, richer protected data, email/admin, direct A2A, or intentional
+multi-replica operation. Duration alone does not select it. When every
+operation is fixed-price and automated and either returns its result within
+the synchronous budget or is a product job that can be started safely, found
+again after a lost response and polled to a bounded report, prefer the
+smaller `https://github.com/daski-io/provider` starter (its external-job mode
+for the latter, in releases that include it). A job-based product can still
+be wrapped here beside richer services (`docs/existing-async-products.md`).
 
 The repositories are alternatives. The portable agent skill is maintained only
 in `daski-io/provider`; after selecting this full starter, this file and this
@@ -104,6 +109,14 @@ adding another large branch to an already-large module.
   idempotency keys, and fencing. Never use process-local money/task guards.
 - Journal intent before a non-convergent external mutation. Reconcile
   authoritative supplier state after ambiguity; never guess or blindly retry.
+- A funded order is an obligation. Never refuse its dispatch for paused sales
+  or capacity, never sign a failure for it on a guess: a fault before the
+  start that decides nothing leaves it resumable, an unknown outcome after
+  the start parks it for reconciliation, and only a definite refusal or
+  failure ends it.
+- A terminal identity is frozen with the first terminal transition and never
+  changes. Every dispatch, status and lifecycle answer is signed fresh with a
+  new operations observation; never cache or replay a signed answer.
 - Persist signed chain writes before broadcast and reconcile after restart.
 - Ownership comes from the wallet-authorized payer. Order ids, asset ids, and
   caller metadata are not credentials.

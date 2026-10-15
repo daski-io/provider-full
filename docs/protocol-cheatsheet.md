@@ -108,10 +108,11 @@ re-encoded copy of a signature can never become a second dispatch identity.
   least 60 s above the 30 s minimum payment window the gateway requires,
   strictly, at receipt.
 - Before signing, core validates the request schema and bounds, service
-  availability (sales paused stops quotes), open paid work for the listing
-  version against its capacity, the service `quote()`, a supplier-cost
-  ceiling if one is returned, and the optional read-only `requestReadiness`
-  hook. The quote is persisted with its payer, pricing mode, price, request,
+  availability (sales paused stops quotes), this process's new-sale admission
+  (the `admission` part of `/health/ready`), a fresh proof of the rail
+  contracts, open paid work for the listing version against its capacity, the
+  service `quote()`, a supplier-cost ceiling if one is returned, and the
+  optional read-only `requestReadiness` hook. The quote is persisted with its payer, pricing mode, price, request,
   listing and window before it is signed. A quote never starts or reserves
   product work.
 - `ProviderIntakeRequestV1` (payload without `payer`) returns the signed

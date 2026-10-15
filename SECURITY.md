@@ -116,9 +116,12 @@ target. Run `npm run doctor -- --stage=testnet` before requesting onboarding;
 the command is read-only and never grants admission or replaces Daski review.
 
 A production deployment requires HTTPS, verified database TLS, a distinct
-migration role, protected-data key management, trusted proxy configuration,
-edge rate limiting, current identity/catalog/rail checks, and monitored
-readiness. Each real service must add fail-closed mainnet checks for live
+migration role, protected-data key management, a declared ingress topology
+(trusted proxy hops and ranges, or the optional verified edge secret, never
+both treated as interchangeable proofs), edge rate limiting, current
+identity/catalog/rail checks, and monitored readiness: route on read
+serviceability, alert on stopped admission and degraded servicing, and watch
+the redacted `outbound.request_failed` reports. Each real service must add fail-closed mainnet checks for live
 supplier mode, credentials, custody, and governance relevant to that service.
 Base Mainnet provider admission is allowlisted. After completing Testnet
 evidence and the provider security checklist, request Mainnet whitelisting in

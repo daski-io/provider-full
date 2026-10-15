@@ -28,9 +28,11 @@ All notable changes to this project will be documented here.
   Testnet evidence, Mainnet allowlisting, configuration, and troubleshooting.
 - A loopback-only PostgreSQL 16 Compose service and a read-only, redacted
   `doctor` for local, Testnet, and Mainnet readiness diagnostics.
-- A harness-agnostic Agent Skill under `.agents/skills/` plus installation and
-  validation guidance for compatible coding agents.
-- Documentation, skill, and release-package validation gates.
+- Coding-agent guidance that links the single canonical Daski provider skill,
+  published and versioned only by `daski-io/provider`
+  (`.agents/skills/daski-provider/`), with its install and refresh command;
+  this repository keeps no copy of it.
+- Documentation and release-package validation gates.
 - `npm run daski:register -- --check-only`, a read-only registration
   forecast with read-only database sessions and gateway `GET` requests only.
 - `npm run security:prior-runtime`, run in CI, builds the prior release from

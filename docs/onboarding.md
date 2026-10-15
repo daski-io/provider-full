@@ -52,7 +52,9 @@ Send a concise, versioned packet before expecting signed configuration:
 5. fixed or dynamic pricing behavior in atomic USDC;
 6. exact request schema used by quote and execute;
 7. one-shot or durable fulfillment, dependencies, timing, cancellation, and
-   failure behavior;
+   failure behavior: normal and maximum runtime, the fulfillment duration each
+   skill declares (covering queueing, retries and result retrieval), how a
+   lost submission is found again, and how long results stay retrievable;
 8. provisioned asset types, identifiers, lifecycle, and ownership behavior;
 9. each proposed owner action, including destructive and replay
    classifications;
@@ -219,9 +221,12 @@ Through the Daski gateway, test at least:
 8. asset ownership lookup, when applicable;
 9. every owner action, including delayed destructive confirmation;
 10. cancellation before/after irreversible product boundaries;
-11. provider restart during an active job/mutation;
-12. ambiguous supplier/product response and authoritative reconciliation; and
-13. readiness failure/recovery for required product dependencies and workers.
+11. provider restart or redeployment during an active job/mutation;
+12. ambiguous supplier/product response and authoritative reconciliation;
+13. a long job that passes its fulfillment duration and still delivers late,
+    when the product can run that long; and
+14. admission stop and recovery (new quotes refused, reads still served) for
+    required product dependencies and workers.
 
 Keep Testnet identities, product accounts, and spend bounded. When upstream
 effects are real, retain the durable campaign binding and its non-sensitive
@@ -229,9 +234,11 @@ audit evidence. Reconcile an ambiguous payment or mutation before retrying.
 
 ### 11. Capture safe evidence
 
-Retain commit/image digest, public deployment revision, doctor check codes,
-request ids safe for support, on-chain public coordinates, and redacted test
-results. Do not retain or share `.env`, private keys, API tokens, customer
+Retain commit/image digest, the image's embedded source digest (`/health`),
+the gateway commit its vendored provider-wire fixtures name
+(`test/fixtures/provider-wire.source.json`) and the gateway revision it ran
+against, doctor check codes, request ids safe for support, on-chain public
+coordinates, and redacted test results. Do not retain or share `.env`, private keys, API tokens, customer
 payloads, signed authorization material, or raw supplier responses as release
 evidence.
 

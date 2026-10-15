@@ -247,6 +247,10 @@ authentication or a reviewed signing proxy as described in the security model.
 | `TRUSTED_REQUEST_COUNTRY_HEADER` | Optional edge-owned ISO alpha-2 country header name for screening context. Accepted only from a peer inside `TRUST_PROXY_CIDRS` or on an edge-verified request; the edge must replace, never forward, a client's value. |
 | `EDGE_RATE_LIMIT_VERIFIED` | Strict boolean evidence that production edge limiting is configured. Required on Mainnet. |
 | `PUSH_NOTIFICATION_ALLOW_HTTP` | Local-only escape hatch for HTTP destinations; forbidden in production and Mainnet. |
+| `HEALTH_READINESS_CACHE_MS` | How long one readiness verdict is reused (default 5,000 ms); a quote reuses the latest admission verdict for at most 30 s. |
+| `READINESS_CHAIN_MAX_AGE_SECONDS` | The newest chain block may be at most this old (default 180) before admission stops with `chain_stale`. |
+| `REGISTRATION_RECONCILE_MAX_AGE_SECONDS` | Freshness limit of the provider-identity and service-registration verifications (default 300); both refresh every three minutes (at 60% of a shorter limit), and a failed refresh revokes them at once. |
+| `WORKER_HEARTBEAT_MAX_AGE_SECONDS` | Default age (600) after which a required worker without a heartbeat is stale, degrading servicing and stopping new quotes. |
 
 Do not raise limits or broaden proxy/bypass ranges merely to clear readiness.
 Document the real ingress topology and verify the edge behavior.

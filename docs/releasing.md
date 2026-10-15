@@ -38,6 +38,22 @@ excluded test/docs/scripts boundary. Build the image with
 name the exact source; the embedded source digest is reproducible from the
 same checkout.
 
+## Compatible gateway revision
+
+The provider's wire contract is the gateway's. `test/fixtures/provider-wire/`
+vendors the gateway's canonical synthetic fixtures verbatim from the commit
+recorded in `test/fixtures/provider-wire.source.json`, with the sha256 of its
+manifest; the tests verify that parity offline and drive the real quote,
+intake, dispatch, status and lifecycle handlers through every vector. That
+gateway commit is the release's tested consumer contract: deploy against a
+gateway at or after it, with its fulfillment-deadline protection and named
+lifecycle refusals. Re-vendor only a fixture revision the gateway publishes,
+reviewed by both starters' maintainers, never by editing the files.
+
+Record with each release the package version, source commit, image digest,
+the image's embedded source digest (`/health`), its core migrations, and the
+fixture gateway commit and manifest sha256.
+
 ## Upgrading a deployment that holds orders
 
 A new build must serve every listing version and asset action its database
@@ -62,6 +78,12 @@ still owes before it takes traffic:
    needs it is retired with the gateway's receipt
    (`npm run daski:register -- --retire-listing`), and keep every key for as
    long as that version's orders can be read.
+
+Rotating the provider control profile is an upgrade too: keep the earlier
+profile's hash in `STANDARD_RAIL_RETAINED_CONTROL_PROFILE_HASHES` (the
+compatibility check names it while quotes issued under it may still be
+paid), and keep its audience and endpoints routable, since a delayed first
+dispatch carries the profile its checkout committed.
 
 The first upgrade from a release before migration 009 is a stop-and-drain
 cutover: pause sales, let synchronous dispatches finish, stop every old
