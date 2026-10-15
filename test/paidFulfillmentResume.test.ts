@@ -52,7 +52,8 @@ const { ProviderEvidenceVerifier } = await import("../src/core/standardRail/evid
 const { enqueueUnqueuedAdmissions, resumeAdmittedOrder, runPaidFulfillmentCycle } =
   await import("../src/core/standardRail/paidFulfillmentWorker.js");
 const { claimDurableJob, enqueueDurableJob } = await import("../src/core/db/queries/durableJobs.js");
-const { isInfrastructureFailure } = await import("../src/core/standardRail/dispatchExecution.js");
+const { isInfrastructureFailure } = await import("../src/core/standardRail/faultClassification.js");
+const { SupplierClientError } = await import("../src/core/suppliers/errorClassifier.js");
 const { createPreExecuteEscalation } = await import("../src/core/engine/escalationResolutionStore.js");
 const { computeRequestHash } = await import("../src/core/auth/requestHash.js");
 const { getServiceById } = await import("../src/core/db/queries/services.js");
@@ -204,6 +205,27 @@ describe("admitted paid work", () => {
     expect(isInfrastructureFailure(new Error("Standard managed asset was not found"))).toBe(false);
     expect(isInfrastructureFailure(Object.assign(new Error("invalid argument"), { code: "ERR_INVALID_ARG_TYPE" })))
       .toBe(false);
+  });
+
+  it("keeps an order resumable when the pre-start consult or a service hook meets a transient fault", async () => {
+    const orders: DispatchArgs[] = [];
+    for (const fault of [
+      new SupplierClientError("supplier temporarily unavailable", { supplier: "synthetic", status: 503 }),
+      Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNRESET" } }),
+      new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+    ]) {
+      const order = await paidOrder();
+      h.preExecute = async () => { throw fault; };
+      const answer = await postJson(`${rail.base}/dispatch`, order);
+      h.preExecute = null;
+      // Nothing was started and nothing was decided: no signed failure.
+      expect([answer.status, await answer.text()], fault.message).toEqual([503, ""]);
+      expect(await task(order), fault.message).toMatchObject({ status: "submitted", job_status: "retry" });
+      orders.push(order);
+    }
+    await database.pool.query("UPDATE durable_jobs SET available_at=now() WHERE queue='standard-paid-fulfillment'");
+    await runPaidFulfillmentCycle(config, false);
+    for (const order of orders) expect(await task(order)).toMatchObject({ status: "completed", job_status: "completed" });
   });
 
   it("never repeats a started call whose answer was lost: it parks the order for reconciliation", async () => {

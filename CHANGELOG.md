@@ -294,6 +294,13 @@ All notable changes to this project will be documented here.
   waiting for its reviewer. The review still wins the order's start fence in
   its own transaction, so an order another executor started is never
   escalated.
+- A transient fault before a funded order starts no longer fails it as never
+  started. A fetch or DNS failure, a timeout, an outbound circuit or
+  concurrency refusal, an HTTP 408, 429 or 5xx, a supplier's temporary,
+  ambiguous or credential condition, or an exhausted RPC failover, raised by
+  the asset lookup, a service hook or the pre-execute consult (or as a cause
+  of what they raise), leaves the order unstarted for its fulfillment job to
+  resume; only a definite refusal still fails it.
 
 ### Removed
 

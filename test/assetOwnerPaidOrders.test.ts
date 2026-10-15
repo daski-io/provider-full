@@ -172,6 +172,19 @@ describe("owner-only paid orders (F-T08)", () => {
     )).rows).toHaveLength(0);
   });
 
+  it("leaves an order unstarted, never failed, when its asset lookup meets a transient fault", async () => {
+    await harness.ownedNote(payerA, { identifier: "note-lookup-outage" });
+    const { taskId, run } = await paidOrder(payerA, "note-lookup-outage");
+    const fault = Object.assign(new TypeError("fetch failed"), { cause: { code: "EAI_AGAIN" } });
+    assetWire.assets = {
+      ...assetWire.assets,
+      assetIdentifierFromData: async () => { throw fault; },
+    };
+    await expect(run()).rejects.toBe(fault);
+    expect(executed).toBe(0);
+    expect(await order(taskId)).toMatchObject({ status: "submitted", asset_id: null, refused: null });
+  });
+
   it("leaves an order unstarted, never failed, when its owner admission reaches no decision", async () => {
     await harness.ownedNote(payerA, { identifier: "note-outage" });
     const { taskId, run } = await paidOrder(payerA, "note-outage");

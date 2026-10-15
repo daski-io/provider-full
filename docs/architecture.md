@@ -412,9 +412,13 @@ live lease and no buyer cancellation holds the order, so the service's
 as a stale or foreign asset owner, the admitted deadline passing) wins the
 same fence first, an escalation inside its own transaction, so an executor
 that lost the race or its lease never ends or escalates an order another
-one started. A database or connection failure (the database client's own
-query timeout included), or an asset owner check that reached no decision,
-before the call leaves the order resumable,
+one started. A fault before the call that decides nothing leaves the order
+resumable (`standardRail/faultClassification.ts`): a database or connection
+failure (the database client's own query timeout included), an asset owner
+check that reached no decision, and a transient, ambiguous or provider-side
+condition, timeout or outbound-boundary refusal met by the asset lookup, a
+service hook or the pre-execute consult. Only a definite refusal, such as a
+supplier's explicit rejection or a missing asset, fails it as never started,
 and the job's worker resumes it on any replica whose build can run the
 order's contract (a job names the executable definition it needs), waiting
 while the service declares an outage or a lifecycle action holds the order.

@@ -8,12 +8,12 @@ import { EscalationStartRefusedError } from "../engine/escalationResolutionStore
 import { consultPreExecuteAgent } from "../engine/preExecuteRunner.js";
 import { processAdapterResult } from "../engine/taskFinalization.js";
 import { getService } from "../serviceRegistry/registry.js";
-import { RetainedHandlerUnavailableError } from "../serviceRegistry/retainedHandlers.js";
 import type {
   AdapterResult, FulfillmentAdapter, PreExecuteDecision, SupplierCostCeiling,
 } from "../serviceRegistry/types.js";
 import { classifySupplierError } from "../suppliers/errorClassifier.js";
 import { canonicalHash } from "./canonical.js";
+import { isInfrastructureFailure, isUndecidedPreStartFault } from "./faultClassification.js";
 import { admitPaidTaskForAsset, checkPaidTaskOwner } from "./assetOwnerAdmission.js";
 import { AssetOwnerChangedError } from "./assetOwnerFence.js";
 import { ASSET_OWNER_CHANGED_RESULT } from "./assetOwnerOutcome.js";
@@ -75,38 +75,18 @@ async function ownerStep(step: () => Promise<unknown>): Promise<void> {
   }
 }
 
-/** SQLSTATEs of a database that could not answer: connection, rollback, resources, lock, operator, system. */
-const INFRASTRUCTURE_CODES = /^(?:08|25P03|40|53|55P03|57|58)/;
-/** System error codes (ECONNRESET, EAI_AGAIN, ...). */
-const SYSTEM_ERROR_CODE = /^E(?:AI_)?[A-Z]+$/;
-/** node-postgres's own errors, which carry no code: its query timeout fires before the server's. */
-const INFRASTRUCTURE_MESSAGES = new RegExp([
-  "connection terminated", "connection error", "timeout exceeded when trying to connect", "query read timeout",
-  "not queryable", "cannot use a pool after calling end", "ECONN", "ETIMEDOUT", "EPIPE",
-].join("|"), "i");
-
-/**
- * A database, connection or handler-resolution failure says nothing about
- * the service's answer. Before the service was called the order stays
- * resumable; after, it is ambiguous.
- */
-export function isInfrastructureFailure(error: unknown): boolean {
-  if (error instanceof RetainedHandlerUnavailableError) return true;
-  const code = (error as { code?: unknown } | null)?.code;
-  if (typeof code === "string" && (INFRASTRUCTURE_CODES.test(code) || SYSTEM_ERROR_CODE.test(code))) return true;
-  return error instanceof Error && INFRASTRUCTURE_MESSAGES.test(error.message);
-}
-
 /** `busy`: a buyer lifecycle action holds the order; its fulfillment job tries again later. */
 export type FulfillmentStep = "settled" | "busy";
 
 const step = (fence: "started" | "lost" | "busy"): FulfillmentStep => fence === "busy" ? "busy" : "settled";
 
 /**
- * Nothing was started. An infrastructure failure, or an owner step that
- * reached no decision, escapes and leaves the order for its fulfillment job
- * to resume; a definite failure, a stale or foreign owner included, fails it
- * as never started, unless another executor took the order meanwhile.
+ * Nothing was started. A fault that decides nothing (infrastructure, a
+ * transient or provider-side condition of the asset lookup, a service hook
+ * or the pre-execute consult, a timeout), or an owner step that reached no
+ * decision, escapes and leaves the order for its fulfillment job to resume;
+ * a definite failure, a stale or foreign owner included, fails it as never
+ * started, unless another executor took the order meanwhile.
  */
 async function refuseBeforeStart(error: unknown, args: {
   taskId: string;
@@ -114,7 +94,7 @@ async function refuseBeforeStart(error: unknown, args: {
   order: AdmittedOrder;
   lease: FulfillmentJobLease;
 }): Promise<FulfillmentStep> {
-  if (isInfrastructureFailure(error) || error instanceof OwnerStepUndecidedError) throw error;
+  if (isUndecidedPreStartFault(error) || error instanceof OwnerStepUndecidedError) throw error;
   return step(await refuseStart({ ...args, refusal: "pre_start_failure", cause: error }));
 }
 
