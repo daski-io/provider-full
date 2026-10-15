@@ -301,6 +301,10 @@ All notable changes to this project will be documented here.
   the asset lookup, a service hook or the pre-execute consult (or as a cause
   of what they raise), leaves the order unstarted for its fulfillment job to
   resume; only a definite refusal still fails it.
+- Buyer input to owner-only work whose owner changed during the service call
+  is answered with the order's settled `failed` state (`asset_owner_changed`,
+  deliverable withheld) and commits that outcome, as dispatch does, instead
+  of `503 lifecycle_unavailable` until the buyer retried.
 
 ### Removed
 

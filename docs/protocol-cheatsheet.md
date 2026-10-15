@@ -445,7 +445,9 @@ fence, re-admitted before buyer input or a reviewed execution resumes (input
 for an asset that changed owner is `409 unsupported_action`), and checked
 again immediately before the supplier call. A result whose admitted owner went
 stale ends the order `failed` with `asset_owner_changed` instead of persisting
-its deliverable.
+its deliverable; when that result answered a buyer input, the input's
+lifecycle call commits that failure as its outcome and answers the signed
+`failed` state at once, exactly as dispatch does.
 
 ## Payer signatures
 

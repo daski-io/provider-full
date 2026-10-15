@@ -2,7 +2,9 @@ import { randomBytes, randomUUID } from "node:crypto";
 import type { PrivateKeyAccount } from "viem/accounts";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AdapterResult } from "../src/core/serviceRegistry/types.js";
+import type { ProviderStandardRailConfig } from "../src/core/standardRail/config.js";
 import type { FulfillmentJobLease } from "../src/core/standardRail/fulfillmentJobs.js";
+import { SERVICE_SLUG } from "./standardRailFixture.js";
 
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 120_000 });
 vi.mock("../src/core/db/pool.js", async () => (await import("./assetActionHarness.js")).poolModule());
@@ -20,6 +22,9 @@ const { fulfillAdmittedDispatch } = await import("../src/core/standardRail/dispa
 const { insertAdmittedFulfillmentJob } = await import("../src/core/standardRail/fulfillmentJobs.js");
 const { getServiceById } = await import("../src/core/db/queries/services.js");
 const { getSkillByServiceAndSkillId } = await import("../src/core/db/queries/skills.js");
+const { applyLifecycleInput } = await import("../src/core/standardRail/lifecycleInput.js");
+const { encryptString } = await import("../src/core/chain/encryption.js");
+const { STANDARD_TASK_COLUMNS } = await import("../src/core/standardRail/lifecycleStore.js");
 
 // F-T08 for owner-only paid orders against PostgreSQL: dispatch links the
 // order to its asset under the asset owner fence only for the current
@@ -29,6 +34,7 @@ const { getSkillByServiceAndSkillId } = await import("../src/core/db/queries/ski
 let harness: Awaited<ReturnType<typeof startAssetHarness>>;
 let executed = 0;
 let onExecute: () => Promise<AdapterResult> = async () => receipt();
+let onInput: () => Promise<AdapterResult> = async () => ({ status: "working" });
 
 function receipt(): AdapterResult {
   return { status: "completed", message: "Done.", artifacts: [{ name: "note_receipt", data: { receipt: "renewed" } }] };
@@ -39,7 +45,7 @@ assetWire.adapter = {
     executed += 1;
     return onExecute();
   },
-  handleInput: async () => ({ status: "working" }),
+  handleInput: async () => onInput(),
   cancel: async () => undefined,
   quote: async () => ({ ok: true, amount: 1n, currency: "USDC" }),
 };
@@ -91,6 +97,7 @@ beforeEach(async () => {
   await harness.reset();
   executed = 0;
   onExecute = async () => receipt();
+  onInput = async () => ({ status: "working" });
   review.during = null;
   assetWire.beforeQuery = null;
   assetWire.assets = {
@@ -199,5 +206,60 @@ describe("owner-only paid orders (F-T08)", () => {
     expect(await order(taskId)).toMatchObject({
       status: "submitted", asset_id: null, admitted_owner: null, refused: null,
     });
+  });
+});
+
+// Buyer input to owner-only work whose owner changes during the service call
+// ends exactly as at dispatch: the deliverable is withheld, the order ends
+// failed with asset_owner_changed, and that settled failure is the input's
+// committed outcome, answered at once rather than as temporarily unavailable.
+describe("owner-only buyer input (F-T08)", () => {
+  const listing = `0x${"ab".repeat(32)}` as const;
+  const config = {
+    ...standard,
+    gatewayOrigin: "https://gateway.example",
+    outcomes: new Map([["touch-note", {
+      outcomeId: "touch-note", serviceSlug: SERVICE_SLUG, skillId: "touch-note", listingManifestHash: listing,
+      providerTerminalAttestationKey: payerB.address, dispatchDeadlineSeconds: 300,
+    }]]),
+  } as unknown as ProviderStandardRailConfig;
+
+  it("commits the withheld failure as the input's outcome when the owner changed during the call", async () => {
+    const note = await harness.ownedNote(payerA, { identifier: "note-input-raced" });
+    const { taskId, run } = await paidOrder(payerA, "note-input-raced");
+    onExecute = async () => ({ status: "input-required", message: "Which wording should the receipt use?" });
+    await run();
+    expect(await order(taskId)).toMatchObject({ status: "input-required", admitted_owner_version: 0 });
+    const committed = encryptString(JSON.stringify({ note: "note-input-raced" }), {
+      purpose: "standard-order-request", table: "transactions", recordId: taskId,
+      field: "metadata.standard_request_encrypted", recordVersion: 1,
+    });
+    await harness.database.pool.query(
+      `UPDATE transactions SET standard_listing_manifest_hash=$2,
+         metadata=metadata || jsonb_build_object('standard_request_encrypted',$3::text) WHERE id=$1`,
+      [taskId, Buffer.from(listing.slice(2), "hex"), committed],
+    );
+    const task = (await harness.database.pool.query(
+      `SELECT ${STANDARD_TASK_COLUMNS} FROM transactions WHERE id=$1`, [taskId],
+    )).rows[0];
+    onInput = async () => {
+      await harness.changeOwner(note, payerB, 1);
+      return receipt();
+    };
+    await expect(applyLifecycleInput(config, task, {
+      orderId: task.standard_order_id, providerTaskId: taskId, action: "input",
+      request: { inputText: "Use the plain wording.", data: { note: "note-input-raced" } },
+      payer: payerA.address, authorization: { form: "payer-signed", nonce: `0x${"01".repeat(32)}` },
+    }, async () => "input-required")).resolves.toBeUndefined();
+    expect(await order(taskId)).toMatchObject({ status: "failed", admitted_owner_version: 0 });
+    expect((await harness.database.pool.query(
+      "SELECT state,outcome_state FROM standard_lifecycle_actions WHERE transaction_id=$1", [taskId],
+    )).rows).toEqual([{ state: "committed", outcome_state: "failed" }]);
+    expect((await harness.database.pool.query(
+      "SELECT 1 FROM events WHERE transaction_id=$1 AND type='transaction.artifact.created'", [taskId],
+    )).rows).toHaveLength(0);
+    expect((await harness.database.pool.query(
+      "SELECT state FROM standard_terminal_results WHERE transaction_id=$1", [taskId],
+    )).rows).toEqual([{ state: "failed" }]);
   });
 });
