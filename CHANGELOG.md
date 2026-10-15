@@ -6,6 +6,12 @@ All notable changes to this project will be documented here.
 
 ### Added
 
+- [Wrapping a product that returns a job id](docs/existing-async-products.md):
+  a journaled, reconcilable submission, a durable lease-based poll worker,
+  readiness and wait supervision, the pending, overdue and failed
+  distinction, and the tests such a service keeps, using the runtime's
+  existing jobs and supplier journal; polling-only fixed-price products are
+  pointed to the smaller starter's external-job mode.
 - `npm run compatibility:check` (`node dist/checkCompatibility.js` in the
   image), a read-only report comparing the build's compiled capability
   manifest and provider keys with every listing version and asset action the

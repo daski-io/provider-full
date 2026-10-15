@@ -46,6 +46,7 @@ admission. A service adapter never decides whether a payment is valid.
 | See a service run without configuration | [Offline five-minute tour](#offline-five-minute-tour) |
 | Install and reach a deterministic local setup | [Getting started](docs/getting-started.md) |
 | Adapt an existing API or MCP product | [Integrating an existing product](docs/integrating-existing-product.md) |
+| Wrap a product that returns a job id | [Existing asynchronous products](docs/existing-async-products.md) |
 | Build the `ServiceModule` | [Adding a service](docs/adding-a-service.md) |
 | Understand environment variables | [Configuration](docs/configuration.md) |
 | Prepare for Daski Testnet or Mainnet | [Onboarding](docs/onboarding.md) |
@@ -221,6 +222,7 @@ against Mainnet without the coordinated, whitelisted release procedure.
 
 - [Getting started](docs/getting-started.md)
 - [Integrating an existing API or MCP product](docs/integrating-existing-product.md)
+- [Wrapping a product that returns a job id](docs/existing-async-products.md)
 - [Configuration](docs/configuration.md)
 - [Adding a service](docs/adding-a-service.md)
 - [Service and skill authoring](docs/daski-skill-creation-best-practices.md)

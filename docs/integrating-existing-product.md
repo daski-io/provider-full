@@ -256,7 +256,10 @@ When the product returns a job id:
 6. park ambiguous or dead-letter states for review rather than losing them.
 
 Do not keep a product job id only in memory. A provider restart must resume the
-same job without repeating the original mutation.
+same job without repeating the original mutation. The complete pattern, with
+the journaled submission, the durable poll worker, readiness and wait
+supervision, and the tests it needs, is in
+[Wrapping a product that returns a job id](existing-async-products.md).
 
 ### Webhook completion
 

@@ -159,6 +159,7 @@ Start at `README.md`, then use:
 
 - `docs/getting-started.md`
 - `docs/integrating-existing-product.md`
+- `docs/existing-async-products.md`
 - `docs/adding-a-service.md`
 - `docs/configuration.md`
 - `docs/onboarding.md`

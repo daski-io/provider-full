@@ -566,7 +566,9 @@ supervised only while the hook returns it and that worker's heartbeat is
 healthy, so a dead poller is flagged like any stall; there is no way to
 declare a service merely slow. Supervision never pauses the order's
 admitted fulfillment duration: past it the order is marked overdue
-(`overdue_standard_task`) and stays open for a late result.
+(`overdue_standard_task`) and stays open for a late result. For a product
+that returns a job id, follow
+[Wrapping a product that returns a job id](existing-async-products.md).
 
 ## 10. Assemble the module
 
