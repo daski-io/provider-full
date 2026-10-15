@@ -200,9 +200,11 @@ No route or middleware turns a possibly-admitted dispatch into a JSON error.
   readiness invariants fail a fresh dispatch is refused before admission with
   `service_unavailable`; the gateway retries it with a new envelope rather
   than the provider signing a failure during the outage.
-- Once admitted, a definite service failure becomes a signed terminal
-  failure, but an ambiguous supplier outcome, or a timeout, abort or
-  infrastructure failure during the service's call, leaves the task
+- Once the service was called, only its own failed result, a supplier's
+  typed rejection (`SupplierClientError` classified `supplier_rejected`) or
+  the admitted cost ceiling's refusal becomes a signed terminal failure. Any other exception from the call (an
+  ambiguous supplier outcome, a timeout, abort or infrastructure failure, or
+  an unrecognized error such as an unparseable response) leaves the task
   `working` and flagged `standard_reconciliation_required` (with an
   `ambiguous_supplier_outcome` incident). If persisting the service's own
   answer fails, the answer is never rewritten as a failure; the dispatch is

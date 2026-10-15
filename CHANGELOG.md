@@ -344,6 +344,14 @@ All notable changes to this project will be documented here.
 
 ### Fixed
 
+- A paid order whose `execute` throws after the service was called is signed
+  failed only on proof: the service's own failed result, a supplier's typed
+  rejection (`SupplierClientError` classified `supplier_rejected`) or the
+  admitted cost ceiling's refusal (`SupplierCostCeilingError`). Any other
+  exception, an unrecognized one included (a response that could not be
+  parsed after a supplier operation succeeded, a supplier 5xx, a credential
+  or authorization refusal), leaves the order `working` and flagged for
+  reconciliation, so a late result can still be delivered.
 - The provider-write reconciler stays ready while another replica's live
   session holds its cycle lease, reports a lease stuck for five minutes, and
   jitters its schedule so replicas cannot phase-lock.

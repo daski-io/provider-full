@@ -240,6 +240,16 @@ but within the order's admitted fulfillment duration; once the call has
 started it is never made again. Return `working` for work that continues in
 your own durable jobs.
 
+Report a definite business failure by returning
+`{ status: "failed", error: "<reviewed code>", message: "<reviewed text>" }`,
+never by throwing. Once the call started, core signs a failure only for that
+result, a supplier's typed rejection (`SupplierClientError` classified
+`supplier_rejected`) or the admitted ceiling's `SupplierCostCeilingError`.
+Anything else `execute` throws, an unrecognized error included, may follow a
+supplier call that acted (for example, a response that fails to parse after
+the operation succeeded), so the order stays `working` and is flagged for
+reconciliation instead of failing.
+
 Dispatch from the adapter by exact skill id:
 
 ```typescript

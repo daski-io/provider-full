@@ -126,7 +126,10 @@ export async function createReport(
 The example origin is intentionally non-routable; replace it with the one
 reviewed product origin. Validate the response with a closed schema before it
 affects state, pricing, artifacts, or logs. Do not surface upstream response
-text as a public error.
+text as a public error. Have `classifyProductFailure` return a
+`SupplierClientError` with the reply's status (or a reviewed `category`):
+after a paid order started, core treats only such a typed rejection as proof
+that it failed.
 
 `boundedFetch` keeps an error reply's HTTP status even when its body is empty
 or HTML (content-type admission applies to successful bodies), throws
@@ -138,7 +141,8 @@ deadline (`AbortSignal.timeout`), which counts against the origin like the
 helper's timeout. An abort only stops waiting: it never proves the product
 did not act, so a mutating call reconciles instead of retrying blindly, and
 a timeout or abort that escapes `execute` parks the paid order for
-reconciliation rather than failing it. A failed DNS lookup keeps the
+reconciliation rather than failing it, as does any other exception except a
+supplier's typed rejection. A failed DNS lookup keeps the
 resolver's error as its `cause`. Every failure is reported to the provider
 log and the admin Platform Log as `outbound.request_failed` with only its
 class, templated operation (plain lowercase words and versions of the path

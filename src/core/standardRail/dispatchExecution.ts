@@ -12,7 +12,7 @@ import type {
   AdapterResult, FulfillmentAdapter, PreExecuteDecision, SupplierCostCeiling,
 } from "../serviceRegistry/types.js";
 import { canonicalHash } from "./canonical.js";
-import { isAmbiguousAfterStart, isUndecidedPreStartFault } from "./faultClassification.js";
+import { isDefiniteFailureAfterStart, isUndecidedPreStartFault } from "./faultClassification.js";
 import { admitPaidTaskForAsset, checkPaidTaskOwner } from "./assetOwnerAdmission.js";
 import { AssetOwnerChangedError } from "./assetOwnerFence.js";
 import { ASSET_OWNER_CHANGED_RESULT } from "./assetOwnerOutcome.js";
@@ -108,11 +108,13 @@ async function refuseBeforeStart(error: unknown, args: {
 
 /**
  * Fulfil an admitted paid order under its fulfillment-job lease. A definite
- * service failure before or during execution becomes a recorded terminal
- * failure; an ambiguous supplier outcome, or a timeout or abort during
- * execution, stays nonterminal for reconciliation. A database or connection
- * failure before the service was called escapes and leaves the order
- * resumable by its fulfillment job; after the call it is ambiguous. Every
+ * failure before the service is called fails the order as never started.
+ * Once it was called, only the service's explicit failed result, a
+ * supplier's typed rejection or the admitted cost ceiling's refusal ends the
+ * order failed; any other exception leaves its outcome unknown and the order
+ * nonterminal for reconciliation.
+ * A database or connection failure before the service was called escapes
+ * and leaves the order resumable by its fulfillment job. Every
  * decision that ends or starts the order first wins its start fence
  * (orderStart.ts); an executor that loses it returns without acting, and a
  * pre-execute escalation wins it in the escalation's own transaction.
@@ -212,12 +214,15 @@ export async function fulfillAdmittedDispatch(args: {
       asset ?? undefined,
     );
   } catch (error) {
-    // A timeout, an abort or an infrastructure failure after the start may
+    // Only a supplier's typed rejection, or the admitted cost ceiling's
+    // refusal, proves the started call failed. Any other exception, an
+    // unrecognized one included (a timeout, an abort, an infrastructure
+    // failure, an error mapping an answer the supplier already gave), may
     // have followed a call that acted: unknown, never a signed failure.
-    if (isAmbiguousAfterStart(error)) {
-      await parkForReconciliation(taskId, order);
-    } else {
+    if (isDefiniteFailureAfterStart(error)) {
       await failAdmittedTask(taskId, service.id, order, error);
+    } else {
+      await parkForReconciliation(taskId, order);
     }
     return "settled";
   }

@@ -1,4 +1,5 @@
 import { RetainedHandlerUnavailableError } from "../serviceRegistry/retainedHandlers.js";
+import { SupplierCostCeilingError } from "../serviceRegistry/supplierCostCeiling.js";
 import { classifySupplierError } from "../suppliers/errorClassifier.js";
 
 /*
@@ -9,8 +10,12 @@ import { classifySupplierError } from "../suppliers/errorClassifier.js";
  * refusal, a supplier's temporary, ambiguous or provider-side condition),
  * so it never becomes a signed failure of a funded order: the order stays
  * unstarted for its fulfillment job to resume, and only a definite refusal
- * fails it as never started. After the start, a call that stopped waiting
- * for its answer may still have acted, so it is ambiguous, never a failure.
+ * fails it as never started. After the start, only affirmative evidence
+ * fails the order: a supplier's typed rejection, or the admitted cost
+ * ceiling's refusal of the spend. Any other failure, an unrecognized one
+ * included, may have followed a call that acted (a parsing or mapping error
+ * can follow a supplier operation that succeeded), so its outcome is
+ * unknown, never a failure.
  */
 
 /** SQLSTATEs of a database that could not answer: connection, rollback, resources, lock, operator, system. */
@@ -37,10 +42,6 @@ const TRANSIENT_MESSAGES = new RegExp([
 /** A certificate or TLS handshake the remote or this host's trust store could not complete: provider-side. */
 const TLS_ERROR_CODE =
   /^(?:ERR_TLS_|ERR_SSL_|CERT_|UNABLE_TO_(?:GET|VERIFY|DECRYPT)_|DEPTH_ZERO_SELF_SIGNED_CERT$|SELF_SIGNED_CERT_IN_CHAIN$|HOSTNAME_MISMATCH$)/;
-/** A call that stopped waiting for its answer (a timeout or an abort), by name. */
-const UNANSWERED_NAMES = new Set(["AbortError", "TimeoutError", "OutboundAbortedError"]);
-/** The same by message, for timeouts that carry no distinguishing name. */
-const UNANSWERED_MESSAGES = /timed out|\btimeout\b/i;
 /** How deep a cause chain is followed. */
 const MAX_CAUSE_DEPTH = 4;
 
@@ -104,23 +105,42 @@ export function isUndecidedPreStartFault(error: unknown): boolean {
   return somewhereIn(error, undecidedBeforeStart);
 }
 
-function ambiguousAfterStart(record: ErrorRecord): boolean | null {
-  if (isInfrastructureFailure(record)) return true;
-  // Otherwise a supplier client's own classification of its error decides it.
+/**
+ * A supplier's typed rejection proves the call failed, as does the admitted
+ * cost ceiling's refusal: it stopped the spend before the call, and the
+ * ceiling never changes. Infrastructure or any other supplier condition
+ * does not.
+ */
+function rejectionVerdict(record: ErrorRecord): boolean | null {
+  if (isInfrastructureFailure(record)) return false;
+  if (record instanceof SupplierCostCeilingError) return true;
   const kind = classifySupplierError(record)?.kind;
-  if (kind) return kind === "ambiguous";
-  if (typeof record.name === "string" && UNANSWERED_NAMES.has(record.name)) return true;
-  if (typeof record.message === "string" && UNANSWERED_MESSAGES.test(record.message)) return true;
-  return null;
+  return kind ? kind === "supplier_rejected" : null;
+}
+
+function provesRejection(error: unknown, depth: number): boolean {
+  if (!error || typeof error !== "object" || depth > MAX_CAUSE_DEPTH) return false;
+  const record = error as ErrorRecord;
+  const verdict = rejectionVerdict(record);
+  if (verdict !== null) return verdict;
+  if (Array.isArray(record.errors) && record.errors.length > 0) {
+    return record.errors.every((inner) => provesRejection(inner, depth + 1));
+  }
+  return provesRejection(record.cause, depth + 1);
 }
 
 /**
- * A failure of a started order whose outcome is unknown: a supplier's
- * ambiguous outcome, an infrastructure failure, or a call that stopped
- * waiting for its answer (a timeout or an abort) after it may have reached
- * the supplier, raised directly or as a cause. Such an order is parked for
- * reconciliation; only any other failure is signed as definite.
+ * Whether a failure of a started order proves that it failed: a supplier's
+ * typed, explicit rejection (a `SupplierClientError` classified
+ * `supplier_rejected`) or the admitted ceiling's `SupplierCostCeilingError`,
+ * raised directly, as its bounded cause, or as every one of its aggregated
+ * errors. Anything else leaves the outcome unknown: a supplier's ambiguous,
+ * temporary or provider-side condition (an authorization refusal an
+ * operator can still resolve), a timeout or an abort, an infrastructure
+ * failure, and any unrecognized exception, such as a parsing or mapping
+ * error after a supplier operation that succeeded. Such an order is parked
+ * for reconciliation; only a proven failure is signed.
  */
-export function isAmbiguousAfterStart(error: unknown): boolean {
-  return somewhereIn(error, ambiguousAfterStart);
+export function isDefiniteFailureAfterStart(error: unknown): boolean {
+  return provesRejection(error, 0);
 }

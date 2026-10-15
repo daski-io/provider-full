@@ -76,7 +76,8 @@ const CATEGORY_KINDS: Readonly<Record<SupplierErrorCategory, SupplierFailureKind
 
 /**
  * Classifies only errors carrying a trusted supplier-client contract.
- * Returning null preserves the existing terminal treatment for unknown errors.
+ * Returning null leaves an unknown error to its caller's policy; after a
+ * paid order started, an unknown error never proves it failed.
  */
 export function classifySupplierError(
   error: unknown,

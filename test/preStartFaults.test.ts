@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { RetainedHandlerUnavailableError } from "../src/core/serviceRegistry/retainedHandlers.js";
 import { AssetOwnerChangedError } from "../src/core/standardRail/assetOwnerFence.js";
 import { OutboundAbortedError } from "../src/core/security/outboundHttp.js";
-import { isAmbiguousAfterStart, isUndecidedPreStartFault } from "../src/core/standardRail/faultClassification.js";
+import { SupplierCostCeilingError } from "../src/core/serviceRegistry/supplierCostCeiling.js";
+import { isDefiniteFailureAfterStart, isUndecidedPreStartFault } from "../src/core/standardRail/faultClassification.js";
 import {
   SupplierClientError,
   SupplierMutationAuthorizationError,
@@ -72,11 +73,12 @@ describe("pre-start fault classification", () => {
   });
 });
 
-// After the start, a failure is signed only when it is definite: a call
-// that stopped waiting for its answer may have reached the supplier, which
-// may have acted, so its order is parked for reconciliation instead.
+// After the start, a failure is signed only on affirmative evidence, a
+// supplier's typed rejection or the admitted cost ceiling's refusal:
+// anything else may have followed a call the supplier received and acted
+// on, so its order is parked for reconciliation.
 describe("post-start fault classification", () => {
-  it("treats timeouts, aborts, infrastructure and ambiguous outcomes as unknown", () => {
+  it("treats every failure without affirmative evidence as unknown", () => {
     for (const fault of [
       new SupplierOutcomeAmbiguousError("unknown"),
       new SupplierClientError("conflict", { supplier: "synthetic", category: "conflict" }),
@@ -93,25 +95,42 @@ describe("post-start fault classification", () => {
       new Error("report job failed", { cause: new SupplierOutcomeAmbiguousError("unknown") }),
       new Error("report job failed", { cause: named("TimeoutError") }),
       new AggregateError([new Error("primary"), named("TimeoutError")], "every attempt failed"),
-    ]) expect(isAmbiguousAfterStart(fault), String((fault as Error).message)).toBe(true);
-  });
-
-  it("keeps definite failures, and a supplier client's own classification, definite", () => {
-    for (const failure of [
+      // Unrecognized exceptions: a decoder or mapper can fail after the supplier acted.
+      new SyntaxError("Unexpected token < while parsing the supplier response"),
+      new TypeError("Cannot read properties of undefined (reading 'reportId')"),
       new Error("The widget is not offered"),
-      new SupplierClientError("rejected", { supplier: "synthetic", status: 422 }),
+      Object.assign(new Error("not found"), { status: 404 }),
+      // A supplier's temporary or provider-side condition is no business failure.
       new SupplierClientError("unavailable", { supplier: "synthetic", status: 503 }),
       new SupplierClientError("credentials", { supplier: "synthetic", status: 401 }),
-      // The supplier client classified a timeout it met as transient: its classification decides.
       new SupplierClientError("transport", { supplier: "synthetic", category: "transport", cause: named("TimeoutError") }),
+      new SupplierMutationAuthorizationError("synthetic", "not authorized"),
+      // One rejection among unknown failures proves nothing about the others.
+      new AggregateError([
+        new SupplierClientError("rejected", { supplier: "synthetic", status: 422 }), new Error("unknown"),
+      ], "every attempt failed"),
+      new Error("mapped", { cause: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }) }),
+    ]) expect(isDefiniteFailureAfterStart(fault), String((fault as Error).message)).toBe(false);
+  });
+
+  it("signs a typed rejection or a ceiling refusal, directly, as a cause or as every aggregated error", () => {
+    for (const failure of [
+      new SupplierClientError("rejected", { supplier: "synthetic", status: 422 }),
+      new SupplierCostCeilingError("synthetic", "ceiling_exceeded"),
+      new SupplierCostCeilingError("synthetic", "ceiling_missing"),
+      new SupplierClientError("rejected", { supplier: "synthetic", category: "validation" }),
+      new SupplierClientError("rejected", { supplier: "synthetic", category: "rejected" }),
       new Error("wrapped", { cause: new SupplierClientError("rejected", { supplier: "synthetic", category: "validation" }) }),
-      Object.assign(new Error("not found"), { status: 404 }),
-    ]) expect(isAmbiguousAfterStart(failure), failure.message).toBe(false);
+      new AggregateError([
+        new SupplierClientError("rejected", { supplier: "synthetic", status: 400 }),
+        new SupplierClientError("rejected", { supplier: "synthetic", category: "rejected" }),
+      ], "every attempt was refused"),
+    ]) expect(isDefiniteFailureAfterStart(failure), failure.message).toBe(true);
   });
 
   it("follows a bounded cause chain only", () => {
-    let fault: Error = named("TimeoutError");
+    let fault: Error = new SupplierClientError("rejected", { supplier: "synthetic", status: 422 });
     for (let depth = 0; depth < 8; depth += 1) fault = new Error(`layer ${depth}`, { cause: fault });
-    expect(isAmbiguousAfterStart(fault)).toBe(false);
+    expect(isDefiniteFailureAfterStart(fault)).toBe(false);
   });
 });

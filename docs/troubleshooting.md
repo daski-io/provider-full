@@ -583,11 +583,14 @@ The row stays listed as unresolved, and every other order stays serviceable.
 
 ### A paid task stays `working` with `standard_reconciliation_required`
 
-The service's supplier call ended ambiguously (an ambiguous supplier
-outcome, a timeout or abort, or an infrastructure failure during `execute`),
-or the process died during the call and the paid-fulfillment worker found no
-persisted answer. The provider deliberately did not sign a failure: the
-supplier may have acted.
+The service's `execute` threw without proving the order failed (an
+ambiguous supplier outcome, a timeout or abort, an infrastructure failure, a
+supplier's temporary or provider-side refusal, or an unrecognized error such
+as a response that could not be parsed), or the process died during the call
+and the paid-fulfillment worker found no persisted answer. The provider
+deliberately did not sign a failure: the supplier may have acted. Only the
+service's own failed result, a supplier's typed rejection or the admitted
+cost ceiling's refusal fails a started order.
 Reconcile authoritative supplier state through the service's journal
 (`supplier_operations`) before completing or failing the task; never repeat
 the purchase blindly.

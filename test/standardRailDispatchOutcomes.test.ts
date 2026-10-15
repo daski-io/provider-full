@@ -34,6 +34,8 @@ const h = vi.hoisted(() => ({
   failClaimStateUpdate: false,
   result: { status: "completed" } as AdapterResult,
   executeError: null as Error | null,
+  /** Replaces the adapter's execute when set. */
+  executeImpl: null as ((skillId: string, task: { id: string; service_id: string }) => Promise<AdapterResult>) | null,
   module: null as unknown,
   executions: 0,
 }));
@@ -56,8 +58,9 @@ vi.mock("../src/core/db/pool.js", () => ({
 }));
 vi.mock("../src/core/serviceRegistry/registry.js", () => ({
   getAdapter: () => ({
-    execute: async () => {
+    execute: async (skillId: string, task: { id: string; service_id: string }) => {
       h.executions += 1;
+      if (h.executeImpl) return h.executeImpl(skillId, task);
       if (h.executeError) throw h.executeError;
       return h.result;
     },
@@ -89,6 +92,8 @@ const { StandardQuoteService } = await import("../src/core/standardRail/quote.js
 const { ProviderEvidenceVerifier } = await import("../src/core/standardRail/evidence.js");
 const { mountProtocolRoutes } = await import("../src/core/standardRail/protocolRoutes.js");
 const { SupplierClientError, SupplierOutcomeAmbiguousError } = await import("../src/core/suppliers/errorClassifier.js");
+const { runSupplierOperation } = await import("../src/core/suppliers/operationJournal.js");
+const { processAdapterResult } = await import("../src/core/engine/taskFinalization.js");
 const { OutboundAbortedError } = await import("../src/core/security/outboundHttp.js");
 
 const config = fixtureConfig();
@@ -124,6 +129,7 @@ beforeEach(() => {
   h.failClaimStateUpdate = false;
   h.result = { status: "completed" };
   h.executeError = null;
+  h.executeImpl = null;
   h.module = null;
   h.executions = 0;
   vi.spyOn(ProviderEvidenceVerifier.prototype, "verify").mockImplementation(async () => {
@@ -138,6 +144,14 @@ afterEach(() => {
 });
 
 const dispatchOrder = (order: DispatchArgs) => postJson(`${rail.base}/dispatch`, order);
+
+/** Reconciliation proved the supplier finished: a parked order still completes, late. */
+async function completeParked(order: DispatchArgs): Promise<void> {
+  const row = (await database.pool.query(
+    "SELECT id,service_id FROM transactions WHERE standard_order_id=$1", [order.dispatch.payload.orderId],
+  )).rows[0];
+  expect((await processAdapterResult(row.id, { status: "completed" }, row.service_id)).status).toBe("completed");
+}
 const queryStatus = async (order: DispatchArgs, options?: Parameters<typeof statusQuery>[1]) =>
   postJson(`${rail.base}/dispatch/status`, { query: await statusQuery(order, options) });
 
@@ -380,7 +394,7 @@ describe("admitted paid work is never answered with a guessed failure", () => {
     expect(incidents.rows[0].n).toBe(1);
   });
 
-  it("parks a started call that timed out or was aborted, and signs only a definite failure", async () => {
+  it("parks a started call without affirmative evidence of failure, and signs only a proven one", async () => {
     const reconciliation = async (order: DispatchArgs) => (await database.pool.query(
       "SELECT status,metadata FROM transactions WHERE standard_order_id=$1", [order.dispatch.payload.orderId],
     )).rows[0];
@@ -394,27 +408,68 @@ describe("admitted paid work is never answered with a guessed failure", () => {
         cause: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }),
       }),
       new Error("report job failed", { cause: new DOMException("The operation timed out.", "TimeoutError") }),
+      // Unrecognized: a decoder or mapper can fail after the supplier acted.
+      new SyntaxError("Unexpected token < while parsing the supplier response"),
+      new Error("The widget is not offered"),
+      new SupplierClientError("unavailable", { supplier: "synthetic", status: 503 }),
     ]) {
       const order = await paidOrder();
       h.executeError = fault;
       const response = await dispatchOrder(order);
       const accepted = await acceptDispatchResponse(await readGatewayJson(response), expectation(canonicalHash(order.dispatch)));
       expect(accepted.body.state, fault.message).toBe("working");
+      expect(accepted.evidence, fault.message).toBeNull();
       expect(await reconciliation(order), fault.message).toMatchObject({
         status: "working", metadata: expect.objectContaining({ standard_reconciliation_required: true }),
       });
+      await completeParked(order);
     }
-    for (const fault of [
-      new Error("The widget is not offered"),
-      new SupplierClientError("rejected", { supplier: "synthetic", status: 422 }),
-    ]) {
+    h.executeError = null;
+    // A supplier's typed rejection, and the service's own failed result, are proof.
+    for (const [label, failure] of [
+      ["typed rejection", () => {
+        h.executeError = new SupplierClientError("rejected", { supplier: "synthetic", status: 422 });
+      }],
+      ["failed result", () => {
+        h.executeError = null;
+        h.result = { status: "failed", error: "widget_not_offered", message: "The widget is not offered." };
+      }],
+    ] as const) {
       const order = await paidOrder();
-      h.executeError = fault;
+      failure();
       const response = await dispatchOrder(order);
       const failed = await acceptDispatchResponse(await readGatewayJson(response), expectation(canonicalHash(order.dispatch)));
-      expect(failed.body.state, fault.message).toBe("failed");
-      expect((await reconciliation(order)).metadata.standard_reconciliation_required, fault.message).toBeUndefined();
+      expect(failed.body.state, label).toBe("failed");
+      expect(failed.evidence, label).not.toBeNull();
+      expect((await reconciliation(order)).metadata.standard_reconciliation_required, label).toBeUndefined();
     }
+  });
+
+  it("parks an order whose supplier operation succeeded but whose answer could not be read", async () => {
+    const order = await paidOrder();
+    h.executeImpl = async (_skillId, task) => {
+      const answer = await runSupplierOperation({
+        serviceId: task.service_id, transactionId: task.id, opKey: `report:${task.id}`, kind: "synthetic.report",
+        execute: async () => ({ body: "<html>Report accepted</html>" }),
+        reconcile: async () => null,
+      });
+      return JSON.parse(String(answer.body)) as AdapterResult;
+    };
+    const response = await dispatchOrder(order);
+    const accepted = await acceptDispatchResponse(await readGatewayJson(response), expectation(canonicalHash(order.dispatch)));
+    expect(accepted.body.state).toBe("working");
+    expect(accepted.evidence).toBeNull();
+    const task = (await database.pool.query(
+      "SELECT id,status,metadata FROM transactions WHERE standard_order_id=$1", [order.dispatch.payload.orderId],
+    )).rows[0];
+    expect(task).toMatchObject({
+      status: "working", metadata: expect.objectContaining({ standard_reconciliation_required: true }),
+    });
+    const operations = await database.pool.query(
+      "SELECT state FROM supplier_operations WHERE transaction_id=$1", [task.id],
+    );
+    expect(operations.rows).toEqual([{ state: "confirmed" }]);
+    await completeParked(order);
   });
 
   it("does not rewrite the service's answer when persisting it fails", async () => {
