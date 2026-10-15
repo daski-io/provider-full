@@ -90,6 +90,9 @@ jobs:
             'test ! -e /app/test && test ! -e /app/docs && test ! -e /app/scripts && test ! -e /app/.env'
           docker run --rm --entrypoint sh daski-provider-full:ci -c \
             '! grep -R -E "PaymentRouter|PAYMENT_ROUTER_ADDRESS|daski-exact" /app/dist | grep -v "^/app/dist/core/db/migrations/"'
+          # The tested artifact names its own source, without hosting metadata.
+          docker run --rm --entrypoint sh daski-provider-full:ci -c \
+            "grep -q -F '\"sourceCommit\":\"${{ github.sha }}\"' /app/dist/build-identity.json && grep -q -F '\"sourceDigest\":\"sha256:' /app/dist/build-identity.json"
 
   windows-tooling:
     name: Windows tooling
