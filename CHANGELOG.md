@@ -305,6 +305,14 @@ All notable changes to this project will be documented here.
   is answered with the order's settled `failed` state (`asset_owner_changed`,
   deliverable withheld) and commits that outcome, as dispatch does, instead
   of `503 lifecycle_unavailable` until the buyer retried.
+- A timely-paid order sold before a provider control-profile rotation and
+  first dispatched after it is no longer refused as `outcome_policy`: its
+  dispatch carries the profile its checkout committed, which is admitted
+  while `STANDARD_RAIL_RETAINED_CONTROL_PROFILE_HASHES` keeps it. Each
+  readiness quote records the profile it was issued under (core migration
+  015), and the compatibility check, its readiness gate and the registration
+  run report a `control_profile` gap for an unretired version whose quotes
+  name a profile the deployment no longer accepts.
 - Asset delivery admissions no longer accumulate forever: the retention
   worker removes finished or revoked ones after `DURABLE_JOB_RETENTION_DAYS`,
   never one left open, one that could still count as live, or one whose

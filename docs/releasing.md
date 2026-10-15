@@ -48,8 +48,9 @@ still owes before it takes traffic:
    read-only and exits non-zero on any gap: a sold or possibly paid listing
    version whose contract the build no longer executes (declare it in the
    skill's `previousContracts`), an earlier agent wallet whose key is not in
-   `PROVIDER_RETAINED_WALLET_PRIVATE_KEYS`, or an open asset action whose
-   definition or handler is missing.
+   `PROVIDER_RETAINED_WALLET_PRIVATE_KEYS`, a quoted control profile no longer
+   in `STANDARD_RAIL_RETAINED_CONTROL_PROFILE_HASHES` after a rotation, or an
+   open asset action whose definition or handler is missing.
 2. Deploy only a candidate with no gap; a candidate with one also fails
    `/health/ready`, refuses those versions' dispatches before admission and
    never claims their fulfillment jobs.

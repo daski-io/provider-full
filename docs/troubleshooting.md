@@ -453,8 +453,9 @@ The running build cannot serve something the database still owes. Run
 for the full read-only report; each gap names its kind and target:
 `handler` (declare the earlier contract in the skill's `previousContracts`),
 `signing_key` (add the earlier wallet's key to
-`PROVIDER_RETAINED_WALLET_PRIVATE_KEYS`), `unreadable_contract`,
-`action_definition` or `action_handler`. A version stops needing its handler
+`PROVIDER_RETAINED_WALLET_PRIVATE_KEYS`), `control_profile` (add the earlier
+control-profile hash to `STANDARD_RAIL_RETAINED_CONTROL_PROFILE_HASHES`),
+`unreadable_contract`, `action_definition` or `action_handler`. A version stops needing its handler
 only once it is retired with the gateway's receipt; it needs its key for as
 long as its orders can be read. The servicing monitor rechecks every minute
 after a catalog write and every ten minutes otherwise.
@@ -469,8 +470,10 @@ names an earlier agent wallet whose key is not in
 `PROVIDER_RETAINED_WALLET_PRIVATE_KEYS`. The gateway keeps retrying with a
 fresh envelope; deploy a build that retains the handler or key. Never point
 the order at the current contract or re-sign it with the current key.
-`409 ... "outcome_policy"` for an earlier version means it was retired, or no
-longer materializes under the deployment's rail policy.
+`409 ... "outcome_policy"` for an earlier version means it was retired, no
+longer materializes under the deployment's rail policy, or was sold under a
+control profile this deployment no longer retains (the dispatch carries the
+profile its checkout committed; see `STANDARD_RAIL_RETAINED_CONTROL_PROFILE_HASHES`).
 
 ### Retirement is blocked
 

@@ -127,6 +127,28 @@ describe("compatibility report (F-T16, C-T06)", () => {
     ]);
   });
 
+  it("names a control profile an unretired version's quotes may still be dispatched under but the deployment no longer accepts", async () => {
+    const current = `0x${"c1".repeat(32)}` as Hex;
+    const earlier = `0x${"e0".repeat(32)}` as Hex;
+    await persistProviderQuote({
+      outcomeId: SKILL, listingManifestHash: v1.runtimeCommitmentHash, requestHash: `0x${"ef".repeat(32)}`,
+      grossAmount: "250000", payer: null, issuedAt: 1_700_000_000, validBefore: 1_700_000_120,
+    }, { pricingMode: "fixed", supplierCostCeiling: null, providerControlProfileHash: earlier });
+    const judged = (retained: Hex[]) => compatibilityReport(database.pool, {
+      gatewayOrigin: GATEWAY_AUDIENCE, modules: [retainedModule()] as never, signingKeys: allKeys, build,
+      controlProfiles: { current, retained },
+    });
+    const rotated = await judged([]);
+    expect(rotated.ok).toBe(false);
+    expect(rotated.gaps).toEqual([expect.objectContaining({
+      kind: "control_profile", listingManifestHash: v1.runtimeCommitmentHash, controlProfileHash: earlier,
+    })]);
+    expect(rotated.versions[0]).toMatchObject({ quoteControlProfiles: [earlier] });
+    await expect(judged([earlier])).resolves.toMatchObject({ ok: true, gaps: [], controlProfiles: { current, retained: [earlier] } });
+    // Without a configured profile set the quotes' profiles are listed, never judged.
+    await expect(report([retainedModule()])).resolves.toMatchObject({ ok: true, controlProfiles: null });
+  });
+
   it("asks nothing of a superseded version that was never sold, and only its key of one with read-only orders", async () => {
     await expect(report([fixtureModule([])], new Set([provider.address]))).resolves.toMatchObject({ ok: true });
     const customer = (await database.pool.query<{ id: string }>(

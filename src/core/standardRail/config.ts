@@ -10,6 +10,7 @@ import {
 import { loadRuntimeListingHeads } from "../gatewayRegistration/runtimeCatalog.js";
 import { bundleListingVersion, type ListingVersion } from "./listingVersions.js";
 import { validateOutcome } from "./outcomeValidation.js";
+import { parseRetainedControlProfiles, RETAINED_CONTROL_PROFILES_VARIABLE } from "./controlProfiles.js";
 import { parseRetainedSigningKeys } from "./signingKeys.js";
 
 export interface ProviderStandardRailConfig {
@@ -36,6 +37,8 @@ export interface ProviderStandardRailConfig {
   headVersions?: ReadonlyMap<string, ListingVersion>;
   /** The endpoint control profile hash retained versions are re-materialized under. */
   providerControlProfileHash?: Hex;
+  /** Earlier control profiles whose sold orders may still be dispatched (controlProfiles.ts). */
+  retainedControlProfileHashes?: readonly Hex[];
   /** Keys of earlier agent wallets whose listing versions still have orders, by address. */
   retainedSigningKeys?: ReadonlyMap<Address, Hex>;
   /** Deployment-owned global rail policy; readiness verifies its chain
@@ -126,6 +129,9 @@ export async function loadProviderStandardRailConfig(
   if (!/^0x[0-9a-f]{64}$/.test(providerControlProfileHash)) {
     throw new Error("STANDARD_RAIL_PROVIDER_CONTROL_PROFILE_HASH must be bytes32");
   }
+  const retainedControlProfileHashes = parseRetainedControlProfiles(
+    env[RETAINED_CONTROL_PROFILES_VARIABLE], providerControlProfileHash,
+  );
   const retainedSigningKeys = parseRetainedSigningKeys(env.PROVIDER_RETAINED_WALLET_PRIVATE_KEYS, providerAuthorityKey);
   const heads = options.headsOverride ?? await loadRuntimeListingHeads(gatewayOriginEarly);
   const { outcomes, headVersions } = admitCatalogHeads(heads, {
@@ -172,6 +178,7 @@ export async function loadProviderStandardRailConfig(
     outcomes,
     headVersions,
     providerControlProfileHash,
+    retainedControlProfileHashes,
     retainedSigningKeys,
     finalityConfirmations,
     sanctionsOracleAddress: getAddress(need(env, "SANCTIONS_ORACLE_ADDRESS")),

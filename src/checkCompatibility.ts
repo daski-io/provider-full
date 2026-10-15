@@ -8,6 +8,7 @@ import { assertReadOnlySessions, enforceReadOnlySessions } from "./core/db/readO
 import { normalizedGatewayOrigin } from "./core/gatewayRegistration/wire.js";
 import { redactSensitiveText } from "./core/security/redaction.js";
 import { assertRetainedContracts } from "./core/serviceRegistry/executableContracts.js";
+import { controlProfilesFromEnv } from "./core/standardRail/controlProfiles.js";
 import { parseRetainedSigningKeys } from "./core/standardRail/signingKeys.js";
 import { providerServices } from "./providerServices.js";
 
@@ -19,8 +20,9 @@ import { providerServices } from "./providerServices.js";
  * revision, every version's obligations and coverage, and each gap) and
  * exits non-zero on any gap. It runs no migration, registers nothing, signs
  * nothing, calls no gateway or chain, and its database sessions refuse
- * writes. Only the database URL, the gateway origin and the provider keys
- * are read; no hosting or release-coordinator variable is used.
+ * writes. Only the database URL, the gateway origin, the provider keys and,
+ * when set, the control-profile hashes are read; no hosting or
+ * release-coordinator variable is used.
  */
 
 async function main(): Promise<void> {
@@ -41,6 +43,7 @@ async function main(): Promise<void> {
     modules: providerServices,
     signingKeys: new Set([current, ...retained.keys()]),
     build: buildIdentity(),
+    controlProfiles: controlProfilesFromEnv(process.env),
   });
   process.stdout.write(`${JSON.stringify(report)}\n`);
   if (!report.ok) process.exitCode = 1;

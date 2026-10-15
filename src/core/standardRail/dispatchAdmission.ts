@@ -89,7 +89,7 @@ export async function prepareDispatchAdmission(input: {
   // The version the order was sold under: the current head, or an earlier
   // version still owed this funded first dispatch.
   const { outcome, version } = await dispatchOutcome(config, dispatch.listingManifestHash, dispatch.providerOfferHash);
-  assertDispatchOutcomePolicy(dispatch, outcome);
+  assertDispatchOutcomePolicy(dispatch, outcome, config.retainedControlProfileHashes);
   assertFreshClaimEnvelope(input.envelope, outcome);
   assertNotSelfPurchase(config, dispatch, outcome);
   await verifyGatewayQuote({ config, chainId: input.chainId, envelope: args.quote, dispatch, outcome });

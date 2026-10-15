@@ -165,6 +165,7 @@ extra, expired, differently signed, or inconsistent values fail closed.
 | `EAS_OUTCOME_SCHEMA_UID` | Reviewed bytes32 outcome schema uid. |
 | `SANCTIONS_ORACLE_ADDRESS` | Standard-rail sanctions oracle coordinate. Service/provider screening remains a separate product policy. |
 | `STANDARD_RAIL_PROVIDER_CONTROL_PROFILE_HASH` | Provider control profile committed by runtime listings and servicing artifacts. |
+| `STANDARD_RAIL_RETAINED_CONTROL_PROFILE_HASHES` | Optional, comma-separated bytes32 hashes of earlier control profiles (at most 16, each distinct from the current one). A paid order's first dispatch carries the profile its checkout committed, so keep a rotated profile here while quotes or orders sold under it can still be dispatched; the compatibility check names one that is missing. The rotation must keep the provider audience and endpoints routable. |
 | `STANDARD_RAIL_GLOBAL_POLICY_JSON` | Daski-issued JSON containing signed chain-evidence, active-rail, and capability envelopes plus reviewed global code hashes. Preserve exactly. |
 | `STANDARD_RAIL_SERVICING_ADMISSION_JSON` | Signed servicing admission envelope for owner actions. Do not edit or self-sign. |
 | `STANDARD_RAIL_ASSET_ACTION_CATALOG_JSON` | Signed exact action catalog. Action ids, destructiveness, replay policy, schemas, and validity must match code. |

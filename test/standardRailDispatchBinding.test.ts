@@ -220,3 +220,45 @@ describe("settlement time, not dispatch time, bounds a timely payment (C-T04)", 
     expect(h.adapter.execute).not.toHaveBeenCalled();
   });
 });
+
+// The gateway's dispatch carries the control profile its checkout snapshot
+// committed, never re-derived from the current one: an order sold before the
+// provider rotated its profile, and first dispatched after, carries the
+// earlier hash. A deployment serves it only while it retains that profile,
+// and each readiness quote records the profile it was issued under.
+describe("dispatches under an earlier provider control profile (C04)", () => {
+  const earlier = hash("9");
+  afterEach(() => { config.retainedControlProfileHashes = undefined; });
+
+  async function soldUnderEarlierProfile() {
+    const args = await paidOrder();
+    const dispatch = await gatewayDispatch({
+      outcome: { ...fixedOutcome, providerControlProfileHash: earlier },
+      quote: args.quote, request, payer: payerA,
+      reputationContract: config.reputationContract, outcomeSchemaUid: config.reputationOutcomeSchemaUid,
+    });
+    return { ...args, dispatch: dispatch.dispatch };
+  }
+
+  it("refuses a profile the deployment does not retain, before admission", async () => {
+    const args = await soldUnderEarlierProfile();
+    await expect(service().accept(args)).rejects.toMatchObject({ reason: "outcome_policy" });
+    expect(h.adapter.execute).not.toHaveBeenCalled();
+    expect(await claimRow(args.dispatch.payload.orderId)).toBeUndefined();
+  });
+
+  it("admits a first dispatch under a retained earlier profile", async () => {
+    config.retainedControlProfileHashes = [earlier];
+    const args = await soldUnderEarlierProfile();
+    await expect(service().accept(args)).resolves.toMatchObject({ state: "completed" });
+  });
+
+  it("records the control profile each readiness quote was issued under", async () => {
+    const args = await paidOrder();
+    const recorded = (await database.pool.query(
+      "SELECT encode(provider_control_profile_hash,'hex') AS profile FROM standard_provider_quotes WHERE quote_hash=$1",
+      [Buffer.from(args.quote.payload.providerQuoteHash.slice(2), "hex")],
+    )).rows[0];
+    expect(recorded).toEqual({ profile: fixedOutcome.providerControlProfileHash.slice(2) });
+  });
+});

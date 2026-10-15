@@ -36,6 +36,9 @@ export async function checkRetainedServicing(config: ProviderStandardRailConfig)
     modules: getAllServices(),
     signingKeys: signingKeyAddresses(config),
     build: buildIdentity(),
+    controlProfiles: config.providerControlProfileHash
+      ? { current: config.providerControlProfileHash, retained: config.retainedControlProfileHashes ?? [] }
+      : null,
   });
   setRetainedServicing({ ok: report.ok, gaps: report.gaps.map(describeGap) });
   return report;

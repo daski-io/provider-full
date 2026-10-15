@@ -256,7 +256,15 @@ Every answer about an order is signed with the keys its checkout snapshot
 names, the agent wallet the version was registered under. After a wallet
 rotation, `PROVIDER_RETAINED_WALLET_PRIVATE_KEYS` keeps the earlier wallets'
 keys for their orders; without it those orders get no signed answer at all
-rather than one under another key. Asset actions keep the signed definition
+rather than one under another key. A first dispatch carries the provider
+control profile its checkout snapshot committed, not the current one, while
+its rail profile is always the gateway's current one and is compared with
+the current global policy. A dispatch under an earlier control profile is
+admitted only while `STANDARD_RAIL_RETAINED_CONTROL_PROFILE_HASHES` keeps it
+(`standardRail/controlProfiles.ts`); every readiness quote records the
+profile it was issued under (core migration 015), and the compatibility
+check reports a `control_profile` gap for an unretired version whose quotes
+name a profile the deployment no longer accepts. Asset actions keep the signed definition
 they were admitted under: boot records every definition of the verified
 catalog, so an execution accepted under one completes under it after the
 catalog moves to a new epoch.

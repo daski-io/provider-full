@@ -60,24 +60,31 @@ function fromRow(row: QuoteRow): StoredProviderQuote {
 /**
  * Persist the readiness quote before it is signed, so a later dispatch can
  * verify its payer, request, listing, price and time bindings. An identical
- * payload (same second) reuses the row only when every binding agrees.
+ * payload (same second) reuses the row only when every binding agrees. The
+ * control profile the quote was issued under is recorded for the
+ * compatibility inventory (core migration 015); the first writer's stays.
  */
 export async function persistProviderQuote(
   payload: ProviderQuotePayload,
-  binding: { pricingMode: "fixed" | "dynamic"; supplierCostCeiling: SupplierCostCeiling | null },
+  binding: {
+    pricingMode: "fixed" | "dynamic";
+    supplierCostCeiling: SupplierCostCeiling | null;
+    providerControlProfileHash?: Hex | null;
+  },
 ): Promise<Hex> {
   const quoteHash = providerQuoteHash(payload);
   const inserted = await pool.query(
     `INSERT INTO standard_provider_quotes
       (quote_hash,outcome_id,listing_manifest_hash,request_hash,gross_amount,
-       supplier_cost_ceiling,issued_at,valid_before,payer,pricing_mode)
-     VALUES ($1,$2,$3,$4,$5,$6,to_timestamp($7),to_timestamp($8),$9,$10)
+       supplier_cost_ceiling,issued_at,valid_before,payer,pricing_mode,provider_control_profile_hash)
+     VALUES ($1,$2,$3,$4,$5,$6,to_timestamp($7),to_timestamp($8),$9,$10,$11)
      ON CONFLICT (quote_hash) DO NOTHING`,
     [
       bytes(quoteHash), payload.outcomeId, bytes(payload.listingManifestHash),
       bytes(payload.requestHash), payload.grossAmount,
       binding.supplierCostCeiling ? JSON.stringify(binding.supplierCostCeiling) : null,
       payload.issuedAt, payload.validBefore, payload.payer, binding.pricingMode,
+      binding.providerControlProfileHash ? bytes(binding.providerControlProfileHash) : null,
     ],
   );
   if (inserted.rowCount === 1) return quoteHash;

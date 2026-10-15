@@ -131,6 +131,7 @@ export class StandardQuoteService {
     await persistProviderQuote(payload, {
       pricingMode: outcome.pricingMode,
       supplierCostCeiling: priced.supplierCostCeiling,
+      providerControlProfileHash: outcome.providerControlProfileHash,
     });
     const signature = await privateKeyToAccount(this.config.providerAuthorityPrivateKey).signMessage({
       message: { raw: canonicalHash(payload) },

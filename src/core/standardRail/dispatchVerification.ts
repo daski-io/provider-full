@@ -1,6 +1,7 @@
-import { getAddress, keccak256, stringToHex } from "viem";
+import { getAddress, keccak256, stringToHex, type Hex } from "viem";
 import { canonicalHash } from "./canonical.js";
 import type { ProviderStandardRailConfig } from "./config.js";
+import { servesControlProfile } from "./controlProfiles.js";
 import { STANDARD_DISPATCH_PAYLOAD_KEYS } from "./dispatchContract.js";
 import { DispatchRejectedError, dispatchEnvelopeRejection } from "./dispatchErrors.js";
 import { verifyGatewayEnvelope } from "./gatewayEnvelope.js";
@@ -108,13 +109,19 @@ export function assertFreshClaimEnvelope(
   ) throw new DispatchRejectedError("envelope_lifetime", "Dispatch envelope lifetime is invalid for a new claim");
 }
 
-/** The dispatched order must match the policy of the listing version it names. */
+/**
+ * The dispatched order must match the policy of the listing version it
+ * names. Its control profile is the one its checkout snapshot committed:
+ * the outcome's own, or an earlier profile this deployment retains.
+ */
 export function assertDispatchOutcomePolicy(
   dispatch: StandardRailDispatchV2,
   outcome: ProviderOutcomeConfig,
+  retainedControlProfiles: readonly Hex[] = [],
 ): void {
   if (
-    outcome.providerControlProfileHash !== dispatch.providerControlProfileHash ||
+    typeof dispatch.providerControlProfileHash !== "string" ||
+    !servesControlProfile(dispatch.providerControlProfileHash, outcome.providerControlProfileHash, retainedControlProfiles) ||
     outcome.serviceId !== dispatch.serviceId ||
     outcome.activeRailProfileHash !== dispatch.activeRailProfileHash ||
     outcome.customerIdentityPolicyId !== "none" ||

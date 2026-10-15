@@ -36,6 +36,7 @@ import { redactSensitiveText } from "./core/security/redaction.js";
 import { privateKeyToAccount } from "viem/accounts";
 import { buildIdentity } from "./core/buildIdentity.js";
 import { compatibilityReport, describeGap } from "./core/compatibility/compatibilityReport.js";
+import { controlProfilesFromEnv } from "./core/standardRail/controlProfiles.js";
 import { parseRetainedSigningKeys } from "./core/standardRail/signingKeys.js";
 import { providerServices } from "./providerServices.js";
 
@@ -122,6 +123,7 @@ async function compatibility(gateway: string) {
     modules: providerServices,
     signingKeys: new Set([current, ...retained.keys()]),
     build: buildIdentity(),
+    controlProfiles: controlProfilesFromEnv(process.env),
   });
 }
 
