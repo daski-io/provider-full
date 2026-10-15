@@ -2,7 +2,8 @@ import { revealFrozenTaskProjection } from "../a2a/responseBuilder.js";
 import { pool } from "../db/pool.js";
 import type { ProviderStandardRailConfig } from "./config.js";
 import { authenticateLifecycleCall, type LifecycleCall } from "./lifecycleAuthorization.js";
-import { artifactUnavailable } from "./lifecycleErrors.js";
+import type { ContractIntegrityCheck } from "./contractIntegrity.js";
+import { artifactUnavailable, lifecycleUnavailable } from "./lifecycleErrors.js";
 import { applyLifecycleInput } from "./lifecycleInput.js";
 import { applyLifecycleCancel } from "./lifecycleMutations.js";
 import { readLifecycleState, signedLifecycleAnswer, type LifecycleAnswerV1 } from "./lifecycleResponse.js";
@@ -23,11 +24,23 @@ import { loadFrozenTerminalProjection } from "./terminalResult.js";
  * durable receipt. Every failure is a named refusal (lifecycleErrors.ts).
  */
 export class StandardLifecycleService {
-  constructor(private readonly config: ProviderStandardRailConfig, private readonly chainId: number) {}
+  constructor(
+    private readonly config: ProviderStandardRailConfig,
+    private readonly chainId: number,
+    /** The fresh rail-contract proof a mutation takes first (contractIntegrity.ts). */
+    private readonly contractIntegrity?: ContractIntegrityCheck,
+  ) {}
 
   async perform(body: unknown): Promise<LifecycleAnswerV1> {
     const call = await authenticateLifecycleCall(this.config, this.chainId, body);
     const task = await loadLifecycleTask(call);
+    // A mutation proves the rail contracts before its nonce is consumed, so
+    // a failed proof leaves the buyer's authorization usable for a retry.
+    if ((call.action === "input" || call.action === "cancel") && this.contractIntegrity) {
+      await this.contractIntegrity().catch(() => {
+        throw lifecycleUnavailable("The rail contracts could not be verified");
+      });
+    }
     await consumeLifecycleNonce(task, call);
     const order = { orderId: task.standard_order_id, taskId: task.id };
     switch (call.action) {

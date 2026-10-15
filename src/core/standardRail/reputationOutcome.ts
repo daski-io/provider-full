@@ -9,6 +9,7 @@ import {
 import type { Queryable } from "../db/queryable.js";
 import { updateProviderWriteStatus } from "../db/queries/providerChainWrites.js";
 import type { ProviderStandardRailConfig } from "./config.js";
+import { liveContractIntegrity } from "./contractIntegrity.js";
 import { logWarn } from "../logger.js";
 import { failWorker, heartbeatWorker, setWorkerStatus } from "../health.js";
 import {
@@ -272,6 +273,8 @@ async function submit(row: OutcomeRow, config: ProviderStandardRailConfig): Prom
   try {
     await prepareAndBroadcastProviderWrite({
       purpose: "standard_reputation_outcome",
+      // A fresh proof of the rail contracts, under the signer lease, before signing.
+      preflight: () => liveContractIntegrity(config)(),
       target: { type: "standard_reputation_outcome", id: orderKey },
       address: config.easAddress,
       abi: easAbi,

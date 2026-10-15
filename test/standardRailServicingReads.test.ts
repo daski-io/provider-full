@@ -81,7 +81,7 @@ beforeAll(async () => {
     RATE_LIMIT_GLOBAL_CAPACITY: 6, RATE_LIMIT_GLOBAL_PER_MIN: 1,
     RATE_LIMIT_A2A_CAPACITY: 3, RATE_LIMIT_A2A_PER_MIN: 1, RATE_LIMIT_BYPASS_IPS: "",
   });
-  server = createProviderApp(railConfig, undefined, { salesAdmission: async () => ({ status: "open" as const }) }).listen(0, "127.0.0.1");
+  server = createProviderApp(railConfig, undefined, { salesAdmission: async () => ({ status: "open" as const }), contractIntegrity: async () => undefined }).listen(0, "127.0.0.1");
   await once(server, "listening");
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/standard-rail`;
   order = await paidOrder();

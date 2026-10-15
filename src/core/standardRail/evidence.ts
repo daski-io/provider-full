@@ -125,7 +125,7 @@ export class ProviderEvidenceVerifier {
     const policy = this.config.globalPolicy.chainEvidencePolicy.payload;
     const token = getAddress(policy.canonicalToken);
 
-    const head = await client.getBlockNumber();
+    const head = await client.getBlockNumber({ cacheTime: 0 });
     const [oracleCode, easCode, tokenCode, implementationStorage, domainSeparator] =
       await Promise.all([
         client.getCode({
@@ -182,13 +182,16 @@ export class ProviderEvidenceVerifier {
   }): Promise<{ authorizationKey: Hex }> {
     this.assertEvidenceBundle(args.dispatch, args.bundle);
     const authorizationKey = await this.observe(async ({ client }) => {
+      // Receipt proofs describe historical blocks. Today's contracts are
+      // proved again before a new paid order is admitted, between the
+      // background checks too, and that proof's head bounds the receipts.
+      const head = await this.verifyLiveReadinessOnClient(client);
       const depositBlock = BigInt(args.dispatch.depositBlockNumber);
       const releaseBlock = BigInt(args.dispatch.releaseBlockNumber);
       const [
         depositReceipt,
         releaseReceipt,
         depositBlockHeader,
-        head,
         depositTokenCode,
         splitterCode,
         depositImplementationStorage,
@@ -197,7 +200,6 @@ export class ProviderEvidenceVerifier {
         client.getTransactionReceipt({ hash: args.dispatch.settlementTxHash }),
         client.getTransactionReceipt({ hash: args.dispatch.releaseTxHash }),
         client.getBlock({ blockNumber: depositBlock }),
-        client.getBlockNumber(),
         client.getCode({ address: getAddress(args.outcome.token), blockNumber: depositBlock }),
         client.getCode({ address: getAddress(args.outcome.splitter), blockNumber: releaseBlock }),
         client.getStorageAt({

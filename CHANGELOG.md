@@ -296,6 +296,14 @@ All notable changes to this project will be documented here.
   each verdict for the operations summary and logs a change of verdict);
   empty retention sweeps are silent.
 
+- Idle chain polling is lower: identity and registration refresh every three
+  minutes (five-minute freshness unchanged), rail-contract integrity every
+  five minutes in the background (390-second heartbeat), and nonce-gap
+  recovery skips chain reads while no provider write is unresolved. Quotes,
+  buyer input and cancellation (before the nonce is consumed), wallet
+  actions, reputation writes and dispatch evidence verification now each
+  prove the rail contracts freshly before they act.
+
 ### Fixed
 
 - The provider-write reconciler stays ready while another replica's live

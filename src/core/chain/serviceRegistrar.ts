@@ -206,7 +206,7 @@ function mockServiceId(service: ServiceRow): Hex {
 }
 
 // Budget for one reconcile cycle's chain reads, signer lease, and local
-// writes. Kept under the reconciler's 60s interval so a hung cycle frees the
+// writes. Kept under the reconciler's three-minute interval so a hung cycle frees the
 // in-flight slot before the next tick fires; one hung cycle would otherwise
 // freeze reconciliationInFlight forever — readiness (and, via verification
 // staleness, every paid purchase) then fails closed with no recovery path
@@ -271,7 +271,14 @@ export function reconcileServiceRegistrations(): Promise<BootstrapResult> {
   return reconciliationInFlight;
 }
 
-export function startServiceRegistrationReconciler(intervalMs = 60_000): void {
+/**
+ * Re-verify every service's registration every three minutes, within the
+ * five-minute verification freshness limit; a failed cycle revokes it at
+ * once and writes still recheck under the signer lease.
+ */
+export function startServiceRegistrationReconciler(
+  intervalMs = Math.max(10_000, Math.min(180_000, Math.floor(SERVICE_VERIFICATION_MAX_AGE_MS * 0.6))),
+): void {
   if (reconcileTimer) return;
   reconcileTimer = setInterval(() => {
     void reconcileServiceRegistrations().catch(() => {

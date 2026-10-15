@@ -29,6 +29,8 @@ export const wire = {
   /** SQL fragments whose next execution fails like a lost connection. */
   faults: [] as string[],
   readinessFailures: [] as string[],
+  /** The fresh rail-contract proof protected operations take; passes unless a test replaces it. */
+  contractIntegrity: async (): Promise<void> => undefined,
   /** Every statement the provider issued since the last reset. */
   statements: [] as string[],
   /** Runs before each provider statement, e.g. to emulate a concurrent writer. */
@@ -144,7 +146,7 @@ export async function startWireHarness(
   const { config: coreConfig } = await import("../src/core/config.js");
   Object.assign(coreConfig, coreOverrides);
   const { createProviderApp } = await import("../src/core/server.js");
-  const server: Server = createProviderApp(wireConfig(), undefined, { salesAdmission: async () => ({ status: "open" as const }) }).listen(0, "127.0.0.1");
+  const server: Server = createProviderApp(wireConfig(), undefined, { salesAdmission: async () => ({ status: "open" as const }), contractIntegrity: () => wire.contractIntegrity() }).listen(0, "127.0.0.1");
   await once(server, "listening");
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   vi.useFakeTimers({ toFake: ["Date"] });
@@ -174,6 +176,7 @@ export async function startWireHarness(
       wire.gateway.reset();
       wire.faults.length = 0;
       wire.readinessFailures.length = 0;
+      wire.contractIntegrity = async () => undefined;
       wire.taskIds.length = 0;
       wire.supportMessageIds.length = 0;
       wire.supportReviewIds.length = 0;

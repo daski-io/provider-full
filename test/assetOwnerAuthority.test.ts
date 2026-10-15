@@ -148,6 +148,24 @@ describe("one owner authority with an admitted owner version", () => {
   });
 });
 
+describe("a fresh rail-contract proof before an action (C05)", () => {
+  it("refuses an action whose contract proof fails before anything is consumed, then serves its retry", async () => {
+    const note = await harness.ownedNote(payerA, { identifier: "note-a" });
+    const body = await signedAction({ action: ACTIONS.touch, providerAssetId: note, input: { note: "note-a" } });
+    const unproven = new ProviderAssetActionService(standard, wallet, CHAIN_ID, async () => {
+      throw new Error("rpc unavailable");
+    });
+    const refused = await rejection(unproven.perform(body));
+    expect(classifyProviderAssetError(refused)).toMatchObject({ status: 503, code: "PROVIDER_ASSET_QUERY_UNAVAILABLE" });
+    expect(await count("standard_asset_action_executions")).toBe(0);
+    expect(await count("standard_wallet_action_nonces")).toBe(0);
+    expect(executed).toEqual([]);
+    // The same signed request is still usable once the proof succeeds.
+    const proven = new ProviderAssetActionService(standard, wallet, CHAIN_ID, async () => undefined);
+    await expect(proven.perform(body)).resolves.toMatchObject({ payload: { status: "completed" } });
+  });
+});
+
 describe("wrong target (F-T08)", () => {
   it("never acts on another payer's asset, another type, another identifier or an ineligible state", async () => {
     const mine = await harness.ownedNote(payerA, { identifier: "note-mine" });

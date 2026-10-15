@@ -39,13 +39,18 @@ afterEach(() => {
 });
 
 describe("standard-rail readiness worker", () => {
-  it("runs the complete proof once and only live checks on recurring ticks", async () => {
+  it("runs the complete proof once and only live checks every five minutes", async () => {
     const stop = await startStandardRailReadiness(config, chain);
 
     expect(h.verifyReadiness).toHaveBeenCalledTimes(1);
     expect(h.verifyLiveReadiness).not.toHaveBeenCalled();
+    // The heartbeat covers one interval plus 90 seconds for the next proof.
+    expect(h.setWorkerStatus).toHaveBeenCalledWith("standard-rail-evidence", false, 390);
+    expect(h.heartbeatWorker).toHaveBeenLastCalledWith("standard-rail-evidence", 390);
 
-    await vi.advanceTimersByTimeAsync(90_000);
+    await vi.advanceTimersByTimeAsync(299_000);
+    expect(h.verifyLiveReadiness).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(601_000);
 
     expect(h.verifyReadiness).toHaveBeenCalledTimes(1);
     expect(h.verifyLiveReadiness).toHaveBeenCalledTimes(3);
@@ -62,12 +67,12 @@ describe("standard-rail readiness worker", () => {
       .mockResolvedValue(undefined);
     const stop = await startStandardRailReadiness(config, chain);
 
-    await vi.advanceTimersByTimeAsync(90_000);
+    await vi.advanceTimersByTimeAsync(900_000);
     expect(h.verifyLiveReadiness).toHaveBeenCalledTimes(1);
 
     releaseFirst();
     await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(300_000);
     expect(h.verifyLiveReadiness).toHaveBeenCalledTimes(2);
     stop();
   });

@@ -227,6 +227,20 @@ export async function markProviderWriteResent(
   return result.rowCount === 1;
 }
 
+/** Durable unresolved writes survive restarts; terminal or replaced attempts need no idle RPC. */
+export async function hasUnresolvedProviderWrites(scope: ProviderWriteScope): Promise<boolean> {
+  const result = await pool.query<{ unresolved: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM provider_chain_writes
+        WHERE chain_id = $1 AND wallet_address = $2
+          AND status IN ('prepared','broadcast','attention')
+     ) AS unresolved`,
+    [scope.chainId, scope.walletAddress.toLowerCase()],
+  );
+  if (!result.rows[0]) throw new Error("Provider write inventory unavailable");
+  return result.rows[0].unresolved;
+}
+
 export async function getBlockingProviderNonceGap(
   scope: ProviderWriteScope,
   finalizedNonce: bigint,

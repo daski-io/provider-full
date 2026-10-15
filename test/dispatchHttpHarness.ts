@@ -12,12 +12,21 @@ import { signGatewayEnvelope } from "./gatewayConsumer.js";
 import { CHAIN_ID, ENVIRONMENT, gatewayKey, PROVIDER_AUDIENCE } from "./standardRailFixture.js";
 
 /** A real standard-rail ingress and router on an ephemeral loopback port. */
-/** Tests take new sales whatever this process's readiness; health tests gate it themselves. */
-export const OPEN_ADMISSION = { salesAdmission: async () => ({ status: "open" as const }) };
+/**
+ * Tests take new sales whatever this process's readiness and need no live
+ * chain proof of the rail contracts; the gate tests set these themselves.
+ */
+export const OPEN_ADMISSION = {
+  salesAdmission: async () => ({ status: "open" as const }),
+  contractIntegrity: async () => undefined,
+};
 
 export async function startRailServer(
   railConfig: ProviderStandardRailConfig,
-  options: { salesAdmission: () => Promise<{ status: "open" | "stopped" }> } = OPEN_ADMISSION,
+  options: {
+    salesAdmission: () => Promise<{ status: "open" | "stopped" }>;
+    contractIntegrity?: () => Promise<void>;
+  } = OPEN_ADMISSION,
 ): Promise<{ base: string; close(): Promise<void> }> {
   const { createStandardRailRouter } = await import("../src/core/standardRail/routes.js");
   const { standardRailJsonIngress } = await import("../src/core/standardRail/transport.js");

@@ -80,6 +80,22 @@ beforeEach(async () => {
   onInput = async () => ({ status: "working" });
 });
 
+describe("a fresh rail-contract proof before a lifecycle mutation (C05)", () => {
+  it("refuses a cancellation whose proof fails without consuming its authorization, then accepts it", async () => {
+    await admittedOrder({ status: "working" });
+    await harness.at(T);
+    const body = await lifecycleBody({ action: "cancel", request: {}, form: "payer-signed", now: T });
+    wire.contractIntegrity = async () => { throw new Error("rpc down"); };
+    const refused = await harness.send({ url: LIFECYCLE_HTTP.url, headers: LIFECYCLE_HTTP.headers, body });
+    expect([refused.status, JSON.parse(refused.text)]).toEqual([503, { error: "lifecycle_unavailable" }]);
+    expect(calls.cancel).toBe(0);
+    wire.contractIntegrity = async () => undefined;
+    const accepted = await harness.send({ url: LIFECYCLE_HTTP.url, headers: LIFECYCLE_HTTP.headers, body });
+    expect([accepted.status, JSON.parse(accepted.text).state]).toEqual([200, "canceled"]);
+    expect(calls.cancel).toBe(1);
+  });
+});
+
 describe("cancellation idempotency (F-T09)", () => {
   it("answers a retried committed cancellation without repeating it, and refuses a different reason", async () => {
     await admittedOrder({ status: "working" });

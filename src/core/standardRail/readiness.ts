@@ -4,6 +4,12 @@ import type { ProviderStandardRailConfig } from "./config.js";
 import { ProviderEvidenceVerifier } from "./evidence.js";
 
 const WORKER = "standard-rail-evidence";
+// The background proof runs every five minutes; protected operations prove
+// the contracts freshly themselves (contractIntegrity.ts). The heartbeat
+// allows 90 seconds for the next scheduled proof to finish, and a failure
+// still revokes it at once.
+const INTERVAL_MS = 300_000;
+const MAX_AGE_SECONDS = INTERVAL_MS / 1_000 + 90;
 
 export async function startStandardRailReadiness(
   config: ProviderStandardRailConfig,
@@ -16,17 +22,17 @@ export async function startStandardRailReadiness(
     verificationInFlight = true;
     try {
       await verifier.verifyLiveReadiness();
-      heartbeatWorker(WORKER, 90);
+      heartbeatWorker(WORKER, MAX_AGE_SECONDS);
     } catch {
       failWorker(WORKER);
     } finally {
       verificationInFlight = false;
     }
   };
-  setWorkerStatus(WORKER, false, 90);
+  setWorkerStatus(WORKER, false, MAX_AGE_SECONDS);
   await verifier.verifyReadiness();
-  heartbeatWorker(WORKER, 90);
-  const timer = setInterval(() => void verifyEvidence(), 30_000);
+  heartbeatWorker(WORKER, MAX_AGE_SECONDS);
+  const timer = setInterval(() => void verifyEvidence(), INTERVAL_MS);
   timer.unref();
   return () => clearInterval(timer);
 }

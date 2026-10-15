@@ -74,7 +74,7 @@ beforeAll(async () => {
   await seedFixtureService(database.pool, { skillIds: [fixedOutcome.skillId, dynamicOutcome.skillId] });
   const app = express();
   app.use("/standard-rail", ...standardRailJsonIngress(),
-    createStandardRailRouter({ CHAIN_ID } as Config, fixtureConfig(), undefined, { salesAdmission: async () => ({ status: "open" as const }) }));
+    createStandardRailRouter({ CHAIN_ID } as Config, fixtureConfig(), undefined, { salesAdmission: async () => ({ status: "open" as const }), contractIntegrity: async () => undefined }));
   server = app.listen(0, "127.0.0.1");
   await once(server, "listening");
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/standard-rail`;
@@ -307,7 +307,8 @@ describe("service availability and capacity stop new quotes", () => {
     let admission: "open" | "stopped" = "stopped";
     const app = express();
     app.use("/standard-rail", ...standardRailJsonIngress(), createStandardRailRouter(
-      { CHAIN_ID } as Config, fixtureConfig(), undefined, { salesAdmission: async () => ({ status: admission }) },
+      { CHAIN_ID } as Config, fixtureConfig(), undefined,
+      { salesAdmission: async () => ({ status: admission }), contractIntegrity: async () => undefined },
     ));
     const local = app.listen(0, "127.0.0.1");
     await once(local, "listening");
@@ -329,10 +330,32 @@ describe("service availability and capacity stop new quotes", () => {
     }
   });
 
+  it("signs no quote whose fresh rail-contract proof fails (C05)", async () => {
+    const app = express();
+    app.use("/standard-rail", ...standardRailJsonIngress(), createStandardRailRouter(
+      { CHAIN_ID } as Config, fixtureConfig(), undefined,
+      { salesAdmission: async () => ({ status: "open" as const }), contractIntegrity: async () => { throw new Error("rpc down"); } },
+    ));
+    const local = app.listen(0, "127.0.0.1");
+    await once(local, "listening");
+    try {
+      const refused = await fetch(`http://127.0.0.1:${(local.address() as AddressInfo).port}/standard-rail/quote`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ request: await quoteEnvelope() }),
+      });
+      expect([refused.status, await refused.json()])
+        .toEqual([503, { error: "quote_unavailable", reason: "service_unavailable" }]);
+      expect(h.adapter.quote).not.toHaveBeenCalled();
+      expect((await database.pool.query("SELECT count(*)::int AS n FROM standard_provider_quotes")).rows[0].n).toBe(0);
+    } finally {
+      await new Promise<void>((resolve) => local.close(() => resolve()));
+    }
+  });
+
   it("counts open paid work of the same listing version only", async () => {
     const tight = fixtureConfig([{ ...fixedOutcome, maxOpenOrders: 1 }]);
     const app = express();
-    app.use("/standard-rail", ...standardRailJsonIngress(), createStandardRailRouter({ CHAIN_ID } as Config, tight, undefined, { salesAdmission: async () => ({ status: "open" as const }) }));
+    app.use("/standard-rail", ...standardRailJsonIngress(), createStandardRailRouter({ CHAIN_ID } as Config, tight, undefined, { salesAdmission: async () => ({ status: "open" as const }), contractIntegrity: async () => undefined }));
     const local = app.listen(0, "127.0.0.1");
     await once(local, "listening");
     const url = `http://127.0.0.1:${(local.address() as AddressInfo).port}/standard-rail/quote`;

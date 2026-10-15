@@ -7,6 +7,7 @@ import { parseOptionalSupplierCostCeiling } from "../serviceRegistry/supplierCos
 import type { FulfillmentAdapter, QuoteResult, SupplierCostCeiling } from "../serviceRegistry/types.js";
 import { canonicalHash } from "./canonical.js";
 import type { ProviderStandardRailConfig } from "./config.js";
+import type { ContractIntegrityCheck } from "./contractIntegrity.js";
 import { verifyGatewayEnvelope } from "./gatewayEnvelope.js";
 import { describeIntake, requestMatchesHash } from "./intake.js";
 import { assertBoundedJsonValue, REQUEST_JSON_BUDGET } from "./jsonBounds.js";
@@ -42,19 +43,27 @@ const SERVICE_DECLINED = {
 /** Whether new sales are taken now (health.ts `salesAdmission`). */
 export type SalesAdmissionGate = () => Promise<{ status: "open" | "stopped" }>;
 
+/** What the HTTP router makes every quote pass before it is priced and signed. */
+export interface QuoteGates {
+  salesAdmission?: SalesAdmissionGate;
+  /** A fresh proof of the rail contracts (contractIntegrity.ts). */
+  contractIntegrity?: ContractIntegrityCheck;
+}
+
 /**
  * The provider quote endpoint. It answers signed readiness quotes for fixed
  * and dynamic listings and, on the same URL, signed intake discovery. A quote
  * validates the request and service prerequisites, never starts work, and is
- * persisted with its exact payer before it is signed. With an admission gate
- * (the HTTP router always passes one) a process that takes no new sales
- * refuses the quote itself, while routing keeps serving funded orders' reads.
+ * persisted with its exact payer before it is signed. The HTTP router passes
+ * its gates: a process that takes no new sales refuses the quote itself,
+ * while routing keeps serving funded orders' reads, and a quote is signed
+ * only after a fresh proof of the rail contracts.
  */
 export class StandardQuoteService {
   constructor(
     private readonly config: ProviderStandardRailConfig,
     private readonly chainId: number,
-    private readonly admission?: SalesAdmissionGate,
+    private readonly gates: QuoteGates = {},
   ) {}
 
   /** The request validator of a current head; undefined for any other outcome id. */
@@ -114,8 +123,13 @@ export class StandardQuoteService {
     if (!validate(args.request)) throw requestInvalid(providerSchemaFieldErrors(validate.errors));
     const service = await getServiceBySlug(outcome.serviceSlug);
     if (!service?.is_active) throw new QuoteRefusedError(503, "service_unavailable");
-    if (this.admission && (await this.admission()).status !== "open") {
+    if (this.gates.salesAdmission && (await this.gates.salesAdmission()).status !== "open") {
       throw new QuoteRefusedError(503, "service_unavailable");
+    }
+    if (this.gates.contractIntegrity) {
+      await this.gates.contractIntegrity().catch(() => {
+        throw new QuoteRefusedError(503, "service_unavailable");
+      });
     }
     await assertQuoteCapacity(outcome);
     // A head is sold only while this build can execute its contract.

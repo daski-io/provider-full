@@ -5,6 +5,7 @@ import { getSkillByServiceAndSkillId } from "../db/queries/skills.js";
 import { assertExactKeys } from "./canonical.js";
 import { compileProviderSchema, validateProviderRequest } from "./schema.js";
 import type { ProviderStandardRailConfig } from "./config.js";
+import type { ContractIntegrityCheck } from "./contractIntegrity.js";
 import type {
   ProviderWalletActionGrantV1,
   SignedEnvelope,
@@ -43,6 +44,8 @@ export class ProviderAssetActionService {
     private readonly standard: ProviderStandardRailConfig,
     private readonly wallet: ProviderWalletConfig,
     private readonly chainId: number,
+    /** The fresh rail-contract proof an action takes before it consumes anything (contractIntegrity.ts). */
+    private readonly contractIntegrity?: ContractIntegrityCheck,
   ) {}
 
   async perform(input: unknown): Promise<SignedEnvelope<unknown>> {
@@ -87,6 +90,11 @@ export class ProviderAssetActionService {
     const skill = service && await getSkillByServiceAndSkillId(service.id, definition.actionId);
     if (!service || !skill) throw new Error("asset action unavailable");
     if (asset.service_id !== service.id) throw new Error("asset action denied");
+    if (this.contractIntegrity) {
+      await this.contractIntegrity().catch(() => {
+        throw new Error("asset action unavailable: the rail contracts could not be verified");
+      });
+    }
     if (operation === "recover") {
       return recoverAssetAction({
         body, definition, walletHash, grantHash, actionHash,

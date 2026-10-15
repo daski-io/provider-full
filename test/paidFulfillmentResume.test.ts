@@ -229,7 +229,9 @@ describe("admitted paid work", () => {
   });
 
   it("admits and answers a funded order while this process takes no new sales (C05)", async () => {
-    const stopped = await startRailServer(config, { salesAdmission: async () => ({ status: "stopped" as const }) });
+    const stopped = await startRailServer(config, {
+      salesAdmission: async () => ({ status: "stopped" as const }), contractIntegrity: async () => undefined,
+    });
     try {
       const order = await paidOrder();
       const admitted = await postJson(`${stopped.base}/dispatch`, order);

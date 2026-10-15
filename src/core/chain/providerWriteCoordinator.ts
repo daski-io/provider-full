@@ -6,6 +6,7 @@ import {
   advanceProviderCursor,
   getBlockingProviderNonceGap,
   getProviderWrite,
+  hasUnresolvedProviderWrites,
   insertProviderWrite,
   markProviderWriteResent,
   rebindReplacementProviderWrite,
@@ -524,6 +525,11 @@ export async function reconcileProviderNonceGap(): Promise<
   "clear" | "replacement_broadcast" | "attention"
 > {
   return withProviderSignerLease(providerWriteScope, async () => {
+      // Checked under the same lease as submissions, before any chain read:
+      // an idle wallet costs no RPC. A newly prepared, broadcast or attention
+      // write resumes polling on the next tick, and every new submission
+      // still reads both account nonces itself.
+      if (!await hasUnresolvedProviderWrites(providerWriteScope)) return "clear";
       const finalizedBlock = await finalizedReadBlockNumber();
       const [finalizedNonce, pendingNonce] = await providerAccountNonces(
         finalizedBlock,

@@ -8,6 +8,7 @@ import { StandardLifecycleService } from "./lifecycle.js";
 import { lifecycleRefusalOf } from "./lifecycleErrors.js";
 import { mountProtocolRoutes } from "./protocolRoutes.js";
 import { salesAdmission } from "../health.js";
+import { liveContractIntegrity, type ContractIntegrityCheck } from "./contractIntegrity.js";
 import { StandardQuoteService, type SalesAdmissionGate } from "./quote.js";
 import type { ProviderStandardRailConfig } from "./config.js";
 import type { ProviderWalletConfig } from "./walletConfig.js";
@@ -19,6 +20,8 @@ import { createStatusFailureBudget, sendSignedJson } from "./transport.js";
 export interface StandardRailRouterOptions {
   /** New-sale admission: quotes are refused while it is not open; nothing else asks. */
   salesAdmission: SalesAdmissionGate;
+  /** The fresh rail-contract proof protected operations take; a live chain proof by default. */
+  contractIntegrity?: ContractIntegrityCheck;
 }
 
 export function createStandardRailRouter(
@@ -28,14 +31,17 @@ export function createStandardRailRouter(
   options: StandardRailRouterOptions = { salesAdmission },
 ): Router {
   const chain = core.CHAIN_ID === 8453 ? base : baseSepolia;
+  const contractIntegrity = options.contractIntegrity ?? liveContractIntegrity(config);
   const dispatch = new StandardDispatchService(config, chain, core.CHAIN_ID);
-  const lifecycle = new StandardLifecycleService(config, core.CHAIN_ID);
-  const quote = new StandardQuoteService(config, core.CHAIN_ID, options.salesAdmission);
+  const lifecycle = new StandardLifecycleService(config, core.CHAIN_ID, contractIntegrity);
+  const quote = new StandardQuoteService(config, core.CHAIN_ID, {
+    salesAdmission: options.salesAdmission, contractIntegrity,
+  });
   const assetQuery = walletConfig
     ? new ProviderAssetQueryService(config, walletConfig, core.CHAIN_ID)
     : null;
   const assetAction = walletConfig
-    ? new ProviderAssetActionService(config, walletConfig, core.CHAIN_ID)
+    ? new ProviderAssetActionService(config, walletConfig, core.CHAIN_ID, contractIntegrity)
     : null;
   const router = Router();
 

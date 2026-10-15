@@ -101,11 +101,13 @@ export function refreshProviderIdentityAuthorization(
   return refreshInFlight;
 }
 
+/**
+ * Re-verify the identity every three minutes, within the five-minute
+ * authorization freshness limit; a failed or mismatching read revokes it at
+ * once.
+ */
 export function startProviderIdentityMonitor(
-  intervalMs = Math.max(
-    1_000,
-    Math.min(60_000, Math.floor(PROVIDER_IDENTITY_MAX_AGE_MS / 2)),
-  ),
+  intervalMs = Math.max(1_000, Math.min(180_000, Math.floor(PROVIDER_IDENTITY_MAX_AGE_MS * 0.6))),
 ): void {
   if (monitorTimer) return;
   void refreshProviderIdentityAuthorization();

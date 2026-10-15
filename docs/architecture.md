@@ -459,6 +459,19 @@ order that never started fails at that deadline, as never started;
 accepted, started or ambiguous work stays nonterminal so a late result is
 still delivered.
 
+Idle chain polling is bounded without caching away a protected check. The
+provider identity and every service's ServiceRegistry registration are
+re-verified every three minutes, within their five-minute freshness limit, and
+a failed read revokes them at once. The rail's chain facts are re-proved in
+the background every five minutes (a 390-second heartbeat), and every
+protected operation proves them freshly itself (`standardRail/contractIntegrity.ts`):
+a quote before it is priced and signed, a buyer's input or cancellation
+before its nonce is consumed, a wallet action before it claims anything, a
+reputation write under the signer lease before it is signed, and a dispatch
+inside its evidence verification. Nonce-gap recovery reads the chain only
+while the database holds unresolved provider writes; every new submission
+still reads both account nonces.
+
 Outbound calls are observable without leaking data
 (`observability/outboundFailures.ts`): supplier and email HTTP through
 `boundedFetch`, the gateway registration fetch, every chain RPC endpoint

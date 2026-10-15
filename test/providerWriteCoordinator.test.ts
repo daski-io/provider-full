@@ -9,6 +9,8 @@ const REPLACEMENT_HASH = `0x${"33".repeat(32)}` as Hex;
 const state = vi.hoisted(() => ({
   rows: new Map<string, ProviderChainWriteRow>(),
   gap: null as (ProviderChainWriteRow & { queued_behind: number }) | null,
+  unresolved: true,
+  nonceReads: 0,
   finalizedNonce: 4,
   pendingNonce: 6,
   suggestedNonce: 7n,
@@ -38,8 +40,10 @@ vi.mock("../src/core/config.js", () => ({
 vi.mock("../src/core/chain/client.js", () => ({
   providerAddress: "0x1111111111111111111111111111111111111111",
   publicClient: {
-    getTransactionCount: vi.fn(async (args: { blockTag?: string }) =>
-      args.blockTag === "pending" ? state.pendingNonce : state.finalizedNonce),
+    getTransactionCount: vi.fn(async (args: { blockTag?: string }) => {
+      state.nonceReads += 1;
+      return args.blockTag === "pending" ? state.pendingNonce : state.finalizedNonce;
+    }),
     getTransactionReceipt: vi.fn(async () => {
       if (state.receiptLookupFails) throw new Error("receipt unavailable");
       if (!state.receipt) throw new Error("not found");
@@ -147,6 +151,7 @@ vi.mock("../src/core/db/queries/providerChainWrites.js", () => ({
   rebindReplacementProviderWrite: queryApi.rebind,
   getBlockingProviderNonceGap: vi.fn(async () => state.gap),
   getProviderWrite: vi.fn(async (id: string) => state.rows.get(id) ?? null),
+  hasUnresolvedProviderWrites: vi.fn(async () => state.unresolved),
 }));
 vi.mock("../src/core/engine/escalation.js", () => ({
   createHumanEscalation: vi.fn(async (args: Record<string, unknown>) => {
@@ -299,6 +304,19 @@ describe("provider write preparation and broadcast", () => {
 });
 
 describe("provider write recovery and terminal helpers", () => {
+  it("spends no chain read on an idle wallet whose durable writes are all resolved", async () => {
+    state.unresolved = false;
+    state.gap = gap();
+    state.nonceReads = 0;
+    try {
+      await expect(reconcileProviderNonceGap()).resolves.toBe("clear");
+      expect(state.updates).toEqual([]);
+      expect(state.nonceReads).toBe(0);
+    } finally {
+      state.unresolved = true;
+    }
+  });
+
   it("reports clear state and reconciles canonical success or revert", async () => {
     await expect(reconcileProviderNonceGap()).resolves.toBe("clear");
 

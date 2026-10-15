@@ -103,7 +103,7 @@ describe("provider-wire quote and intake vectors", () => {
     const { createProviderApp } = await import("../src/core/server.js");
     const shorter = createProviderApp(
       fx.wireConfig([fx.wireOutcome(fx.dynamicListing, { quoteMaximumLifetimeSeconds: 120 })]),
-      undefined, { salesAdmission: async () => ({ status: "open" as const }) },
+      undefined, { salesAdmission: async () => ({ status: "open" as const }), contractIntegrity: async () => undefined },
     );
     const server = shorter.listen(0, "127.0.0.1");
     await new Promise<void>((resolve) => server.once("listening", () => resolve()));
