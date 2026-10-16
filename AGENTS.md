@@ -1,4 +1,42 @@
+---
+title: daski-io/provider-full agent instructions
+status: canonical
+authority: repository implementation and current release-engine decisions
+owner: repository maintainers
+effective-date: 2026-10-16
+last-verified: 2026-10-16
+supersedes: earlier local-path or split-coordinator guidance where inconsistent
+superseded-by: none
+sensitivity: public-safe
+related-repositories: daski-io/provider-full
+review-trigger: architecture, toolchain, interface or release-process change
+---
+
 # AGENTS.md — Daski provider-full starter guide
+
+## Shared project context
+
+This guide applies to every agent and contributor. `AGENTS.md` is canonical and
+`CLAUDE.md` imports it. Read README, current Git status, relevant nested instructions
+and toolchain/CI before editing. In the shared Daski workspace also read its root
+guide, repository map and development workflow explicitly; do not rely on automatic
+parent/child instruction loading. Standalone clones must not require private paths.
+Use separate task worktrees with one writer each, preserve other work, and coordinate
+paired interfaces and tests before integrating to `develop`. Durable rules belong in
+tracked docs, with private operational state outside the source corpus.
+
+## Repository role
+
+This is a public provider starter, not the deployed marketplace provider.
+The current release-engine inventory lists this repository as `engine: none`.
+Follow this repository's own onboarding and `docs/releasing.md` for a provider
+fork. Changes to shared protocol/fixtures may require the gateway and the other
+starter to change together. Do not assume a starter commit deploys a managed service.
+
+Managed Daski sandbox and production releases belong to `daski-io/deploy-mainnet`;
+read its current instructions when work affects that fleet. Integration into
+`develop` is distinct from release. Do not run live onboarding, registration,
+wallet/funding operations or a release as incidental development verification.
 
 This is the canonical repository guide for coding agents and contributors.
 Read it before changing code. Keep durable project knowledge in tracked
