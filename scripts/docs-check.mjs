@@ -34,7 +34,6 @@ const files = [
   join(ROOT, "README.md"),
   join(ROOT, "SECURITY.md"),
   join(ROOT, "CONTRIBUTING.md"),
-  join(ROOT, "AGENTS.md"),
   join(ROOT, "CHANGELOG.md"),
   join(ROOT, "scripts/README.md"),
   ...await markdownFiles(join(ROOT, "docs")),

@@ -1,3 +1,17 @@
+---
+title: "Daski Provider Full Starter"
+status: canonical
+authority: current repository implementation and approved maintainer workflow
+owner: repository maintainers
+effective-date: 2026-10-16
+last-verified: 2026-10-16 (documentation placement; no live release verification)
+supersedes: repository-wide agent files as the home of general repository guidance
+superseded-by: none
+sensitivity: public-safe
+related-repositories: daski-io/provider-full
+review-trigger: setup, architecture, interface or workflow change
+---
+
 # Daski Provider Full Starter
 
 Build the provider-side adapter that lets agents discover, buy, and operate
@@ -143,10 +157,24 @@ compose.yaml                       local PostgreSQL only
 Dockerfile                         canonical hosting-neutral runtime image
 ```
 
-Core never imports a service. Services never import sibling services or a
-provider-specific policy implementation. Product behavior, configuration,
-clients, migrations, workers, docs, and tests stay with the service that owns
-them. The architecture and static gates enforce these boundaries.
+- `src/core/` owns protocol, identity, payment/evidence verification,
+  persistence, jobs, security, admin, email, and service-neutral contracts.
+- `src/services/<slug>/` owns one service's manifest, skills, adapter,
+  validation, configuration, migrations, docs, workers, supplier integration,
+  protected-data declarations, admin extensions, and tests.
+- `src/providerServices.ts` is the single installed-service composition.
+- Paid skills and asset actions are derived from installed service contracts.
+- `src/registerGatewayServices.ts` owns reviewed gateway registration,
+  activation, catalog promotion, and safe retirement.
+- `src/providerScreening.ts` is the optional provider-policy composition.
+
+Core must never import from services. Services must never import sibling
+services or provider-specific extensions. Keep provider-policy implementations
+independent of individual services. ESLint and the architecture gate enforce
+these directions.
+
+Service-owned tests belong in `src/services/<slug>/tests/`. `test/` contains
+only core and cross-service tests.
 
 ## Environments
 
@@ -167,6 +195,51 @@ The provider can run locally while pointing at Testnet. A fully private local
 payment topology would require a complete contract deployment, facilitator,
 signer set, and newly signed artifacts; it is protocol development, not the
 provider quickstart. The gateway has no fake local facilitator.
+
+## Local runtime
+
+After the database and reviewed Testnet configuration are ready, use `npm run dev`
+for the source watcher, or `npm run build` followed by `npm start` for built output.
+`npm run dev:db:stop` stops the development database while preserving its named
+volume. Unit tests need no live RPC, gateway or supplier; database checks require
+an explicitly selected disposable database. Keep runtime keys and issued artifacts
+outside Git and ordinary support messages.
+
+## Implementation invariants
+
+- Quote validates buyer data before payment; execute revalidates it.
+- Financial/lifecycle state uses conditional writes, locks, leases,
+  idempotency keys, and fencing. Never use process-local money/task guards.
+- Journal intent before a non-convergent external mutation. Reconcile
+  authoritative supplier state after ambiguity; never guess or blindly retry.
+- A funded order is an obligation. Never refuse its dispatch for paused sales
+  or capacity, never sign a failure for it on a guess: a fault before the
+  start that decides nothing leaves it resumable, an unknown outcome after
+  the start parks it for reconciliation, and only a definite refusal or
+  failure ends it.
+- A terminal identity is frozen with the first terminal transition and never
+  changes. Every dispatch, status and lifecycle answer is signed fresh with a
+  new operations observation; never cache or replay a signed answer.
+- Persist signed chain writes before broadcast and reconcile after restart.
+- Ownership comes from the wallet-authorized payer. Order ids, asset ids, and
+  caller metadata are not credentials.
+- Consequential asset mutations require an admitted standard action.
+  Destructive actions also require delayed second authorization and adversarial
+  mismatch/replay tests. Do not invent a service-local signature scheme.
+- Applied migrations are immutable, append-only, and checksummed. Core
+  migrations live under `src/core/db/migrations`; service migrations stay with
+  their service.
+- Use the centralized logger. Never log protected payloads or include
+  supplier-controlled details in public errors.
+- Direct supplier HTTP uses the reviewed outbound boundary with pinned
+  endpoints, bounded requests/responses, and SSRF protection.
+- Declare workers and live supplier invariants through service readiness so
+  admission fails closed: a failing invariant or a dead required worker (also
+  of a paused service that still owes work) stops new quotes and degrades
+  servicing, while `/health/ready` keeps routing persisted reads.
+- Treat published skill contracts, prices, and action definitions as
+  coordinated Daski release changes. Registration must produce matching
+  gateway preparations and runtime commitments; never edit catalog rows.
 
 ## Build and verify
 
@@ -190,6 +263,15 @@ npm run build
 PostgreSQL security and migration smoke scripts require explicit disposable
 database URLs. Never point them at a shared Testnet or production database.
 See [scripts/README.md](scripts/README.md) before running an operator script.
+
+`npm run compatibility:check` reports, read-only, whether this build serves
+every listing version and asset action the database still owes. Registration's
+`--check-only` is a separate read-only forecast; an actual registration can sign,
+write to chain and mutate gateway/catalog state.
+
+Service variables belong in `src/services/<slug>/config.ts` and are parsed
+strictly. Testnet uses supplier sandboxes/fakes; Mainnet refuses them and requires
+live readiness evidence. Credentials never belong in manifests or test data.
 
 ## Deployment
 
@@ -255,6 +337,18 @@ It first proves the service has no active work or assets and records the
 retirement locally and at the gateway. Never use registration or retirement
 against Mainnet without the coordinated, whitelisted release procedure.
 
+## HTTP surfaces
+
+- `/health/live`, `/health/ready`, `/health/admission`
+- `/.well-known/agent.json`, `/.well-known/agent-registration.json`
+- `/agent-cards/<slug>.json` (also at
+  `/agent-cards/<slug>.json/.well-known/agent-card.json` for crawlers),
+  `/skills/*`, `/llms.txt`
+- `/standard-rail/*`
+- `/a2a/:serviceSlug`
+- `/admin/ui/*`, `/admin/*`
+- `/webhooks/postmark/*`
+
 ## Documentation
 
 ### Install and integrate
@@ -283,7 +377,7 @@ against Mainnet without the coordinated, whitelisted release procedure.
 ### Work with coding agents
 
 - [Daski provider Agent Skill](docs/agent-skill.md)
-- [Repository agent guide](AGENTS.md)
+- [Implementation invariants](#implementation-invariants)
 - [Contributing](CONTRIBUTING.md)
 
 ## Staying current
@@ -304,6 +398,27 @@ migration to make an update merge cleanly.
 
 After forking, replace the vulnerability-reporting destination in
 [SECURITY.md](SECURITY.md) with a private channel operated by your organization.
+
+## Contributing
+
+1. Inspect the closest types, implementation, docs, and tests before editing.
+2. Make the smallest cohesive change.
+3. Update manifest/docs, runtime, validation, migrations, and tests together
+   when a contract changes.
+4. Keep service behavior inside its service folder.
+5. Run targeted tests, then the full relevant gates.
+6. Scan the diff for credentials, customer data, supplier account data,
+   private policy, raw runtime output, and provider-specific leakage.
+7. Never weaken a fail-closed check merely to make a fixture/deployment pass.
+
+Keep files near 250 lines when practical. Split by responsibility before
+adding another large branch to an already-large module.
+
+Propose changes against `develop`. Follow [releasing and compatibility](docs/releasing.md)
+for a provider fork. The starter itself is not a deployed Daski service;
+merging a starter change does not deploy one. Coordinate protocol and fixture
+changes with the gateway and the other starter. Keep organization-specific
+policy and private operational data outside the public repository.
 
 ## License
 
