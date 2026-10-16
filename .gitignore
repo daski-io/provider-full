@@ -7,3 +7,9 @@ coverage/
 # Agent-local work files.
 .claude/
 .codex/
+
+# Repository-wide agent instructions are private workspace material.
+# Public setup and contributor guidance belongs in README.md.
+AGENTS.md
+AGENT.md
+CLAUDE.md

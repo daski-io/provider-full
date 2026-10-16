@@ -1,3 +1,17 @@
+---
+title: "Daski provider agent skill"
+status: canonical
+authority: current repository implementation and approved maintainer workflow
+owner: repository maintainers
+effective-date: 2026-10-16
+last-verified: 2026-10-16 (documentation placement; no live release verification)
+supersedes: repository-wide agent files as the home of general repository guidance
+superseded-by: none
+sensitivity: public-safe
+related-repositories: daski-io/provider-full
+review-trigger: setup, architecture, interface or workflow change
+---
+
 # Daski provider agent skill
 
 The canonical portable skill is published only by the minimal
@@ -43,7 +57,7 @@ delivery are supported and are a different thing.
 
 ## Using the skill with provider-full
 
-Once `provider-full` is selected, this repository's `AGENTS.md` and tracked
+Once `provider-full` is selected, this repository's `README.md` and tracked
 `docs/` are authoritative. The installed skill is only the cross-repository
 router; it must not override the full `ServiceModule`, lifecycle, asset,
 protected-data, worker, or operations contracts documented here. Read
@@ -57,7 +71,7 @@ Recommended prompt:
 ```text
 Use the canonical Daski provider skill to choose the starter. We are already in
 provider-full because this product needs <full feature>. Read this repository's
-AGENTS.md and relevant docs completely before editing. Map only the reviewed
+README.md and relevant docs completely before editing. Map only the reviewed
 API/MCP operations, use fake-client tests, and stop before live product calls,
 signing, deployment, registration, funding, Mainnet changes, or pushes unless
 explicitly authorized.

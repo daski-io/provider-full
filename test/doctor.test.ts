@@ -66,6 +66,7 @@ describe("provider doctor", () => {
     const codes = new Map(report.checks.map((check) => [check.code, check.status]));
     expect(report.ok).toBe(false);
     expect(report.stage).toBe("mainnet");
+    expect(codes.get("REPOSITORY_LAYOUT")).toBe("pass");
     expect(codes.get("MAINNET_DUMMY_FORBIDDEN")).toBe("fail");
     expect(codes.get("MAINNET_WHITELIST_REQUIRED")).toBe("warn");
     expect(codes.get("DATABASE_REACHABLE")).toBe("fail");

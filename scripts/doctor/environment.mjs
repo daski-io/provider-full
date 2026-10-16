@@ -77,7 +77,7 @@ export function checkNode() {
 
 export async function checkRepository() {
   const required = [
-    "AGENTS.md",
+    "README.md",
     "package.json",
     "src/providerServices.ts",
     "src/registerGatewayServices.ts",
