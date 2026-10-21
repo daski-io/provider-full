@@ -370,6 +370,25 @@ All notable changes to this project will be documented here.
 
 ### Fixed
 
+- Paid-dispatch evidence no longer reads the splitter's history from its
+  activation block, which made every dispatch slower as its listing aged: a
+  first payout scanned every credit since activation and a later one first
+  searched forward from activation for release N - 1, one 10,000-block
+  `eth_getLogs` request at a time (about 90 sequential requests for a payout
+  three weeks after activation on Base). Verification now reads the
+  splitter's token balance and release sequence at the end of the block
+  before the deposit, then only the token credits from the deposit block to
+  its release: two state reads and, usually, one log request while the
+  deposit is within 10,000 blocks of its payout. A checkpoint sequence of
+  N - 1 starts the interval's accounting with that balance; a lower sequence
+  means release N - 1 is in the deposit block or later, where it is required
+  exactly and accounting continues strictly after it; any other sequence is
+  refused. Accepted amounts are unchanged: the splitter's reviewed code pays
+  out its whole balance on each release and moves the token at no other
+  time, and a simulated splitter history checks every deposit against the
+  previous full scan. Evidence RPC endpoints must answer state at the block
+  before the deposit, as they already do at the deposit block. See
+  [standard rail evidence V2](docs/standard-rail-evidence-v2.md).
 - A paid order whose `execute` throws after the service was called is signed
   failed only on proof: the service's own failed result, a supplier's typed
   rejection (`SupplierClientError` classified `supplier_rejected`) or the
