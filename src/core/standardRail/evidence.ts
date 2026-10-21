@@ -13,19 +13,15 @@ import {
 } from "viem";
 import { logWarn } from "../logger.js";
 import { assertExactKeys, canonicalHash, recipeNonce, recipeNonceV2 } from "./canonical.js";
-import { loadLogsPaged } from "./chainLogPagination.js";
 import { assertActivationCheckpoint } from "./evidenceCheckpoint.js";
-import {
-  selectPreviousRelease,
-  selectReleaseAtPosition,
-  type ReleasedLog,
-} from "./evidencePosition.js";
+import { selectReleaseAtPosition } from "./evidencePosition.js";
 import { hasRequiredConfirmations } from "./finality.js";
 import {
   assertDepositWithinQuoteWindow,
   selectDepositAuthorization,
 } from "./paymentBinding.js";
 import { verifyReleaseCoverage } from "./releaseCoverage.js";
+import { loadReleaseInterval } from "./releaseInterval.js";
 import {
   assertSplitterDeploymentProvenance,
   splitterEvidenceAbi,
@@ -367,45 +363,47 @@ export class ProviderEvidenceVerifier {
         releaseSequence <= startingSequence
       ) throw new Error("Evidence is not after the signed activation checkpoint");
 
-      let previousRelease: ReleasedLog | null = null;
-      let initialBalance: bigint;
-      let intervalFromBlock: bigint;
-      if (releaseSequence === startingSequence + 1n) {
-        initialBalance = BigInt(args.outcome.splitterStartingTokenBalance);
-        intervalFromBlock = activationBlock + 1n;
-      } else {
-        const previousCandidates = await loadLogsPaged({
-          fromBlock: activationBlock + 1n,
-          toBlock: releaseBlock,
-          maximumPageEvents: args.outcome.maximumLogPageEvents,
-          load: (fromBlock, toBlock) => client.getLogs({
+      const interval = await loadReleaseInterval({
+        release,
+        releaseSequence,
+        startingReleaseSequence: startingSequence,
+        depositBlock,
+        releaseBlock,
+        maximumPageEvents: args.outcome.maximumLogPageEvents,
+        reads: {
+          checkpoint: async (blockNumber) => {
+            const [tokenBalance, checkpointSequence] = await Promise.all([
+              client.readContract({
+                address: getAddress(args.outcome.token),
+                abi: erc20Abi,
+                functionName: "balanceOf",
+                args: [getAddress(args.outcome.splitter)],
+                blockNumber,
+              }),
+              client.readContract({
+                address: getAddress(args.outcome.splitter),
+                abi: splitterEvidenceAbi,
+                functionName: "releaseSequence",
+                blockNumber,
+              }),
+            ]);
+            return { tokenBalance, releaseSequence: checkpointSequence };
+          },
+          releases: (sequence, fromBlock, toBlock) => client.getLogs({
             address: getAddress(args.outcome.splitter),
             event: releasedEvent,
-            args: { releaseSequence: releaseSequence - 1n },
+            args: { releaseSequence: sequence },
             fromBlock,
             toBlock,
           }),
-        });
-        const selectedPrevious = selectPreviousRelease(
-          previousCandidates,
-          release,
-          releaseSequence - 1n,
-        );
-        previousRelease = selectedPrevious;
-        initialBalance = 0n;
-        intervalFromBlock = selectedPrevious.blockNumber!;
-      }
-      const credits = await loadLogsPaged({
-        fromBlock: intervalFromBlock,
-        toBlock: releaseBlock,
-        maximumPageEvents: args.outcome.maximumLogPageEvents,
-        load: (fromBlock, toBlock) => client.getLogs({
-          address: getAddress(args.outcome.token),
-          event: transferEvent,
-          args: { to: getAddress(args.outcome.splitter) },
-          fromBlock,
-          toBlock,
-        }),
+          credits: (fromBlock, toBlock) => client.getLogs({
+            address: getAddress(args.outcome.token),
+            event: transferEvent,
+            args: { to: getAddress(args.outcome.splitter) },
+            fromBlock,
+            toBlock,
+          }),
+        },
       });
       const receiptTransfers = parseEventLogs({
         abi: erc20Abi,
@@ -422,10 +420,10 @@ export class ProviderEvidenceVerifier {
         listingEpoch: BigInt(args.outcome.listingEpoch),
         policyVersionHash: args.outcome.policyVersionHash,
         listingCommitmentHash: args.outcome.listingCommitmentHash,
-        initialBalance,
-        previousRelease,
+        initialBalance: interval.initialBalance,
+        previousRelease: interval.previousRelease,
         release,
-        credits,
+        credits: interval.credits,
         receiptTransfers,
         deposit: {
           transactionHash: args.dispatch.settlementTxHash,

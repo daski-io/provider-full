@@ -1,3 +1,17 @@
+---
+title: "Standard rail evidence V2"
+status: canonical
+authority: current repository implementation and approved maintainer workflow
+owner: repository maintainers
+effective-date: 2026-10-21 (payout interval checkpoint); other sections unchanged
+last-verified: 2026-10-21 (payout interval against releaseInterval.ts and evidence.ts; no live release verification)
+supersedes: the payout interval scanned from the activation or a full search for release N - 1
+superseded-by: none
+sensitivity: public-safe
+related-repositories: daski-io/provider-full; daski-io/provider; daski-io/gateway; daski-io/contracts
+review-trigger: evidence verification, splitter contract or gateway evidence change
+---
+
 # Standard rail evidence V2
 
 The provider accepts only StandardRailDispatchV2 envelopes with schema version
@@ -64,12 +78,28 @@ Every outcome pins a finalized end-of-block checkpoint:
 - splitterStartingTokenBalance
 - splitterStartingReleaseSequence
 
-Deposits and releases must be in blocks strictly after activation. For the
-first release, scanning begins at activationBlockNumber + 1, the sequence must
-equal startingReleaseSequence + 1, and accounting begins with the signed
-starting balance. Later releases require the exact N - 1 release, scan strictly
-after its position, and compute the interval gross amount from zero. Validation
-is interval-based: it does not rely on a cumulative gross value or an
+Deposits and releases must be in blocks strictly after activation, and the
+release sequence N must exceed startingReleaseSequence. Accounting starts at a
+second end-of-block checkpoint, read from the selected evidence source at the
+block before the deposit: the splitter's canonical-token balance and its
+releaseSequence. The splitter's reviewed runtime code pays out its whole
+balance on each release, moves the token at no other time and numbers releases
+one by one, so:
+
+- A checkpoint sequence of N - 1 (startingReleaseSequence for the first
+  release) means no release happened between the checkpoint and release N.
+  Accounting begins with the checkpoint balance, which is the signed starting
+  balance or zero plus every credit since the activation or release N - 1, and
+  scanning begins at the deposit block.
+- A checkpoint sequence from startingReleaseSequence to N - 2 puts release
+  N - 1 in the deposit block or later. The exact N - 1 release must appear once
+  between the deposit block and release N; scanning continues strictly after
+  its position and the interval gross amount is computed from zero.
+- Any other checkpoint sequence is rejected.
+
+The scan therefore covers the deposit block through the release block,
+however old the listing or long since its previous release. Validation is
+interval-based: it does not rely on a cumulative gross value or an
 end-of-release-block balance snapshot.
 
 maximumLogPageEvents is a per-RPC-page density target. Dense multi-block
