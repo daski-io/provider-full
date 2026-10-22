@@ -370,6 +370,11 @@ All notable changes to this project will be documented here.
 
 ### Fixed
 
+- The image's Node base moves from 24.18.0 to 24.22.1
+  (`node:24-bookworm-slim@sha256:55fb5f5a…`), the 2026-10-21 security
+  release. Its four high-severity fixes include an out-of-bounds write in the
+  Brotli decoder (CVE-2026-111497) and TLS hostname checks that accepted
+  non-canonical IP addresses. 24.18.0 had also missed 24.18.1 (2026-07-29).
 - Paid-dispatch evidence no longer reads the splitter's history from its
   activation block, which made every dispatch slower as its listing aged: a
   first payout scanned every credit since activation and a later one first
