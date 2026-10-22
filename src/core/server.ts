@@ -112,8 +112,12 @@ export function createProviderApp(
   });
   // Reject abusive authentication and webhook traffic before allocating
   // memory to JSON parsing. SIWE additionally uses a much smaller parser.
+  // No parser inflates a compressed body: body-parser would run zlib (gzip,
+  // deflate or brotli) on unauthenticated bytes before any route or
+  // authentication check, so a compressed body is refused with 415 instead.
+  // `npm run lint:architecture` holds every body parser in src/ to this.
   app.use("/admin/ui/login", authLimiter);
-  app.use("/admin/ui/login/verify", express.json({ limit: "16kb" }));
+  app.use("/admin/ui/login/verify", express.json({ limit: "16kb", inflate: false }));
   app.use("/webhooks", webhookLimiter);
   // Capture the raw request body alongside the parsed JSON. The Postmark
   // inbound webhook verifies an optional HMAC over the exact bytes
@@ -138,12 +142,14 @@ export function createProviderApp(
     "/a2a",
     express.json({
       limit: `${config.A2A_MAX_BODY_BYTES}b`,
+      inflate: false,
       verify: captureRawBody,
     }),
   );
   app.use(
     express.json({
       limit: "1mb",
+      inflate: false,
       verify: captureRawBody,
     }),
   );
@@ -240,6 +246,11 @@ export function createProviderApp(
     const status = (err as { status?: number }).status;
     if (status === 413) {
       res.status(413).json({ error: "request_too_large" });
+      return;
+    }
+    // A JSON parser refused a compressed body or a charset other than UTF-8.
+    if (status === 415) {
+      res.status(415).json({ error: "uncompressed_application_json_required" });
       return;
     }
     res.status(500).json({ error: "internal_error" });
