@@ -370,6 +370,21 @@ All notable changes to this project will be documented here.
 
 ### Fixed
 
+- No JSON parser decompresses a request body any more. The catch-all, `/a2a`
+  and `/admin/ui/login/verify` parsers inflated gzip, deflate and brotli
+  bodies before any route or authentication check, which put Node's Brotli
+  decoder (CVE-2026-111497, fixed by the 24.22.1 runtime) within reach of
+  unauthenticated requests; they now refuse a compressed body, as the
+  standard-rail ingress and the Postmark webhook already did. A
+  compressed body, or a JSON charset other than UTF-8, answers 415
+  `uncompressed_application_json_required` instead of 500 `internal_error`,
+  and `npm run lint:architecture` fails on any body parser in `src/` that
+  does not set `inflate: false`.
+- The image's Node base moves from 24.18.0 to 24.22.1
+  (`node:24-bookworm-slim@sha256:55fb5f5a…`), the 2026-10-21 security
+  release. Its four high-severity fixes include an out-of-bounds write in the
+  Brotli decoder (CVE-2026-111497) and TLS hostname checks that accepted
+  non-canonical IP addresses. 24.18.0 had also missed 24.18.1 (2026-07-29).
 - Paid-dispatch evidence no longer reads the splitter's history from its
   activation block, which made every dispatch slower as its listing aged: a
   first payout scanned every credit since activation and a later one first

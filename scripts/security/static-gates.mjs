@@ -256,6 +256,58 @@ for (const file of sourceFiles) {
     failures.push(`${path} verifies a typed-data signature outside the bounded payer verifier`);
   }
 }
+// No body parser inflates a request. With inflation on, body-parser runs zlib
+// (gzip, deflate or brotli) on unauthenticated bytes before any route or
+// authentication check; CVE-2026-111497 was an out-of-bounds write in Node's
+// Brotli decoder reachable that way. Each parser states `inflate: false` at
+// its call, and nothing imports the parsers by another name.
+const bodyParsers = new Set(["json", "raw", "text", "urlencoded"]);
+for (const file of sourceFiles) {
+  const path = projectPath(file);
+  if (!file.endsWith(".ts") || path.includes("/tests/") || path.endsWith(".test.ts")) continue;
+  const sourceFile = ts.createSourceFile(
+    path,
+    readFileSync(file, "utf8"),
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  function visit(node) {
+    if (
+      ts.isImportDeclaration(node)
+      && ts.isStringLiteral(node.moduleSpecifier)
+      && (node.moduleSpecifier.text === "body-parser"
+        || (node.moduleSpecifier.text === "express"
+          && node.importClause?.namedBindings
+          && ts.isNamedImports(node.importClause.namedBindings)
+          && node.importClause.namedBindings.elements.some((element) =>
+            bodyParsers.has((element.propertyName ?? element.name).text))))
+    ) {
+      failures.push(`${path} imports a body parser; use express.json() with inflate: false`);
+    }
+    if (
+      ts.isCallExpression(node)
+      && ts.isPropertyAccessExpression(node.expression)
+      && ts.isIdentifier(node.expression.expression)
+      && node.expression.expression.text === "express"
+      && bodyParsers.has(node.expression.name.text)
+    ) {
+      const options = node.arguments[0];
+      const inflate = options && ts.isObjectLiteralExpression(options)
+        ? options.properties.find((property) =>
+          ts.isPropertyAssignment(property)
+          && (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name))
+          && property.name.text === "inflate")
+        : undefined;
+      if (inflate?.initializer.kind !== ts.SyntaxKind.FalseKeyword) {
+        const { line } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
+        failures.push(`${path}:${line + 1} body parser must set inflate: false`);
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(sourceFile);
+}
 // Asset ownership resolves only through the single owner authority, and
 // owner-only work is admitted, and its results persisted and released,
 // under the asset owner fence. No owner-changing path ships: a fork that
