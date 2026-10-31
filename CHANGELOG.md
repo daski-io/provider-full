@@ -4,6 +4,26 @@ All notable changes to this project will be documented here.
 
 ## Unreleased
 
+### Security
+
+- zod moves from 3.25 to 4.6.7: every zod 3 release is affected by
+  GHSA-mrhx-c7xc-m3w5 (high, memory exhaustion while validating oversized
+  constrained collections). Zod 4 is stricter about configuration, so check a
+  fork's settings before it boots:
+  - It refuses `Infinity` for numeric settings such as `PORT` and the
+    `RATE_LIMIT_*` limits.
+  - It refuses integers above 2^53-1 for whole-number settings such as
+    `RATE_LIMIT_GLOBAL_CAPACITY`.
+  - Configuration error text changes, which matters to a fork that matches
+    it in logs.
+  - A fork's own zod schemas and error handling must follow the zod 4
+    migration: for example `error.errors` is gone, and `required_error` and
+    `errorMap` are ignored.
+  - openai 4's optional zod peer is overridden to the same zod. The starter
+    uses none of its zod helpers, and a fork must not use `openai/helpers/zod`
+    on openai 4: with zod 4 they send OpenAI the wrong schema without an error.
+  No schema, wire or provider protocol change in the starter.
+
 ### Added
 
 - [Wrapping a product that returns a job id](docs/existing-async-products.md):
