@@ -4,6 +4,16 @@ All notable changes to this project will be documented here.
 
 ## Unreleased
 
+### Security
+
+- zod moves from 3.25 to 4.6.7: every zod 3 release is affected by
+  GHSA-mrhx-c7xc-m3w5 (high, memory exhaustion while validating oversized
+  constrained collections). Zod 4 is stricter about configuration, so check a
+  fork's settings: it refuses `Infinity` for numeric settings such as `PORT`,
+  and it can refuse URL and email values zod 3 accepted. openai 4's optional
+  zod peer is overridden to the same zod; the starter uses none of its zod
+  helpers. No schema, wire or provider protocol change.
+
 ### Added
 
 - [Wrapping a product that returns a job id](docs/existing-async-products.md):
