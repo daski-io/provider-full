@@ -72,6 +72,6 @@
     "js-yaml": "4.3.2",
     "nanoid": "3.3.18",
     "postcss": "^8.5.23",
-    "minimatch": "^10.2.5"
+    "minimatch": "^11.0.3"
   }
 }
