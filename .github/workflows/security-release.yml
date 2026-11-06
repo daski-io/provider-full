@@ -1,6 +1,10 @@
 name: security-release
 
 on:
+  # GitHub's merge queue retests each pull request on top of develop and the
+  # pull requests queued ahead of it, then merges only if this run passes.
+  merge_group:
+    types: [checks_requested]
   pull_request:
   push:
     branches: [develop, main]
