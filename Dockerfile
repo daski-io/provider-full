@@ -1,6 +1,16 @@
 # syntax=docker/dockerfile:1
 ARG NODE_IMAGE=node:24-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205
-FROM ${NODE_IMAGE} AS builder
+FROM ${NODE_IMAGE} AS base
+# Debian security updates for PCRE2, Perl and APT that the pinned Node image
+# predates. The versions are exact so an image scan sees what was installed;
+# raise them when Debian supersedes one (the build then fails to resolve it)
+# or drop them once the Node image pin carries them.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libpcre2-8-0=10.42-1+deb12u2 perl-base=5.36.0-7+deb12u4 \
+    apt=2.6.2 libapt-pkg6.0=2.6.2 \
+ && rm -rf /var/lib/apt/lists/*
+
+FROM base AS builder
 WORKDIR /app
 
 COPY package.json package-lock.json ./
@@ -17,7 +27,7 @@ RUN SOURCE_COMMIT="${SOURCE_COMMIT}" npm run build
 
 RUN npm prune --omit=dev
 
-FROM ${NODE_IMAGE} AS runtime
+FROM base AS runtime
 WORKDIR /app
 
 LABEL org.opencontainers.image.source="https://github.com/daski-io/provider-full" \

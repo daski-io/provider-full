@@ -6,6 +6,12 @@ All notable changes to this project will be documented here.
 
 ### Security
 
+- The image installs Debian security updates the pinned Node base image
+  predates: PCRE2 (`libpcre2-8-0` 10.42-1+deb12u2), Perl (`perl-base`
+  5.36.0-7+deb12u4) and APT (`apt` and `libapt-pkg6.0` 2.6.2, including the
+  high-severity CVE-2026-109518). A shared `base` stage on the same pinned
+  digest applies them, and both the builder and runtime stages build from it.
+  No source, schema or configuration change.
 - zod moves from 3.25 to 4.6.7: every zod 3 release is affected by
   GHSA-mrhx-c7xc-m3w5 (high, memory exhaustion while validating oversized
   constrained collections). Zod 4 is stricter about configuration, so check a
