@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { getAddress, recoverMessageAddress, type Address, type Hex } from "viem";
+import { recoverMessageAddress, type Address, type Hex } from "viem";
 import {
   assertExactKeys,
   assertNoDuplicateJsonKeys,
@@ -9,6 +9,7 @@ import {
 } from "./canonical.js";
 import type { CursorKeyRing } from "./cursor.js";
 import type { ProviderStandardRailConfig } from "./config.js";
+import { artifactGatewaySigners, trustsGatewaySigner } from "./gatewaySigners.js";
 import type { SignedEnvelope } from "./types.js";
 import { compileProviderSchema, validateProviderRequest } from "./schema.js";
 import type {
@@ -134,7 +135,7 @@ async function verifyReleaseEnvelope<T>(args: {
   } catch {
     throw new Error(`${args.artifactType} signature is invalid`);
   }
-  if (getAddress(recovered) !== args.standard.gatewayDispatchSigner) {
+  if (!trustsGatewaySigner(artifactGatewaySigners(args.standard), recovered)) {
     throw new Error(`${args.artifactType} signature is invalid`);
   }
 }

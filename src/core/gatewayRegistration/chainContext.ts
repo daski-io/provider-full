@@ -4,6 +4,7 @@ import type { ServiceRow } from "../db/queries/services.js";
 import { finalizedReadBlockNumber } from "../chain/finality.js";
 import { identityRegistryAbi, serviceRegistryAbi } from "../chain/abis.js";
 import { providerAddress, publicClient } from "../chain/client.js";
+import { parseGatewaySigners, registrationGatewaySigners } from "../standardRail/gatewaySigners.js";
 import type { PublishedServiceContract, RegistrationPolicy } from "./types.js";
 import {
   fetchBoundedJson,
@@ -40,10 +41,13 @@ export interface RegistrationContext {
   serviceUriHealPending: boolean;
 }
 
-export function gatewaySigner(): Address {
-  const raw = process.env.STANDARD_RAIL_GATEWAY_SIGNER;
-  if (!raw) throw new Error("STANDARD_RAIL_GATEWAY_SIGNER is required");
-  return getAddress(raw);
+/**
+ * Registration artifacts come back from the gateway at registration time: new
+ * ones carry the current key, reused ones the key they were prepared under, so
+ * every configured gateway signer is trusted for them.
+ */
+export function gatewaySigners(): readonly Address[] {
+  return registrationGatewaySigners(parseGatewaySigners(process.env));
 }
 
 async function loadPolicy(gatewayOrigin: string): Promise<RegistrationPolicy> {

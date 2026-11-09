@@ -105,7 +105,7 @@ async function verifyControlProfile(args: {
   registrationId: string;
   providerAgentId: string;
   policy: RegistrationPolicy;
-  gatewaySigner: Address;
+  gatewaySigners: readonly Address[];
 }): Promise<void> {
   const action = args.skill.contract.assetAction;
   const profile = args.listing.controlProfile;
@@ -118,7 +118,7 @@ async function verifyControlProfile(args: {
     envelope: profile,
     artifactType: "GatewaySkillControlProfileV1",
     policy: args.policy,
-    gatewaySigner: args.gatewaySigner,
+    gatewaySigners: args.gatewaySigners,
   });
   const payload = profile.payload;
   requireMatches(
@@ -163,7 +163,7 @@ async function verifyPaidPreparation(args: {
   providerAgentId: string;
   providerPayee: Address;
   policy: RegistrationPolicy;
-  gatewaySigner: Address;
+  gatewaySigners: readonly Address[];
   publicClient: any;
   finalizedBlock: bigint;
 }): Promise<void> {
@@ -175,7 +175,7 @@ async function verifyPaidPreparation(args: {
     envelope: preparation,
     artifactType: "GatewayListingPreparationV1",
     policy: args.policy,
-    gatewaySigner: args.gatewaySigner,
+    gatewaySigners: args.gatewaySigners,
   });
   const payload = preparation.payload;
   const commitmentHash = canonicalHash(preparation);
@@ -255,7 +255,7 @@ export async function verifyPreparedRegistration(args: {
   providerPayee: Address;
   serviceWallet: Address;
   policy: RegistrationPolicy;
-  gatewaySigner: Address;
+  gatewaySigners: readonly Address[];
   publicClient: any;
   finalizedBlock: bigint;
   /**
@@ -328,7 +328,7 @@ export async function verifyPreparedRegistration(args: {
       registrationId: args.view.registrationId,
       providerAgentId: args.providerAgentId,
       policy: args.policy,
-      gatewaySigner: args.gatewaySigner,
+      gatewaySigners: args.gatewaySigners,
     });
     if (listing.paymentRequired) {
       await verifyPaidPreparation({
@@ -340,7 +340,7 @@ export async function verifyPreparedRegistration(args: {
         providerAgentId: args.providerAgentId,
         providerPayee: args.providerPayee,
         policy: args.policy,
-        gatewaySigner: args.gatewaySigner,
+        gatewaySigners: args.gatewaySigners,
         publicClient: args.publicClient,
         finalizedBlock: args.finalizedBlock,
       });

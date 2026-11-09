@@ -70,6 +70,7 @@ export class ProviderAssetActionService {
       chainId: this.chainId,
       providerAudience: this.standard.providerAudience,
       gatewayLifecycleSigner: this.standard.gatewayLifecycleSigner,
+      gatewayPreviousSigner: this.standard.gatewayPreviousSigner,
     });
     const walletHash = await verifyWalletAuthorization({
       authorization: body.authorization,

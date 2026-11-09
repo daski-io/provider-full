@@ -24,6 +24,7 @@ import { signedDispatchSnapshot, type DispatchSnapshotV1 } from "./dispatchRespo
 import { ORDER_ID, verifyDispatchEnvelope } from "./dispatchVerification.js";
 import { ProviderEvidenceVerifier } from "./evidence.js";
 import { verifyGatewayEnvelope } from "./gatewayEnvelope.js";
+import { runtimeGatewaySigners } from "./gatewaySigners.js";
 import { recordStandardSecurityIncident } from "./incidents.js";
 import type { DispatchStatusQueryV1 } from "./types.js";
 
@@ -65,7 +66,7 @@ export class StandardDispatchService {
       environment: this.config.environment,
       chainId: this.chainId,
       audience: this.config.providerAudience,
-      signer: this.config.gatewayDispatchSigner,
+      signers: runtimeGatewaySigners(this.config.gatewayDispatchSigner, this.config.gatewayPreviousSigner),
       lifetime: { maxRemainingSeconds: 120, maxAgeSeconds: 120 },
     }).catch((error: unknown) => { throw DispatchStatusError.rejected(error); });
     const query = envelope.payload;

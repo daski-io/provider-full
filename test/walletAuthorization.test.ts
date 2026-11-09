@@ -269,6 +269,37 @@ describe("standard wallet authorization", () => {
     }
   });
 
+  it("accepts a rotated-out gateway signer only while it is configured as previous", async () => {
+    const payload = grantPayload(walletAuthorizationHash(message(), chainId));
+    const rotated = privateKeyToAccount(
+      "0x4000000000000000000000000000000000000000000000000000000000000004",
+    );
+    const base = {
+      environment: "test",
+      chainId,
+      providerAudience: "provider-audience",
+      gatewayLifecycleSigner: rotated.address,
+      now,
+    };
+    const fromPrevious = await signedGrant(payload, gateway);
+    await expect(verifyProviderGrant({ ...base, envelope: fromPrevious })).rejects.toThrow(/denied/);
+    await expect(verifyProviderGrant({
+      ...base,
+      gatewayPreviousSigner: gateway.address,
+      envelope: fromPrevious,
+    })).resolves.toBe(unsignedEnvelopeHash(fromPrevious as unknown as Record<string, unknown>));
+    await expect(verifyProviderGrant({
+      ...base,
+      gatewayPreviousSigner: gateway.address,
+      envelope: await signedGrant(payload, rotated),
+    })).resolves.toMatch(/^0x[0-9a-f]{64}$/);
+    await expect(verifyProviderGrant({
+      ...base,
+      gatewayPreviousSigner: gateway.address,
+      envelope: await signedGrant(payload, attacker),
+    })).rejects.toThrow(/denied/);
+  });
+
   it("derives an execution id from every immutable action binding", () => {
     const value = message();
     const first = deriveActionExecutionId({

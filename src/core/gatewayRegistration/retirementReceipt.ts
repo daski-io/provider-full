@@ -1,6 +1,7 @@
-import { getAddress, type Address, type Hex } from "viem";
+import type { Address, Hex } from "viem";
 import { assertExactKeys } from "../standardRail/canonical.js";
 import { verifyGatewayEnvelope } from "../standardRail/gatewayEnvelope.js";
+import { parseGatewaySigners, runtimeGatewaySigners } from "../standardRail/gatewaySigners.js";
 
 /*
  * The gateway's proof that one listing version's dispatch obligations ended:
@@ -28,7 +29,11 @@ export interface RetirementReceiptDomain {
   environment: string;
   chainId: number;
   providerAudience: string;
-  gatewaySigner: Address;
+  /**
+   * A receipt is a runtime envelope, re-signed on every read: the current
+   * gateway signer and, during a key rotation, the previous one.
+   */
+  gatewaySigners: readonly Address[];
 }
 
 /** The gateway re-signs a receipt for one day on each read. */
@@ -40,16 +45,16 @@ const REQUEST_ID = /^[A-Za-z0-9._:-]{8,128}$/;
 export function retirementReceiptDomain(env: NodeJS.ProcessEnv = process.env): RetirementReceiptDomain {
   const chainId = Number(env.CHAIN_ID);
   if (chainId !== 8453 && chainId !== 84532) throw new Error("CHAIN_ID must identify Base");
-  const signer = env.STANDARD_RAIL_GATEWAY_SIGNER?.trim();
   const audience = env.STANDARD_RAIL_PROVIDER_AUDIENCE?.trim() || env.BASE_URL?.trim();
-  if (!signer || !audience) {
+  if (!env.STANDARD_RAIL_GATEWAY_SIGNER?.trim() || !audience) {
     throw new Error("STANDARD_RAIL_GATEWAY_SIGNER and the provider audience are required to verify a retirement");
   }
+  const signers = parseGatewaySigners(env);
   return {
     environment: env.STANDARD_RAIL_ENVIRONMENT?.trim() || (chainId === 8453 ? "mainnet" : "testnet"),
     chainId,
     providerAudience: audience,
-    gatewaySigner: getAddress(signer),
+    gatewaySigners: runtimeGatewaySigners(signers.current, signers.previous),
   };
 }
 
@@ -67,7 +72,7 @@ export async function verifyRetirementReceipt(
     environment: domain.environment,
     chainId: domain.chainId,
     audience: domain.providerAudience,
-    signer: domain.gatewaySigner,
+    signers: domain.gatewaySigners,
     lifetime: { maxRemainingSeconds: RECEIPT_MAX_REMAINING_SECONDS },
   }, now);
   const payload = envelope.payload;

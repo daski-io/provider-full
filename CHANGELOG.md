@@ -26,6 +26,17 @@ All notable changes to this project will be documented here.
 
 ### Added
 
+- Gateway signer rotation without re-signing anything already signed. The
+  optional `STANDARD_RAIL_GATEWAY_SIGNER_PREVIOUS` keeps the previous signer
+  accepted for runtime envelopes (quote and intake requests, quotes,
+  dispatches, status queries, lifecycle and wallet-action grants, retirement
+  receipts) while the gateway switches keys. The optional
+  `STANDARD_RAIL_GATEWAY_ARTIFACT_SIGNERS` names the signers of the release
+  artifacts the provider carries (global rail policy, servicing admission,
+  asset-action catalog); gateway registration artifacts are accepted from any
+  configured signer. Unset, both default to `STANDARD_RAIL_GATEWAY_SIGNER`,
+  which is what the provider trusted before, and `STANDARD_RAIL_GATEWAY_SIGNER`
+  must now be a non-zero address. No schema, wire or signed-artifact change.
 - [Wrapping a product that returns a job id](docs/existing-async-products.md):
   a journaled, reconcilable submission, a durable lease-based poll worker,
   readiness and wait supervision, the pending, overdue and failed

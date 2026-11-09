@@ -5,6 +5,7 @@ import { assertExactKeys, canonicalHash, SIGNED_ENVELOPE_KEYS, unsignedEnvelopeH
 import type { ProviderStandardRailConfig } from "./config.js";
 import { DispatchRejectedError, withDispatchRejection } from "./dispatchErrors.js";
 import { GATEWAY_CLOCK_SKEW_SECONDS } from "./gatewayEnvelope.js";
+import { runtimeGatewaySigners, trustsGatewaySigner } from "./gatewaySigners.js";
 import { assertQuoteWindowPolicy } from "./paymentBinding.js";
 import { MAX_FIRST_DISPATCH_QUOTE_AGE_SECONDS } from "./quoteRetention.js";
 import { loadProviderQuote, providerQuoteHash, type StoredProviderQuote } from "./quoteStore.js";
@@ -50,7 +51,9 @@ export async function assertForwardedQuoteIntegrity(args: {
     message: { raw: unsignedEnvelopeHash(envelope as unknown as Record<string, unknown>) },
     signature: envelope.signature,
   }));
-  if (getAddress(recovered) !== args.config.gatewayQuoteSigner) {
+  if (!trustsGatewaySigner(
+    runtimeGatewaySigners(args.config.gatewayQuoteSigner, args.config.gatewayPreviousSigner), recovered,
+  )) {
     throw new DispatchRejectedError("signature", "Quote signature is invalid");
   }
 }
@@ -96,7 +99,7 @@ export async function verifyGatewayQuote(args: {
     message: { raw: unsignedEnvelopeHash(envelope as unknown as Record<string, unknown>) },
     signature: envelope.signature,
   }));
-  if (getAddress(recovered) !== config.gatewayQuoteSigner) {
+  if (!trustsGatewaySigner(runtimeGatewaySigners(config.gatewayQuoteSigner, config.gatewayPreviousSigner), recovered)) {
     throw new DispatchRejectedError("signature", "Quote signature is invalid");
   }
   const quote = envelope.payload;

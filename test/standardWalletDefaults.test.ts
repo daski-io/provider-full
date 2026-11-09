@@ -104,6 +104,8 @@ function standard(): ProviderStandardRailConfig {
     gatewayDispatchSigner: gateway.address,
     gatewayQuoteSigner: gateway.address,
     gatewayLifecycleSigner: gateway.address,
+    gatewayPreviousSigner: null,
+    gatewayArtifactSigners: [gateway.address],
     providerAuthorityKey: provider.address,
     providerAuthorityPrivateKey: providerKey,
     terminalAttestationPrivateKey: providerKey,

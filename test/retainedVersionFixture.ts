@@ -214,7 +214,8 @@ export function retirementReceipt(listingManifestHash: Hex, options: { privateKe
 }
 
 export const RECEIPT_DOMAIN = {
-  environment: ENVIRONMENT, chainId: CHAIN_ID, providerAudience: PROVIDER_AUDIENCE, gatewaySigner: testGatewaySigner,
+  environment: ENVIRONMENT, chainId: CHAIN_ID, providerAudience: PROVIDER_AUDIENCE,
+  gatewaySigners: [testGatewaySigner],
 };
 
 /** A read-capability status call through the gateway's lifecycle grant. */

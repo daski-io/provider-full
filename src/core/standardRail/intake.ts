@@ -8,6 +8,7 @@ import type { IntakeDetail } from "../serviceRegistry/types.js";
 import { canonicalHash } from "./canonical.js";
 import type { ProviderStandardRailConfig } from "./config.js";
 import { verifyGatewayEnvelope } from "./gatewayEnvelope.js";
+import { runtimeGatewaySigners } from "./gatewaySigners.js";
 import {
   assertBoundedJsonValue,
   INTAKE_RESPONSE_JSON_BUDGET,
@@ -73,7 +74,7 @@ export async function describeIntake(args: {
     environment: config.environment,
     chainId: args.chainId,
     audience: config.providerAudience,
-    signer: config.gatewayDispatchSigner,
+    signers: runtimeGatewaySigners(config.gatewayDispatchSigner, config.gatewayPreviousSigner),
     lifetime: { maxRemainingSeconds: 120, maxAgeSeconds: 120 },
   }).catch((error: unknown) => { throw quoteEnvelopeRefusal(error); });
   const payload = envelope.payload;

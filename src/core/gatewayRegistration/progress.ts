@@ -3,7 +3,7 @@ import { config } from "../config.js";
 import type { ServiceRow } from "../db/queries/services.js";
 import { publicClient } from "../chain/client.js";
 import { canonicalHash } from "../standardRail/canonical.js";
-import { gatewaySigner, type RegistrationContext } from "./chainContext.js";
+import { gatewaySigners, type RegistrationContext } from "./chainContext.js";
 import {
   GatewayRegistrationEndedError,
   awaitActivation,
@@ -62,7 +62,7 @@ export async function verifyRegistrationView(
     providerPayee: context.providerPayee,
     serviceWallet: getAddress(context.record.serviceWallet),
     policy: context.policy,
-    gatewaySigner: gatewaySigner(),
+    gatewaySigners: gatewaySigners(),
     publicClient,
     finalizedBlock: context.finalizedBlock,
     checkAvailability: options.freshPreparation === true,
