@@ -423,6 +423,27 @@ ago and is far outside that live window. It never removes an admission left
 open (its send never resolved), nor one whose asset still has a nonterminal
 asset action or owner-only order, or is under a legal hold.
 
+### Actions parked in attention
+
+An asset action that fails unexpectedly after its claim is parked in
+`attention`; the catch-all first logs the error class and a bounded message,
+never the request input, the result or the payer, and logs a failed
+attention transition instead of swallowing it. An execution in `attention`
+counts as active work and only a Review resumes it: a buyer replay of the
+same signed request is refused, and its wallet authorization and gateway
+grant expire within 330 seconds. The five-minute security cleanup
+(`src/core/standardRail/actionAttentionSweep.ts`) therefore closes
+read-only ones that nothing owns: actions of the current catalog that are
+non-destructive and installed with the `read` effect, created and last
+changed more than an hour ago, with no Review, open durable job, unresolved
+supplier operation, order or staged confirmation. Under the task lock, the
+asset owner fence and row locks it re-checks each, marks the execution
+`failed` (`provider_failed`) and the task `failed`, and records
+`asset_action.failed`. It calls no supplier, and a sweep failure is logged
+without failing the cleanup run or readiness. Mutating and destructive
+executions, and definitions retained from earlier catalogs, are never swept:
+their supplier outcome or effect may be unknown.
+
 ### Owner changes
 
 The starter ships no path that changes an owner, and the architecture gate

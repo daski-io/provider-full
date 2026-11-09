@@ -51,6 +51,10 @@ import { loadProviderWalletConfig } from "./core/standardRail/walletConfig.js";
 import { retainAdmittedActionDefinitions } from "./core/standardRail/actionDefinitions.js";
 import { startReputationOutcomeWorker } from "./core/standardRail/reputationOutcome.js";
 import { deriveProviderLaunchPolicy } from "./core/standardRail/launchPolicy.js";
+import {
+  configureStuckReadActionSweep,
+  readOnlyActionDefinitionHashes,
+} from "./core/standardRail/actionAttentionSweep.js";
 import { startStandardReviewResolutionWorker } from "./core/standardRail/reviewResolutionWorker.js";
 import { startPaidFulfillmentWorker } from "./core/standardRail/paidFulfillmentWorker.js";
 import { installOutboundFailureLog } from "./core/observability/outboundFailureLog.js";
@@ -103,6 +107,9 @@ async function main(): Promise<void> {
   // Executions admitted under this catalog stay executable under it after
   // the catalog moves to a new epoch.
   await retainAdmittedActionDefinitions(walletConfig);
+  // The auth-cleanup sweep closes stuck read-only actions of this verified
+  // catalog only (actionAttentionSweep.ts).
+  configureStuckReadActionSweep(readOnlyActionDefinitionHashes(walletConfig, providerLaunchPolicy));
   // Validate this build against durable state before serving: every listing
   // version and admitted action it still owes needs a handler and a key.
   const servicing = await checkRetainedServicing(standardRailConfig);

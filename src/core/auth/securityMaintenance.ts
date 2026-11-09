@@ -1,10 +1,11 @@
 import { purgeExpiredAuthState } from "../db/queries/authSecurity.js";
 import { purgeExpiredSessions } from "../db/queries/sessions.js";
-import { logError, logInfo } from "../logger.js";
+import { errorClassExtra, logError, logInfo } from "../logger.js";
 import { workerCycleFailed, workerCycleSucceeded } from "../observability/workerConditions.js";
 import { failWorker, heartbeatWorker, setWorkerStatus } from "../health.js";
 import { classifyStaleConfirmationExecutions } from "../db/queries/confirmationIntents.js";
 import { expireDestructiveAssetActions } from "../standardRail/actionCompletion.js";
+import { failStuckReadAssetActions } from "../standardRail/actionAttentionSweep.js";
 
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -17,6 +18,16 @@ export async function runAuthSecurityCleanup(): Promise<Record<string, number>> 
     purgeExpiredAuthState(),
     expireDestructiveAssetActions(),
   ]);
+  // After the expiry pass, which can park an overdue executing row first.
+  // Optional housekeeping: a failure is logged and reported as -1, never
+  // allowed to fail the cleanup run (and with it the auth-cleanup worker and
+  // provider readiness).
+  let stuckReadActionsFailed = -1;
+  try {
+    stuckReadActionsFailed = await failStuckReadAssetActions();
+  } catch (error) {
+    logError("Stuck read-only asset action sweep failed", errorClassExtra(error));
+  }
   return {
     sessions,
     siweNonces: auth.siweNonces,
@@ -25,6 +36,7 @@ export async function runAuthSecurityCleanup(): Promise<Record<string, number>> 
     staleConfirmationExecutions,
     destructiveActionsExpired: destructive.expired,
     destructiveActionsAttention: destructive.attention,
+    stuckReadActionsFailed,
   };
 }
 
