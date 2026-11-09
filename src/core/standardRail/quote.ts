@@ -10,6 +10,7 @@ import { canonicalHash } from "./canonical.js";
 import type { ProviderStandardRailConfig } from "./config.js";
 import type { ContractIntegrityCheck } from "./contractIntegrity.js";
 import { verifyGatewayEnvelope } from "./gatewayEnvelope.js";
+import { runtimeGatewaySigners } from "./gatewaySigners.js";
 import { describeIntake, requestMatchesHash } from "./intake.js";
 import { assertBoundedJsonValue, REQUEST_JSON_BUDGET } from "./jsonBounds.js";
 import { QuoteRefusedError, quoteEnvelopeRefusal, requestInvalid } from "./quoteErrors.js";
@@ -101,7 +102,7 @@ export class StandardQuoteService {
       environment: this.config.environment,
       chainId: this.chainId,
       audience: this.config.providerAudience,
-      signer: this.config.gatewayDispatchSigner,
+      signers: runtimeGatewaySigners(this.config.gatewayDispatchSigner, this.config.gatewayPreviousSigner),
       lifetime: { maxRemainingSeconds: 120, maxAgeSeconds: 120 },
     }).catch((error: unknown) => { throw quoteEnvelopeRefusal(error); });
     const args = envelope.payload;

@@ -61,3 +61,20 @@ export function errorExtra(err: unknown, more?: Extra): Extra {
   const e = err instanceof Error ? err : new Error(String(err));
   return sanitizeLogValue({ error: e.message, stack: e.stack, ...(more ?? {}) }) as Extra;
 }
+
+// The caught value's class and a bounded message, without its stack: for
+// paths that must say why something failed but log nothing of the work's
+// own data. The emitted line is sanitized like every other.
+// It never throws, whatever was thrown: callers use it inside catch blocks.
+export function errorClassExtra(err: unknown, maxLength = 300): { errorClass: string; error: string } {
+  try {
+    if (!(err instanceof Error)) return { errorClass: typeof err, error: "non-error value thrown" };
+    const ctor = typeof err.constructor?.name === "string" ? err.constructor.name : "";
+    const name = typeof err.name === "string" ? err.name : "Error";
+    const errorClass = ctor && ctor !== "Error" && ctor !== "Object" ? ctor : name;
+    const message = typeof err.message === "string" ? err.message : String(err.message ?? "");
+    return { errorClass, error: message.slice(0, maxLength) };
+  } catch {
+    return { errorClass: "unknown", error: "error could not be described" };
+  }
+}

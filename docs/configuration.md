@@ -155,7 +155,9 @@ extra, expired, differently signed, or inconsistent values fail closed.
 | Variable | Purpose and rules |
 | --- | --- |
 | `STANDARD_RAIL_ENVIRONMENT` | Signed domain environment, normally `testnet` or `mainnet`. |
-| `STANDARD_RAIL_GATEWAY_SIGNER` | Gateway protocol signer admitted for quotes, dispatch, lifecycle, and release artifacts. |
+| `STANDARD_RAIL_GATEWAY_SIGNER` | Gateway protocol signer admitted for quotes, dispatch, lifecycle, and release artifacts. Must be a non-zero address. |
+| `STANDARD_RAIL_GATEWAY_SIGNER_PREVIOUS` | Optional. A rotated-out gateway signer still accepted for runtime envelopes (quote and intake requests, quotes, dispatches, status queries, lifecycle and wallet-action grants, retirement receipts) while the gateway switches keys. Remove it once no order paid before the switch still waits for dispatch. Must differ from `STANDARD_RAIL_GATEWAY_SIGNER`. |
+| `STANDARD_RAIL_GATEWAY_ARTIFACT_SIGNERS` | Optional, comma-separated, at most 8 distinct non-zero addresses: the signers of the release artifacts this deployment carries (global rail policy, servicing admission, asset-action catalog). Their hashes cover their signatures and are bound into splitters and admission chains, so they are never re-signed; list every key that signed one still in use. Defaults to `STANDARD_RAIL_GATEWAY_SIGNER`. Gateway registration artifacts (listing preparations, skill control profiles) are accepted from any configured signer. |
 | `STANDARD_RAIL_GATEWAY_AUDIENCE` | Audience committed by signed release envelopes. |
 | `STANDARD_RAIL_GATEWAY_ORIGIN` | Credential-free HTTPS origin used for gateway wallet endpoints; must match `GATEWAY_BASE_URL`. |
 | `STANDARD_RAIL_PROVIDER_AUDIENCE` | Provider audience; must match the `BASE_URL` origin. |

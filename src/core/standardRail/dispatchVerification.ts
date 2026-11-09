@@ -5,6 +5,7 @@ import { servesControlProfile } from "./controlProfiles.js";
 import { STANDARD_DISPATCH_PAYLOAD_KEYS } from "./dispatchContract.js";
 import { DispatchRejectedError, dispatchEnvelopeRejection } from "./dispatchErrors.js";
 import { verifyGatewayEnvelope } from "./gatewayEnvelope.js";
+import { runtimeGatewaySigners } from "./gatewaySigners.js";
 import type { ProviderOutcomeConfig, SignedEnvelope, StandardRailDispatchV2 } from "./types.js";
 
 const HASH = /^0x[0-9a-fA-F]{64}$/;
@@ -30,7 +31,7 @@ export async function verifyDispatchEnvelope(args: {
     environment: config.environment,
     chainId: args.chainId,
     audience: config.providerAudience,
-    signer: config.gatewayDispatchSigner,
+    signers: runtimeGatewaySigners(config.gatewayDispatchSigner, config.gatewayPreviousSigner),
     lifetime: null,
   }).catch((error: unknown) => { throw dispatchEnvelopeRejection(error); });
   const dispatch = envelope.payload;

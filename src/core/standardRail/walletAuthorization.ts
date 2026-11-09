@@ -16,6 +16,7 @@ import {
   type PayerSignatureVerifierOptions,
 } from "./payerSignature.js";
 import type { ProviderWalletActionGrantV1, SignedEnvelope, WalletActionAuthorizationV1 } from "./types.js";
+import { runtimeGatewaySigners, trustsGatewaySigner } from "./gatewaySigners.js";
 
 export const ZERO_HASH = `0x${"00".repeat(32)}` as Hex;
 
@@ -138,6 +139,8 @@ export async function verifyProviderGrant(args: {
   chainId: number;
   providerAudience: string;
   gatewayLifecycleSigner: Address;
+  /** A rotated-out gateway signer still accepted during a rotation. */
+  gatewayPreviousSigner?: Address | null;
   now?: number;
 }): Promise<Hex> {
   assertExactKeys(args.envelope, SIGNED_ENVELOPE_KEYS, "provider wallet grant envelope");
@@ -170,7 +173,7 @@ export async function verifyProviderGrant(args: {
   ) throw new Error("provider wallet grant denied");
   const digest = unsignedEnvelopeHash(envelope as unknown as Record<string, unknown>);
   const recovered = await recoverMessageAddress({ message: { raw: digest }, signature: envelope.signature });
-  if (getAddress(recovered) !== getAddress(args.gatewayLifecycleSigner)) {
+  if (!trustsGatewaySigner(runtimeGatewaySigners(args.gatewayLifecycleSigner, args.gatewayPreviousSigner), recovered)) {
     throw new Error("provider wallet grant denied");
   }
   return digest;

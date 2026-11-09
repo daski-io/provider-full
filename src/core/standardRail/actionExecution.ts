@@ -16,6 +16,7 @@ import {
 } from "./assetActionTarget.js";
 import { AssetOwnerChangedError } from "./assetOwnerFence.js";
 import { recordStaleOwnerExecution } from "./assetOwnerOutcome.js";
+import { errorClassExtra, logError } from "../logger.js";
 
 async function sanitizedResult(
   taskId: string,
@@ -193,7 +194,27 @@ export async function executeAssetAction(args: {
         if (failure instanceof AssetOwnerChangedError) throw failure;
       }
     }
-    await markAssetActionAttention(args.executionId).catch(() => undefined);
+    // Say why before parking: a silent attention leaves the failure
+    // undiagnosable. Class and bounded message only; never the request input,
+    // the adapter result or the payer. Logging must never stop the row from
+    // being parked.
+    try {
+      logError("Asset action parked in attention after an unexpected error", {
+        ...errorClassExtra(error),
+        actionId: args.definition.actionId,
+        serviceSlug: args.definition.serviceSlug,
+        taskId: args.taskId,
+      });
+    } catch { /* the attention transition below still runs */ }
+    await markAssetActionAttention(args.executionId).catch((markError: unknown) => {
+      try {
+        logError("Asset action attention transition failed", {
+          ...errorClassExtra(markError),
+          actionId: args.definition.actionId,
+          taskId: args.taskId,
+        });
+      } catch { /* a logging failure never changes the outcome */ }
+    });
     return { status: "attention", result: null, errorClass: null };
   }
 }

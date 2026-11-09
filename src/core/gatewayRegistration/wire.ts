@@ -13,6 +13,7 @@ import {
   unsignedEnvelopeHash,
 } from "../standardRail/canonical.js";
 import type { SignedEnvelope } from "../standardRail/types.js";
+import { trustsGatewaySigner } from "../standardRail/gatewaySigners.js";
 import type {
   ProviderServiceRegistrationEvidenceV1,
   ProviderServiceRegistrationIntentV1,
@@ -493,7 +494,8 @@ export async function verifyGatewayEnvelope<T>(args: {
   envelope: SignedEnvelope<T>;
   artifactType: string;
   policy: RegistrationPolicy;
-  gatewaySigner: Address;
+  /** Every configured gateway signer (registrationGatewaySigners). */
+  gatewaySigners: readonly Address[];
 }): Promise<void> {
   const envelope = args.envelope;
   if (
@@ -511,7 +513,7 @@ export async function verifyGatewayEnvelope<T>(args: {
     message: { raw: unsignedEnvelopeHash(envelope as unknown as Record<string, unknown>) },
     signature: envelope.signature,
   });
-  if (getAddress(signer) !== getAddress(args.gatewaySigner)) {
+  if (!trustsGatewaySigner(args.gatewaySigners, signer)) {
     throw new Error("gateway signed envelope has an untrusted signer");
   }
 }

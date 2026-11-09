@@ -413,7 +413,7 @@ describe("standard asset action store", () => {
       expect(transaction.text).toContain("'working'");
       expect(transaction.values).toEqual([
         TASK_ID, harness.customerId, ASSET_ID, SERVICE_ID, "update-item",
-        buf32("b1"), PAYER, buf32("e1"), PAYER, 0,
+        buf32("b1"), PAYER, buf32("e1"), PAYER, 0, "{}",
       ]);
       // Non-terminal insert: neither sanitized_result nor error_class may
       // appear (043/044 constraint branch for states outside completed/failed).
@@ -497,7 +497,12 @@ describe("standard asset action store", () => {
       harness.state.owner = { payer: PAYER, version: 3 };
       const result = await claimAssetAction(claimArgs());
       expect(result.row).toMatchObject({ admitted_owner: PAYER, admitted_owner_version: 3 });
-      expect(only("INSERT INTO transactions").values.slice(-2)).toEqual([PAYER, 3]);
+      expect(only("INSERT INTO transactions").values.slice(-3, -1)).toEqual([PAYER, 3]);
+    });
+
+    it("records the installed effect in the task metadata when the claim names one", async () => {
+      await claimAssetAction({ ...claimArgs(), effect: "read" });
+      expect(only("INSERT INTO transactions").values.at(-1)).toBe('{"asset_action_effect":"read"}');
     });
 
     it("refuses to stage past the outstanding destructive caps", async () => {

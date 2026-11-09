@@ -2,6 +2,7 @@ import { getAddress, isAddress, keccak256, stringToHex, type Address, type Hex }
 import { canonicalHash } from "./canonical.js";
 import type { ProviderStandardRailConfig } from "./config.js";
 import { GatewayEnvelopeError, verifyGatewayEnvelope } from "./gatewayEnvelope.js";
+import { runtimeGatewaySigners } from "./gatewaySigners.js";
 import { lifecycleRejected, lifecycleUnauthenticated, unsupportedAction } from "./lifecycleErrors.js";
 import { assertLifecycleRequest, isLifecycleAction, READ_ACTIONS, type LifecycleAction } from "./lifecycleRequests.js";
 import { isPayerSignatureShape, PayerSignatureError, verifyPayerTypedData } from "./payerSignature.js";
@@ -63,7 +64,7 @@ export async function authenticateLifecycleCall(
     environment: config.environment,
     chainId,
     audience: config.providerAudience,
-    signer: config.gatewayLifecycleSigner,
+    signers: runtimeGatewaySigners(config.gatewayLifecycleSigner, config.gatewayPreviousSigner),
     signerKeyId: "gateway-lifecycle",
     lifetime: { maxRemainingSeconds: 120, maxAgeSeconds: 120 },
   }, now).catch((error: unknown) => {

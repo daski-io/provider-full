@@ -67,6 +67,8 @@ export function wireConfig(outcomes: ProviderOutcomeConfig[] = [
     gatewayDispatchSigner: context.gateway.signers["gateway-dispatch"],
     gatewayQuoteSigner: context.gateway.signers["gateway-quote"],
     gatewayLifecycleSigner: context.gateway.signers["gateway-lifecycle"],
+    gatewayPreviousSigner: null,
+    gatewayArtifactSigners: [context.gateway.signers["gateway-dispatch"]],
     providerAuthorityKey: keys.providerAuthority!.address,
     providerAuthorityPrivateKey: keys.providerAuthority!.privateKey,
     terminalAttestationPrivateKey: keys.providerTerminalAttestation!.privateKey,

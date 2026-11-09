@@ -12,6 +12,7 @@ import { bundleListingVersion, type ListingVersion } from "./listingVersions.js"
 import { validateOutcome } from "./outcomeValidation.js";
 import { parseRetainedControlProfiles, RETAINED_CONTROL_PROFILES_VARIABLE } from "./controlProfiles.js";
 import { parseRetainedSigningKeys } from "./signingKeys.js";
+import { parseGatewaySigners } from "./gatewaySigners.js";
 
 export interface ProviderStandardRailConfig {
   environment: string;
@@ -22,6 +23,10 @@ export interface ProviderStandardRailConfig {
   gatewayDispatchSigner: Address;
   gatewayQuoteSigner: Address;
   gatewayLifecycleSigner: Address;
+  /** A rotated-out gateway signer still accepted for runtime envelopes; absent or null outside a rotation. */
+  gatewayPreviousSigner?: Address | null;
+  /** Signers of the release artifacts this deployment carries; absent means the dispatch signer. */
+  gatewayArtifactSigners?: readonly Address[];
   providerAuthorityKey: Address;
   providerAuthorityPrivateKey: Hex;
   terminalAttestationPrivateKey: Hex;
@@ -102,7 +107,8 @@ export async function loadProviderStandardRailConfig(
   const canonicalToken = getAddress(need(env, "USDC_ADDRESS"));
   const environment =
     env.STANDARD_RAIL_ENVIRONMENT?.trim() || (chainId === 8453 ? "mainnet" : "testnet");
-  const gatewayDispatchSignerEarly = getAddress(need(env, "STANDARD_RAIL_GATEWAY_SIGNER"));
+  const gatewaySigners = parseGatewaySigners(env);
+  const gatewayDispatchSignerEarly = gatewaySigners.current;
   const gatewayOriginEarly = (() => {
     const raw = env.STANDARD_RAIL_GATEWAY_ORIGIN?.trim() || need(env, "GATEWAY_BASE_URL");
     const parsed = new URL(raw);
@@ -121,7 +127,7 @@ export async function loadProviderStandardRailConfig(
     environment,
     chainId,
     gatewayAudience: gatewayAudienceEarly,
-    gatewaySigner: gatewayDispatchSignerEarly,
+    gatewaySigners: gatewaySigners.artifacts,
     env,
   });
   const providerControlProfileHash =
@@ -170,6 +176,8 @@ export async function loadProviderStandardRailConfig(
     gatewayDispatchSigner,
     gatewayQuoteSigner,
     gatewayLifecycleSigner,
+    gatewayPreviousSigner: gatewaySigners.previous,
+    gatewayArtifactSigners: gatewaySigners.artifacts,
     providerAuthorityKey,
     providerAuthorityPrivateKey,
     terminalAttestationPrivateKey,

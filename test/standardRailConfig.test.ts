@@ -198,6 +198,30 @@ describe("provider standard rail configuration", () => {
     await expect(loadConfig(env)).rejects.toThrow(/signature is invalid/);
   });
 
+  it("keeps a global policy signed by an earlier gateway key trusted during a rotation", async () => {
+    const rotated = privateKeyToAccount(`0x${"56".repeat(32)}` as Hex).address;
+    const env: NodeJS.ProcessEnv = { ...environment(), STANDARD_RAIL_GATEWAY_SIGNER: rotated };
+    await expect(loadConfig(env)).rejects.toThrow(/signature is invalid/);
+    env.STANDARD_RAIL_GATEWAY_SIGNER_PREVIOUS = testGatewaySigner;
+    await expect(loadConfig(env)).rejects.toThrow(/signature is invalid/);
+    env.STANDARD_RAIL_GATEWAY_ARTIFACT_SIGNERS = testGatewaySigner;
+    const config = await loadConfig(env);
+    expect(config.gatewayDispatchSigner).toBe(rotated);
+    expect(config.gatewayPreviousSigner).toBe(testGatewaySigner);
+    expect(config.gatewayArtifactSigners).toEqual([testGatewaySigner]);
+  });
+
+  it("defaults the release-artifact signers to the current gateway signer", async () => {
+    const config = await loadConfig();
+    expect(config.gatewayPreviousSigner).toBeNull();
+    expect(config.gatewayArtifactSigners).toEqual([testGatewaySigner]);
+  });
+
+  it("refuses a zero gateway signer", async () => {
+    await expect(loadConfig({ ...environment(), STANDARD_RAIL_GATEWAY_SIGNER: `0x${"0".repeat(40)}` }))
+      .rejects.toThrow(/non-zero address/);
+  });
+
   it("requires the complete end-of-block activation checkpoint", async () => {
     const heads = fixtureHeads();
     const checkpoint = heads[0]!.bundle.activationCheckpoint!;

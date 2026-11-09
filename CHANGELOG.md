@@ -6,6 +6,12 @@ All notable changes to this project will be documented here.
 
 ### Security
 
+- The image installs Debian security updates the pinned Node base image
+  predates: PCRE2 (`libpcre2-8-0` 10.42-1+deb12u2), Perl (`perl-base`
+  5.36.0-7+deb12u4) and APT (`apt` and `libapt-pkg6.0` 2.6.2, including the
+  high-severity CVE-2026-109518). A shared `base` stage on the same pinned
+  digest applies them, and both the builder and runtime stages build from it.
+  No source, schema or configuration change.
 - zod moves from 3.25 to 4.6.7: every zod 3 release is affected by
   GHSA-mrhx-c7xc-m3w5 (high, memory exhaustion while validating oversized
   constrained collections). Zod 4 is stricter about configuration, so check a
@@ -26,6 +32,17 @@ All notable changes to this project will be documented here.
 
 ### Added
 
+- Gateway signer rotation without re-signing anything already signed. The
+  optional `STANDARD_RAIL_GATEWAY_SIGNER_PREVIOUS` keeps the previous signer
+  accepted for runtime envelopes (quote and intake requests, quotes,
+  dispatches, status queries, lifecycle and wallet-action grants, retirement
+  receipts) while the gateway switches keys. The optional
+  `STANDARD_RAIL_GATEWAY_ARTIFACT_SIGNERS` names the signers of the release
+  artifacts the provider carries (global rail policy, servicing admission,
+  asset-action catalog); gateway registration artifacts are accepted from any
+  configured signer. Unset, both default to `STANDARD_RAIL_GATEWAY_SIGNER`,
+  which is what the provider trusted before, and `STANDARD_RAIL_GATEWAY_SIGNER`
+  must now be a non-zero address. No schema, wire or signed-artifact change.
 - [Wrapping a product that returns a job id](docs/existing-async-products.md):
   a journaled, reconcilable submission, a durable lease-based poll worker,
   readiness and wait supervision, the pending, overdue and failed
@@ -390,6 +407,28 @@ All notable changes to this project will be documented here.
 
 ### Fixed
 
+- A read-only asset action parked in `attention` no longer keeps its task
+  `working` forever. A claim now records the installed service's effect in
+  the task metadata (`asset_action_effect`), because the signed definition
+  carries only `destructive`, not read versus mutate. A new sweep in the
+  five-minute security cleanup closes only executions whose task recorded
+  `read` at claim, of a current catalog definition that is non-destructive
+  and still installed as `read`, more than an hour after the execution was
+  created and last changed (the buyer's authorization and grant last at most 330
+  seconds), with no Review, open job, unresolved supplier operation, order or
+  staged confirmation. It marks the execution `failed` (`provider_failed`)
+  and the task `failed` with a message to send a new request, and records
+  `asset_action.failed`. It calls no supplier and touches no payment, owner
+  or result. Executions claimed as `mutate` or `destructive`, or without a
+  recorded effect (including those claimed before this release), are never
+  swept. A sweep
+  failure is logged and reported as `stuckReadActionsFailed: -1`, never
+  failing the cleanup run or readiness.
+- An asset action that fails unexpectedly after its claim now logs the error
+  class and a bounded message before it is parked in `attention`, never its
+  input, result or payer, and a failed attention transition is logged
+  instead of silently swallowed. Logging can never stop the row from being
+  parked. No schema, environment, wire or signed-catalog change.
 - No JSON parser decompresses a request body any more. The catch-all, `/a2a`
   and `/admin/ui/login/verify` parsers inflated gzip, deflate and brotli
   bodies before any route or authentication check, which put Node's Brotli

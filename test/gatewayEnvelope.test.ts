@@ -25,7 +25,7 @@ async function envelope() {
 const verify = (value: unknown) => verifyGatewayEnvelope(value, {
   artifactType: "DispatchStatusQueryV1", schemaVersion: 1,
   payloadKeys: ["orderId", "dispatchHash", "issuedAt", "validBefore"],
-  environment: ENVIRONMENT, chainId: CHAIN_ID, audience: PROVIDER_AUDIENCE, signer: gateway.address,
+  environment: ENVIRONMENT, chainId: CHAIN_ID, audience: PROVIDER_AUDIENCE, signers: [gateway.address],
   lifetime: { maxRemainingSeconds: 120, maxAgeSeconds: 120 },
 });
 
@@ -55,6 +55,19 @@ describe("gateway envelope signatures", () => {
       expect(isCanonicalSignature(signature)).toBe(false);
       await expect(verify({ ...signed, signature })).rejects.toMatchObject({ failure: "signature" });
     }
+  });
+
+  it("trusts every listed signer and no other", async () => {
+    const signed = await envelope();
+    const rotated = `0x${"ab".repeat(20)}` as Hex;
+    const expected = (signers: readonly Hex[]) => verifyGatewayEnvelope(signed, {
+      artifactType: "DispatchStatusQueryV1", schemaVersion: 1,
+      payloadKeys: ["orderId", "dispatchHash", "issuedAt", "validBefore"],
+      environment: ENVIRONMENT, chainId: CHAIN_ID, audience: PROVIDER_AUDIENCE, signers,
+      lifetime: { maxRemainingSeconds: 120, maxAgeSeconds: 120 },
+    });
+    await expect(expected([rotated, gateway.address])).resolves.toMatchObject({ artifactType: "DispatchStatusQueryV1" });
+    await expect(expected([rotated])).rejects.toMatchObject({ failure: "signature" });
   });
 
   it("checks the artifact type before trusting a shared-key signature", async () => {
