@@ -24,11 +24,16 @@ import type { ProviderWalletConfig } from "./walletConfig.js";
  * forever, which also blocks an owner change.
  *
  * Scope is deliberately narrow:
- * - only actions of the current signed catalog that are non-destructive and
- *   whose installed effect is `read` (never `mutate` or `destructive`: their
- *   supplier outcome may be unknown, and guessing failure is forbidden).
- *   Definitions retained from earlier catalogs are never swept, because the
- *   effect they ran with is not recorded;
+ * - only executions whose task recorded, at claim time, that the installed
+ *   service ran the action with the `read` effect
+ *   (`metadata.asset_action_effect`, actionStore.ts). The signed definition
+ *   carries only `destructive`, not read versus mutate, so a definition hash
+ *   alone cannot prove a parked execution was a read: a fork may relabel an
+ *   action without changing its hash. Rows claimed without that record, or
+ *   as `mutate` or `destructive`, are never swept: their supplier outcome may
+ *   be unknown, and guessing failure is forbidden;
+ * - and only definitions of the current signed catalog that are
+ *   non-destructive and installed as `read` now;
  * - no confirmation, staged payload or effect summary on the row;
  * - the task is still `working` and carries no standard order or paid
  *   listing;
@@ -90,6 +95,7 @@ const ELIGIBLE = `
   AND e.created_at < now() - make_interval(secs => $2::double precision)
   AND e.updated_at < now() - make_interval(secs => $2::double precision)
   AND t.status = 'working'
+  AND t.metadata->>'asset_action_effect' = 'read'
   AND t.standard_order_id IS NULL AND t.standard_listing_manifest_hash IS NULL
   AND NOT EXISTS (SELECT 1 FROM standard_destructive_action_payloads p
                    WHERE p.execution_id = e.execution_id)
@@ -130,10 +136,12 @@ export async function failStuckReadAssetActions(options: {
       if (await failOne(candidate, definitionBytes, grace)) failed += 1;
     } catch (error) {
       // A lost race or a refused transition affects this row only.
-      logError("Stuck read-only asset action could not be closed", {
-        ...errorClassExtra(error),
-        taskId: candidate.task_id,
-      });
+      try {
+        logError("Stuck read-only asset action could not be closed", {
+          ...errorClassExtra(error),
+          taskId: candidate.task_id,
+        });
+      } catch { /* a logging failure never stops the remaining rows */ }
     }
   }
   if (failed > 0) logInfo("Closed stuck read-only asset actions", { failed });

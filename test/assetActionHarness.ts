@@ -62,6 +62,12 @@ export function registryModule() {
     getService: (slug: string) => (slug === SERVICE_SLUG
       ? {
           manifest: { slug: SERVICE_SLUG, version: "1" },
+          // The installed effect of each synthetic action, recorded at claim.
+          skills: [
+            { id: "touch-note", assetAction: { effect: "mutate" } },
+            { id: "peek-note", assetAction: { effect: "read" } },
+            { id: "remove-note", assetAction: { effect: "destructive" } },
+          ],
           assets: assetWire.assets,
           operations: { readiness: { checkInvariants: async () => [...assetWire.readinessFailures] } },
         } as unknown as ServiceModule

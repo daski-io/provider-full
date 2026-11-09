@@ -433,16 +433,20 @@ counts as active work and only a Review resumes it: a buyer replay of the
 same signed request is refused, and its wallet authorization and gateway
 grant expire within 330 seconds. The five-minute security cleanup
 (`src/core/standardRail/actionAttentionSweep.ts`) therefore closes
-read-only ones that nothing owns: actions of the current catalog that are
-non-destructive and installed with the `read` effect, created and last
-changed more than an hour ago, with no Review, open durable job, unresolved
-supplier operation, order or staged confirmation. Under the task lock, the
-asset owner fence and row locks it re-checks each, marks the execution
-`failed` (`provider_failed`) and the task `failed`, and records
+read-only ones that nothing owns. The signed action definition carries only
+`destructive`, not read versus mutate, so a claim records the installed
+service's effect in the task metadata (`asset_action_effect`), and the sweep
+acts only on executions whose task recorded `read` at claim, of a current
+catalog definition that is non-destructive and still installed as `read`,
+created and last changed more than an hour ago, with no Review, open durable
+job, unresolved supplier operation, order or staged confirmation. Under the
+task lock, the asset owner fence and row locks it re-checks each, marks the
+execution `failed` (`provider_failed`) and the task `failed`, and records
 `asset_action.failed`. It calls no supplier, and a sweep failure is logged
-without failing the cleanup run or readiness. Mutating and destructive
-executions, and definitions retained from earlier catalogs, are never swept:
-their supplier outcome or effect may be unknown.
+without failing the cleanup run or readiness. An execution claimed as
+`mutate` or `destructive`, or without a recorded effect (claimed by an
+earlier build, or of an action its service no longer installs), is never
+swept: its supplier outcome may be unknown.
 
 ### Owner changes
 

@@ -207,11 +207,13 @@ export async function executeAssetAction(args: {
       });
     } catch { /* the attention transition below still runs */ }
     await markAssetActionAttention(args.executionId).catch((markError: unknown) => {
-      logError("Asset action attention transition failed", {
-        ...errorClassExtra(markError),
-        actionId: args.definition.actionId,
-        taskId: args.taskId,
-      });
+      try {
+        logError("Asset action attention transition failed", {
+          ...errorClassExtra(markError),
+          actionId: args.definition.actionId,
+          taskId: args.taskId,
+        });
+      } catch { /* a logging failure never changes the outcome */ }
     });
     return { status: "attention", result: null, errorClass: null };
   }

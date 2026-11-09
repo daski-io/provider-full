@@ -50,4 +50,11 @@ describe("auth security cleanup with the stuck read-only action sweep", () => {
       error: "canceling statement due to statement timeout",
     });
   });
+
+  it("completes the run even when logging the sweep failure throws", async () => {
+    mocks.sweep.mockRejectedValue(new Error("connection terminated"));
+    mocks.logError.mockImplementationOnce(() => { throw new Error("log sink down"); });
+
+    await expect(runAuthSecurityCleanup()).resolves.toMatchObject({ sessions: 2, stuckReadActionsFailed: -1 });
+  });
 });

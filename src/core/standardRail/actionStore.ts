@@ -4,6 +4,7 @@ import type { Queryable } from "../db/queryable.js";
 import { decryptString, encryptString } from "../chain/encryption.js";
 import type { Address, Hex } from "viem";
 import type { ProviderWalletConfig } from "./walletConfig.js";
+import type { AssetActionEffect } from "../serviceRegistry/manifestTypes.js";
 import { consumeAssetEndpointRate } from "./assetRateLimit.js";
 import {
   admitAssetOwner,
@@ -44,6 +45,9 @@ export interface AssetActionExecutionRow {
   admitted_owner_version: number;
 }
 
+/** Task metadata key recording the installed effect an action was claimed under. */
+export const ASSET_ACTION_EFFECT_METADATA = "asset_action_effect";
+
 interface ClaimArgs {
   executionId: Hex;
   payer: Hex;
@@ -67,6 +71,12 @@ interface ClaimArgs {
   resultValidBefore: number;
   gatewaySigner: Address;
   abuse: ProviderWalletConfig["abuse"];
+  /**
+   * The effect the installed service declares for this action at claim time.
+   * The signed definition carries only `destructive`, so this is the only
+   * durable record that the execution ran as a read (actionAttentionSweep.ts).
+   */
+  effect?: AssetActionEffect;
   destructive?: {
     input: Record<string, unknown>;
     effectSummary: Record<string, unknown>;
@@ -170,9 +180,10 @@ export async function claimAssetAction(args: ClaimArgs): Promise<{
       `INSERT INTO transactions
         (id,customer_id,asset_id,service_id,skill_id,status,metadata,canonical_request_hash,
          standard_payer,standard_action_execution_id,admitted_owner,admitted_owner_version)
-       VALUES ($1,$2,$3,$4,$5,'working','{}'::jsonb,$6,$7,$8,$9,$10)`,
+       VALUES ($1,$2,$3,$4,$5,'working',$11::jsonb,$6,$7,$8,$9,$10)`,
       [taskId, customer.id, args.providerAssetId, args.serviceId, args.skillId,
-        bytes(args.requestHash), args.payer, bytes(args.executionId), owner.payer, owner.version],
+        bytes(args.requestHash), args.payer, bytes(args.executionId), owner.payer, owner.version,
+        JSON.stringify(args.effect ? { [ASSET_ACTION_EFFECT_METADATA]: args.effect } : {})],
     );
     const inserted = await client.query<AssetActionExecutionRow>(
       `INSERT INTO standard_asset_action_executions

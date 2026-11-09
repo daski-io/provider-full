@@ -23,10 +23,10 @@ export interface ProviderStandardRailConfig {
   gatewayDispatchSigner: Address;
   gatewayQuoteSigner: Address;
   gatewayLifecycleSigner: Address;
-  /** A rotated-out gateway signer still accepted for runtime envelopes. */
-  gatewayPreviousSigner: Address | null;
-  /** Signers of the release artifacts this deployment carries. */
-  gatewayArtifactSigners: readonly Address[];
+  /** A rotated-out gateway signer still accepted for runtime envelopes; absent or null outside a rotation. */
+  gatewayPreviousSigner?: Address | null;
+  /** Signers of the release artifacts this deployment carries; absent means the dispatch signer. */
+  gatewayArtifactSigners?: readonly Address[];
   providerAuthorityKey: Address;
   providerAuthorityPrivateKey: Hex;
   terminalAttestationPrivateKey: Hex;

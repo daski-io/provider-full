@@ -3,6 +3,7 @@ import { getStandardPayerAsset } from "../db/queries/assetOwnership.js";
 import { getServiceBySlug } from "../db/queries/services.js";
 import { getSkillByServiceAndSkillId } from "../db/queries/skills.js";
 import { serviceDeclaresOutage } from "../serviceRegistry/readiness.js";
+import { getService } from "../serviceRegistry/registry.js";
 import { assertExactKeys } from "./canonical.js";
 import { compileProviderSchema, validateProviderRequest } from "./schema.js";
 import type { ProviderStandardRailConfig } from "./config.js";
@@ -155,6 +156,8 @@ export class ProviderAssetActionService {
       ),
       gatewaySigner: this.standard.gatewayLifecycleSigner,
       abuse: this.wallet.abuse,
+      effect: getService(definition.serviceSlug)?.skills
+        ?.find((candidate) => candidate.id === definition.actionId)?.assetAction?.effect,
       destructive,
     });
     const context = this.responseContext(body, walletHash, grantHash, canonicalRequestHash);

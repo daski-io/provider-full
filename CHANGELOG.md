@@ -408,15 +408,20 @@ All notable changes to this project will be documented here.
 ### Fixed
 
 - A read-only asset action parked in `attention` no longer keeps its task
-  `working` forever. A new sweep in the five-minute security cleanup closes
-  actions of the current catalog that are non-destructive and installed with
-  the `read` effect, more than an hour after the execution was created and
-  last changed (the buyer's authorization and grant last at most 330
+  `working` forever. A claim now records the installed service's effect in
+  the task metadata (`asset_action_effect`), because the signed definition
+  carries only `destructive`, not read versus mutate. A new sweep in the
+  five-minute security cleanup closes only executions whose task recorded
+  `read` at claim, of a current catalog definition that is non-destructive
+  and still installed as `read`, more than an hour after the execution was
+  created and last changed (the buyer's authorization and grant last at most 330
   seconds), with no Review, open job, unresolved supplier operation, order or
   staged confirmation. It marks the execution `failed` (`provider_failed`)
   and the task `failed` with a message to send a new request, and records
   `asset_action.failed`. It calls no supplier and touches no payment, owner
-  or result; mutating and destructive actions are never swept. A sweep
+  or result. Executions claimed as `mutate` or `destructive`, or without a
+  recorded effect (including those claimed before this release), are never
+  swept. A sweep
   failure is logged and reported as `stuckReadActionsFailed: -1`, never
   failing the cleanup run or readiness.
 - An asset action that fails unexpectedly after its claim now logs the error

@@ -26,7 +26,9 @@ export async function runAuthSecurityCleanup(): Promise<Record<string, number>> 
   try {
     stuckReadActionsFailed = await failStuckReadAssetActions();
   } catch (error) {
-    logError("Stuck read-only asset action sweep failed", errorClassExtra(error));
+    try {
+      logError("Stuck read-only asset action sweep failed", errorClassExtra(error));
+    } catch { /* a logging failure never fails the cleanup run */ }
   }
   return {
     sessions,

@@ -144,6 +144,17 @@ describe("asset-action catch-all robustness", () => {
 
     expect(mocks.markAssetActionAttention).toHaveBeenCalledWith(EXECUTION_ID);
   });
+
+  it("keeps its result when logging a failed attention transition also throws", async () => {
+    mocks.revealStandardActionArtifacts.mockRejectedValue(new Error("boom"));
+    mocks.markAssetActionAttention.mockRejectedValue(new Error("asset action attention transition lost its claim"));
+    mocks.logError.mockImplementation(() => { throw new Error("log sink down"); });
+
+    await expect(executeAssetAction(args)).resolves.toEqual({ status: "attention", result: null, errorClass: null });
+
+    expect(mocks.logError).toHaveBeenCalledTimes(2);
+    mocks.logError.mockReset();
+  });
 });
 
 describe("errorClassExtra", () => {

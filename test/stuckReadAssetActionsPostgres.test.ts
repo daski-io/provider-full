@@ -11,8 +11,15 @@ import type { ProviderWalletConfig } from "../src/core/standardRail/walletConfig
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 120_000 });
 vi.mock("../src/core/db/pool.js", async () => (await import("./assetActionHarness.js")).poolModule());
 vi.mock("../src/core/serviceRegistry/registry.js", async () => (await import("./assetActionHarness.js")).registryModule());
+vi.mock("../src/core/engine/preExecuteRunner.js", () => ({
+  consultPreExecuteAgent: async () => ({ action: "proceed" }),
+  applyPreExecuteDecision: async () => ({ terminal: false }),
+}));
 
-const { ACTIONS, lower, payerA, startAssetHarness, wallet } = await import("./assetActionHarness.js");
+const {
+  ACTIONS, CHAIN_ID, assetWire, lower, payerA, signedAction, standard, startAssetHarness, wallet,
+} = await import("./assetActionHarness.js");
+const { ProviderAssetActionService } = await import("../src/core/standardRail/assetAction.js");
 const { createEscalation } = await import("../src/core/db/queries/escalations.js");
 const { claimAssetAction, transitionAssetAction } = await import("../src/core/standardRail/actionStore.js");
 const { markAssetActionAttention } = await import("../src/core/standardRail/actionCompletion.js");
@@ -66,11 +73,16 @@ describe("stuck read-only asset actions against PostgreSQL", () => {
     await harness?.close();
   });
 
-  /** An attention execution for an owned note, optionally aged past the grace window. */
+  /**
+   * An attention execution for an owned note, optionally aged past the grace
+   * window. `effect` is the installed effect recorded at claim (default
+   * `read`); null records none.
+   */
   async function parked(options: {
     definition?: Hex;
     aged?: boolean;
     destructive?: boolean;
+    effect?: "read" | "mutate" | null;
   } = {}): Promise<{ executionId: Hex; taskId: string }> {
     const assetId = await harness.ownedNote(payerA);
     const executionId = unique();
@@ -84,6 +96,7 @@ describe("stuck read-only asset actions against PostgreSQL", () => {
       actionCatalogEpoch: 7, actionDefinitionHash: options.definition ?? READ_DEFINITION,
       replayPolicy: "stable-result", resultValidBefore: NOW_S + 31_536_000,
       gatewaySigner: GATEWAY, abuse: wallet.abuse,
+      ...(options.effect === null ? {} : { effect: options.effect ?? (options.destructive ? "destructive" : "read") }),
       ...(options.destructive ? { destructive: {
         input: { note: "remove" }, effectSummary: { effect: "permanent removal" }, confirmationHash: unique(),
         earliestExecutionAt: NOW_S - 60, stageValidBefore: NOW_S + 600,
@@ -170,6 +183,84 @@ describe("stuck read-only asset actions against PostgreSQL", () => {
     expect(await count()).toBe(events);
   });
 
+  it("closes a read action the service parked in attention after a real claim", async () => {
+    assetWire.adapter = {
+      execute: async () => { throw new Error("result refused by finalization"); },
+      handleInput: async () => ({ status: "working" }),
+      cancel: async () => undefined,
+      quote: async () => ({ ok: true, amount: 1n, currency: "USDC" }),
+    };
+    const note = await harness.ownedNote(payerA);
+    await new ProviderAssetActionService(standard, wallet, CHAIN_ID)
+      .perform(await signedAction({ action: ACTIONS.peek, providerAssetId: note, input: {} }))
+      .catch(() => undefined);
+    const task = (await harness.database.pool.query<{ id: string; metadata: Record<string, unknown> }>(
+      `SELECT t.id,t.metadata FROM transactions t
+         JOIN standard_asset_action_executions e ON e.execution_id=t.standard_action_execution_id
+        WHERE t.asset_id=$1 AND e.state='attention'`,
+      [note],
+    )).rows[0]!;
+    expect(task.metadata).toMatchObject({ asset_action_effect: "read" });
+    await harness.database.pool.query(
+      `UPDATE standard_asset_action_executions
+          SET created_at=now()-interval '2 hours', updated_at=now()-interval '2 hours'
+        WHERE execution_id=(SELECT standard_action_execution_id FROM transactions WHERE id=$1)`,
+      [task.id],
+    );
+    await expect(failStuckReadAssetActions({ definitionHashes: [ACTIONS.peek.actionDefinitionHash] })).resolves.toBe(1);
+    const closed = await harness.database.pool.query<{ status: string }>(
+      "SELECT status FROM transactions WHERE id=$1", [task.id],
+    );
+    expect(closed.rows[0]!.status).toBe("failed");
+  });
+
+  it("records the installed effect at claim and never sweeps a row without a recorded read", async () => {
+    const read = await parked();
+    expect((await state(read.executionId, read.taskId)).task.metadata).toMatchObject({ asset_action_effect: "read" });
+    // The current definition says read, but the execution was claimed as a
+    // mutation (the action was relabeled since) or before effects were recorded.
+    const relabeled = await parked({ effect: "mutate" });
+    const unrecorded = await parked({ effect: null });
+    expect((await state(unrecorded.executionId, unrecorded.taskId)).task.metadata)
+      .not.toHaveProperty("asset_action_effect");
+
+    await expect(failStuckReadAssetActions({ definitionHashes: READ_SET })).resolves.toBe(1);
+
+    expect((await state(read.executionId, read.taskId)).state).toBe("failed");
+    for (const untouched of [relabeled, unrecorded]) {
+      const row = await state(untouched.executionId, untouched.taskId);
+      expect(row.state).toBe("attention");
+      expect(row.task.status).toBe("working");
+    }
+  });
+
+  it("leaves rows with an open durable job, an order binding or a task that is no longer working", async () => {
+    const queued = await parked();
+    await harness.database.pool.query(
+      "INSERT INTO durable_jobs(queue,idempotency_key,payload) VALUES ('service-poll',$1,$2)",
+      [`stuck-${queued.taskId}`, JSON.stringify({ taskId: queued.taskId })],
+    );
+    // An action task can never carry a standard order (the authority check),
+    // so the listing binding an order would add stands in for it.
+    const ordered = await parked();
+    await expect(harness.database.pool.query(
+      "UPDATE transactions SET standard_order_id='ord_x' WHERE id=$1", [ordered.taskId],
+    )).rejects.toMatchObject({ code: "23514" });
+    await harness.database.pool.query(
+      "UPDATE transactions SET standard_listing_manifest_hash=$2 WHERE id=$1", [ordered.taskId, bytes(unique())],
+    );
+    const waiting = await parked();
+    await harness.database.pool.query(
+      "UPDATE transactions SET status='input-required' WHERE id=$1", [waiting.taskId],
+    );
+
+    await expect(failStuckReadAssetActions({ definitionHashes: READ_SET })).resolves.toBe(0);
+
+    for (const untouched of [queued, ordered, waiting]) {
+      expect((await state(untouched.executionId, untouched.taskId)).state).toBe("attention");
+    }
+  });
+
   it("never shortens the grace window below an hour and does nothing without a configured set", async () => {
     const recentish = await parked({ aged: false });
     await harness.database.pool.query(
@@ -185,14 +276,29 @@ describe("stuck read-only asset actions against PostgreSQL", () => {
     expect((await state(recentish.executionId, recentish.taskId)).state).toBe("attention");
   });
 
-  it("leaves an execution that left attention before the sweep locked it", async () => {
-    const resumed = await parked({ definition: RESUMED_DEFINITION });
-    // A Review resumption re-admits the execution before the sweep takes its locks.
-    await harness.database.pool.query(
-      "UPDATE standard_asset_action_executions SET state='executing' WHERE execution_id=$1",
-      [bytes(resumed.executionId)],
-    );
-    await expect(failStuckReadAssetActions({ definitionHashes: [RESUMED_DEFINITION] })).resolves.toBe(0);
-    expect((await state(resumed.executionId, resumed.taskId)).state).toBe("executing");
+  it("re-checks a selected candidate under its locks and leaves one that gained a Review in between", async () => {
+    const reviewed = await parked({ definition: RESUMED_DEFINITION });
+    let raced = false;
+    // A Review is opened after the candidate query selected the row and
+    // before the sweep's locked re-check reads it. The row is still in
+    // attention, so only the re-check (not the conditional update) keeps it.
+    assetWire.beforeQuery = async (text) => {
+      if (raced || !text.includes("FOR UPDATE OF e, t")) return;
+      raced = true;
+      await createEscalation({
+        transaction_id: reviewed.taskId, question: "Review", source: "auto",
+        status: "awaiting_human", assignee: "human", review_kind: "operational_review",
+        dedupe_key: `operational_review:${reviewed.taskId}`, target_type: "transaction", target_id: reviewed.taskId,
+      });
+    };
+    try {
+      await expect(failStuckReadAssetActions({ definitionHashes: [RESUMED_DEFINITION] })).resolves.toBe(0);
+    } finally {
+      assetWire.beforeQuery = null;
+    }
+    expect(raced).toBe(true);
+    const row = await state(reviewed.executionId, reviewed.taskId);
+    expect(row.state).toBe("attention");
+    expect(row.task.status).toBe("working");
   });
 });
