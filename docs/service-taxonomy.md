@@ -46,6 +46,241 @@ across copy edits.
 Coordinate new values with Daski onboarding before launch. A locally invented
 value may compile but fail marketplace review or discovery expectations.
 
+### Controlled service types
+
+Pick the type that names your product from your family's list. When none
+fits, use the family's own fallback, `<family>-other` (`other` in the family
+`other`), and coordinate a new value with Daski. The ids below are stable;
+the labels are what the marketplace shows. The registry checks only the
+form of a value, so the list is a convention discovery relies on, not a
+compile-time check. Two families also have a type that services already
+listed in the public catalog use: look up the catalog before choosing in
+`business-formation` and `domains-web`.
+
+#### `business-formation`
+
+| Id | Label |
+| --- | --- |
+| `registered-agent` | Registered agent |
+| `ein-tax-id` | Tax ID registration |
+| `annual-report-filing` | Annual report filing |
+| `company-amendment` | Company amendment |
+| `foreign-qualification` | Foreign qualification |
+| `business-license` | Business license |
+| `company-dissolution` | Company dissolution |
+| `virtual-office` | Virtual office |
+| `business-formation-other` | Other |
+
+#### `legal-ip`
+
+| Id | Label |
+| --- | --- |
+| `contract-drafting` | Contract drafting |
+| `contract-review` | Contract review |
+| `trademark-search` | Trademark search |
+| `trademark-filing` | Trademark filing |
+| `patent-search` | Patent search |
+| `patent-filing` | Patent filing |
+| `copyright-registration` | Copyright registration |
+| `legal-document-preparation` | Legal document preparation |
+| `legal-research` | Legal research |
+| `notarization` | Notarization |
+| `legal-ip-other` | Other |
+
+#### `compliance`
+
+| Id | Label |
+| --- | --- |
+| `kyc-verification` | Identity verification |
+| `kyb-verification` | Business verification |
+| `sanctions-screening` | Sanctions screening |
+| `background-check` | Background check |
+| `regulatory-filing` | Regulatory filing |
+| `privacy-compliance` | Privacy compliance |
+| `security-audit` | Security audit |
+| `accessibility-audit` | Accessibility audit |
+| `compliance-other` | Other |
+
+#### `finance`
+
+| Id | Label |
+| --- | --- |
+| `bookkeeping` | Bookkeeping |
+| `tax-preparation` | Tax preparation |
+| `sales-tax-filing` | Sales tax filing |
+| `payroll` | Payroll |
+| `invoicing-collections` | Invoicing and collections |
+| `financial-statements` | Financial statements |
+| `financial-modeling` | Financial modeling |
+| `audit-assurance` | Audit and assurance |
+| `business-insurance` | Business insurance |
+| `finance-other` | Other |
+
+#### `domains-web`
+
+| Id | Label |
+| --- | --- |
+| `server-hosting` | Server hosting |
+| `web-hosting` | Web hosting |
+| `ssl-certificate` | SSL certificate |
+| `website-build` | Website build |
+| `website-maintenance` | Website maintenance |
+| `cdn-setup` | CDN setup |
+| `domains-web-other` | Other |
+
+#### `communications`
+
+| Id | Label |
+| --- | --- |
+| `agent-mailbox` | Agent mailbox |
+| `email-hosting` | Email hosting |
+| `phone-number` | Phone number |
+| `sms-messaging` | SMS messaging |
+| `transactional-email` | Transactional email |
+| `physical-mail` | Physical mail |
+| `fax` | Fax |
+| `translation` | Translation |
+| `transcription` | Transcription |
+| `communications-other` | Other |
+
+#### `compute-ai`
+
+| Id | Label |
+| --- | --- |
+| `ai-inference` | AI inference |
+| `gpu-compute` | GPU compute |
+| `model-fine-tuning` | Model fine-tuning |
+| `ai-agent-build` | AI agent build |
+| `data-labeling` | Data labeling |
+| `ai-evaluation` | AI evaluation |
+| `workflow-automation` | Workflow automation |
+| `compute-ai-other` | Other |
+
+#### `data`
+
+| Id | Label |
+| --- | --- |
+| `web-research` | Web research |
+| `data-scraping` | Data scraping |
+| `lead-list` | Lead list |
+| `data-enrichment` | Data enrichment |
+| `data-cleaning` | Data cleaning |
+| `data-analysis` | Data analysis |
+| `dataset` | Dataset |
+| `market-research` | Market research |
+| `data-other` | Other |
+
+#### `software-dev`
+
+| Id | Label |
+| --- | --- |
+| `feature-development` | Feature development |
+| `bug-fix` | Bug fix |
+| `code-review` | Code review |
+| `api-integration` | API integration |
+| `mobile-app` | Mobile app |
+| `smart-contract` | Smart contract |
+| `smart-contract-audit` | Smart contract audit |
+| `qa-testing` | QA testing |
+| `devops` | DevOps |
+| `software-dev-other` | Other |
+
+#### `design-creative`
+
+| Id | Label |
+| --- | --- |
+| `logo-design` | Logo design |
+| `brand-identity` | Brand identity |
+| `graphic-design` | Graphic design |
+| `ui-ux-design` | UI/UX design |
+| `illustration` | Illustration |
+| `photography` | Photography |
+| `video-production` | Video production |
+| `animation` | Animation |
+| `copywriting` | Copywriting |
+| `content-writing` | Content writing |
+| `voice-over` | Voice-over |
+| `user-research` | User research |
+| `design-creative-other` | Other |
+
+#### `marketing-growth`
+
+| Id | Label |
+| --- | --- |
+| `seo` | SEO |
+| `paid-ads` | Paid ads |
+| `social-media-management` | Social media management |
+| `email-marketing` | Email marketing |
+| `public-relations` | Public relations |
+| `media-outreach` | Media outreach |
+| `influencer-marketing` | Influencer marketing |
+| `content-marketing` | Content marketing |
+| `app-store-optimization` | App store optimization |
+| `reviews-reputation` | Reviews and reputation |
+| `swag` | Swag |
+| `marketing-growth-other` | Other |
+
+#### `sales-support`
+
+| Id | Label |
+| --- | --- |
+| `lead-generation` | Lead generation |
+| `appointment-setting` | Appointment setting |
+| `outbound-outreach` | Outbound outreach |
+| `crm-setup` | CRM setup |
+| `customer-support` | Customer support |
+| `call-answering` | Call answering |
+| `sales-support-other` | Other |
+
+#### `human-talent`
+
+| Id | Label |
+| --- | --- |
+| `recruiting` | Recruiting |
+| `virtual-assistant` | Virtual assistant |
+| `expert-consultation` | Expert consultation |
+| `tutoring-training` | Tutoring and training |
+| `freelance-staffing` | Freelance staffing |
+| `human-talent-other` | Other |
+
+#### `operations-admin`
+
+| Id | Label |
+| --- | --- |
+| `data-entry` | Data entry |
+| `document-processing` | Document processing |
+| `scheduling` | Scheduling |
+| `travel-booking` | Travel booking |
+| `event-planning` | Event planning |
+| `workspace-rental` | Workspace rental |
+| `procurement` | Procurement |
+| `vendor-management` | Vendor management |
+| `research-assistance` | Research assistance |
+| `operations-admin-other` | Other |
+
+#### `logistics-physical`
+
+| Id | Label |
+| --- | --- |
+| `shipping` | Shipping |
+| `courier-delivery` | Courier delivery |
+| `warehousing-fulfillment` | Warehousing and fulfillment |
+| `printing` | Printing |
+| `field-service` | Field service |
+| `inspection` | Inspection |
+| `errands` | Errands |
+| `manufacturing` | Manufacturing |
+| `prototyping` | Prototyping |
+| `equipment-rental` | Equipment rental |
+| `logistics-physical-other` | Other |
+
+#### `other`
+
+| Id | Label |
+| --- | --- |
+| `question-answering` | Question answering |
+| `other` | Other |
+
 ## Jurisdictions
 
 Use:

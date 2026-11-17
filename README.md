@@ -260,6 +260,15 @@ npm run security:audit
 npm run build
 ```
 
+`security:audit` (`scripts/security/audit.mjs`) fails on any advisory of
+moderate or higher severity in what the runtime ships, with no exception.
+For the test and lint tools it fails the same way, except for an advisory
+listed in `scripts/security/audit-exceptions.json` for its package, with a
+reason and the dates it was reviewed and expires, at most 31 days later:
+one with no fixed version that only the development tools reach. An expired
+exception fails again (`scripts/security/audit-lib.mjs`, tested by
+`audit.test.mjs`).
+
 PostgreSQL security and migration smoke scripts require explicit disposable
 database URLs. Never point them at a shared Testnet or production database.
 See [scripts/README.md](scripts/README.md) before running an operator script.

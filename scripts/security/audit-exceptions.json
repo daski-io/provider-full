@@ -1,0 +1,12 @@
+{
+  "exceptions": [
+    {
+      "advisory": "GHSA-fc5q-39xc-vjpf",
+      "package": "picomatch",
+      "scope": "development",
+      "reason": "ReDoS in picomatch's extglob matching. Reached only through the test and lint tools (vitest, vite, tinyglobby, eslint-import-resolver-typescript), which match globs from this repository's own configuration; nothing the runtime ships depends on it. No fixed version is published: 4.0.7, the latest, is affected.",
+      "reviewed": "2026-11-17",
+      "expires": "2026-12-17"
+    }
+  ]
+}
