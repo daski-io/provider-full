@@ -53,13 +53,14 @@ fits, use the family's own fallback, `<family>-other` (`other` in the family
 `other`), and coordinate a new value with Daski. The ids below are stable;
 the labels are what the marketplace shows. The registry checks only the
 form of a value, so the list is a convention discovery relies on, not a
-compile-time check.
+compile-time check. Two families also have a type that services already
+listed in the public catalog use: look up the catalog before choosing in
+`business-formation` and `domains-web`.
 
 #### `business-formation`
 
 | Id | Label |
 | --- | --- |
-| `entity-formation` | Entity formation |
 | `registered-agent` | Registered agent |
 | `ein-tax-id` | Tax ID registration |
 | `annual-report-filing` | Annual report filing |
@@ -119,7 +120,6 @@ compile-time check.
 
 | Id | Label |
 | --- | --- |
-| `domain-management` | Domain management |
 | `server-hosting` | Server hosting |
 | `web-hosting` | Web hosting |
 | `ssl-certificate` | SSL certificate |
