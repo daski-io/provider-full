@@ -36,7 +36,7 @@
     "typecheck:test": "tsc -p tsconfig.test.json --noEmit",
     "lint": "eslint src",
     "lint:architecture": "node scripts/security/static-gates.mjs",
-    "security:audit": "npm audit --audit-level=moderate && npm audit --omit=dev --audit-level=moderate",
+    "security:audit": "node scripts/security/audit.mjs",
     "security:pii-scan": "node scripts/security/pii-scan.mjs",
     "security:postgres": "node scripts/security/postgres-security-integration.mjs",
     "security:migration-concurrency": "node scripts/security/concurrent-migration-smoke.mjs",
