@@ -113,7 +113,7 @@ listed in the public catalog use: look up the catalog before choosing in
 | `financial-statements` | Financial statements |
 | `financial-modeling` | Financial modeling |
 | `audit-assurance` | Audit and assurance |
-| `insurance-quote` | Insurance quote |
+| `business-insurance` | Business insurance |
 | `finance-other` | Other |
 
 #### `domains-web`
@@ -200,6 +200,7 @@ listed in the public catalog use: look up the catalog before choosing in
 | `copywriting` | Copywriting |
 | `content-writing` | Content writing |
 | `voice-over` | Voice-over |
+| `user-research` | User research |
 | `design-creative-other` | Other |
 
 #### `marketing-growth`
@@ -216,6 +217,7 @@ listed in the public catalog use: look up the catalog before choosing in
 | `content-marketing` | Content marketing |
 | `app-store-optimization` | App store optimization |
 | `reviews-reputation` | Reviews and reputation |
+| `swag` | Swag |
 | `marketing-growth-other` | Other |
 
 #### `sales-support`
@@ -248,6 +250,9 @@ listed in the public catalog use: look up the catalog before choosing in
 | `data-entry` | Data entry |
 | `document-processing` | Document processing |
 | `scheduling` | Scheduling |
+| `travel-booking` | Travel booking |
+| `event-planning` | Event planning |
+| `workspace-rental` | Workspace rental |
 | `procurement` | Procurement |
 | `vendor-management` | Vendor management |
 | `research-assistance` | Research assistance |
@@ -264,6 +269,9 @@ listed in the public catalog use: look up the catalog before choosing in
 | `field-service` | Field service |
 | `inspection` | Inspection |
 | `errands` | Errands |
+| `manufacturing` | Manufacturing |
+| `prototyping` | Prototyping |
+| `equipment-rental` | Equipment rental |
 | `logistics-physical-other` | Other |
 
 #### `other`
