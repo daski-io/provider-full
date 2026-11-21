@@ -4,6 +4,23 @@ All notable changes to this project will be documented here.
 
 ## Unreleased
 
+### Changed
+
+- The long-lived standard-rail artifacts no longer stop the provider at
+  their signed `validBefore`: the global rail policy
+  (`STANDARD_RAIL_GLOBAL_POLICY_JSON`), the servicing admission and the
+  asset-action catalog with its action definitions. Their hashes are bound
+  into splitters and admissions, so they cannot be re-signed with new dates
+  without breaking every listing; before this change a provider refused to
+  start once the dates passed and asset actions stopped. The provider now
+  checks their signers, network, structure and hash bindings, `servicingEnabled`
+  and a `validFrom` in the future, and treats `validBefore` as informational.
+  A destructive action's stage now lasts `min(24 h, retention)`, an action's
+  result is kept for its retention, and an asset-query cursor lives its full
+  900 seconds, instead of shrinking toward those dates. Short-lived envelopes
+  (requests, quotes, dispatches, wallet authorizations, grants, cursors) keep
+  their expiry. No wire, schema or configuration change.
+
 ### Security
 
 - The image installs Debian security updates the pinned Node base image

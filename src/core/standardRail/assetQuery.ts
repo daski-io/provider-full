@@ -102,7 +102,8 @@ export class ProviderAssetQueryService {
       binding: cursorBinding,
       last: { createdAt: tail.created_at_cursor, id: tail.id },
       keyRing: this.wallet.cursorKeyRing,
-      ttlSeconds: Math.min(900, this.wallet.admission.validBefore - Math.floor(Date.now() / 1_000)),
+      // The cursor's own limit; the admission's validBefore is informational.
+      ttlSeconds: 900,
     }) : null;
     const payload: ProviderAssetQueryResponseV1 = {
       providerAgentId: this.wallet.providerAgentId,

@@ -34,11 +34,11 @@ export function destructiveClaim(args: {
 }) {
   const issuedAt = Math.floor(Date.now() / 1_000);
   const earliestExecutionAt = issuedAt + args.wallet.destructiveActionDelaySeconds;
+  // Bounded by the action's own retention, never by the long-lived
+  // definition's or admission's informational validBefore.
   const stageValidBefore = Math.min(
     issuedAt + 86_400,
     issuedAt + args.definition.retentionSeconds,
-    args.definition.validBefore,
-    args.wallet.admission.validBefore,
   );
   const effectSummary = renderConfirmationSummary(
     args.definition.confirmationSummaryTemplate!,

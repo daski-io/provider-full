@@ -149,11 +149,9 @@ export class ProviderAssetActionService {
       actionCatalogEpoch: this.wallet.admission.actionCatalogEpoch,
       actionDefinitionHash: definition.actionDefinitionHash,
       replayPolicy: definition.replayPolicy,
-      resultValidBefore: Math.min(
-        Math.floor(Date.now() / 1_000) + definition.retentionSeconds,
-        definition.validBefore,
-        this.wallet.admission.validBefore,
-      ),
+      // The action's own retention; the long-lived definition's and
+      // admission's validBefore are informational.
+      resultValidBefore: Math.floor(Date.now() / 1_000) + definition.retentionSeconds,
       gatewaySigner: this.standard.gatewayLifecycleSigner,
       abuse: this.wallet.abuse,
       effect: getService(definition.serviceSlug)?.skills

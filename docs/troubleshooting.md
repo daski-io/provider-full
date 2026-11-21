@@ -172,8 +172,12 @@ Check that all artifacts belong to the same environment/revision and agree on:
 - gateway signer and audience;
 - provider/gateway origins;
 - provider agent id and control profile;
-- validity window; and
+- a `validFrom` (admission, actions) that has started; and
 - runtime-listing/action exact sets.
+
+The `validBefore` dates of the global policy, the servicing admission, the
+action catalog and its actions are informational: a past date is never the
+reason for this error.
 
 Ask Daski for a new set when any reviewed contract changes. Do not resign it
 with the provider key.
@@ -197,8 +201,8 @@ re-registration or the gateway will quarantine the service on card refresh.
 
 ### Asset-action catalog differs
 
-Every action id, destructive flag, replay policy, schema, service, and validity
-must match the signed catalog and servicing admission. A destructive action
+Every action id, destructive flag, replay policy, schema, service, and
+`validFrom` must match the signed catalog and servicing admission. A destructive action
 also needs a binding confirmation schema/template and delay. Do not downgrade
 classification to make the catalog load.
 

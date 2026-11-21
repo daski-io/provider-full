@@ -1,7 +1,8 @@
 import { type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { describe, expect, it, vi } from "vitest";
-import { unsignedEnvelopeHash } from "../src/core/standardRail/canonical.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { canonicalHash, unsignedEnvelopeHash } from "../src/core/standardRail/canonical.js";
+import { decryptCursor } from "../src/core/standardRail/cursor.js";
 import type { ProviderStandardRailConfig } from "../src/core/standardRail/config.js";
 import type {
   ProviderAssetQueryResponseV1,
@@ -16,6 +17,15 @@ import {
   walletAuthorizationHash,
   ZERO_HASH,
 } from "../src/core/standardRail/walletAuthorization.js";
+import {
+  AFTER_EXPIRY,
+  ARTIFACT_ISSUED_AT,
+  SERVICING_VALID_BEFORE,
+  restoreClock,
+  setClock,
+} from "./longLivedRailDates.js";
+
+const page = vi.hoisted(() => ({ hasMore: false }));
 
 vi.mock("../src/core/db/pool.js", () => ({
   pool: {
@@ -40,7 +50,7 @@ vi.mock("../src/core/db/queries/assetOwnership.js", () => ({
       created_at_cursor: "2026-08-01 00:00:00+00",
       expires_at: null,
     }],
-    hasMore: false,
+    hasMore: page.hasMore,
   }),
 }));
 vi.mock("../src/core/standardRail/providerResponse.js", () => ({
@@ -96,7 +106,9 @@ const standard = {
   gatewayLifecycleSigner: gateway.address,
 } as unknown as ProviderStandardRailConfig;
 
-function walletConfig(): ProviderWalletConfig {
+function walletConfig(
+  admissionDates: { validFrom?: number; validBefore?: number } = {},
+): ProviderWalletConfig {
   const now = Math.floor(Date.now() / 1_000);
   return {
     providerAgentId,
@@ -113,6 +125,7 @@ function walletConfig(): ProviderWalletConfig {
       previousAdmissionHash: ZERO_HASH,
       validFrom: now - 60,
       validBefore: now + 3_600,
+      ...admissionDates,
     },
     actionCatalogHash: hash("3"),
     catalog: {
@@ -127,7 +140,6 @@ function walletConfig(): ProviderWalletConfig {
       "0x3000000000000000000000000000000000000000000000000000000000000003",
     assetResponseKey: responder.address,
     assetResponseKeyId: "asset-response-1",
-    artifactValidBefore: now + 3_600,
     cursorKeyRing: { activeKeyId: "k1", keys: new Map([["k1", Buffer.alloc(32, 7)]]) },
     destructiveActionDelaySeconds: 300,
     gatewayAssetQueryUrl: queryUrl,
@@ -232,11 +244,12 @@ async function signedGrant(
 async function performQuery(
   walletRequest: unknown,
   providerBody: { limit: number; cursor: string | null },
+  wallet = walletConfig(),
 ) {
   const message = queryMessage(walletRequest);
   const authorization = await signedAuthorization(message);
   const grant = await signedGrant(message, providerBody);
-  const service = new ProviderAssetQueryService(standard, walletConfig(), chainId);
+  const service = new ProviderAssetQueryService(standard, wallet, chainId);
   const result = await service.query({ request: providerBody, authorization, grant }) as {
     payload: ProviderAssetQueryResponseV1;
   };
@@ -289,5 +302,53 @@ describe("standard asset query wallet binding", () => {
       { providerAgentId: null, limit: 25, cursor: "cursor-a" },
       { limit: 25, cursor: "cursor-a" },
     )).rejects.toThrow(/denied/);
+  });
+});
+
+// The servicing admission's signed validBefore is informational. An admission
+// past it keeps serving, with the cursor's own 900 seconds; the payer's and
+// the gateway's short-lived envelopes still expire.
+describe("asset queries after the admission's signed validBefore", () => {
+  afterEach(() => {
+    restoreClock();
+    page.hasMore = false;
+  });
+  const longLived = { validFrom: ARTIFACT_ISSUED_AT, validBefore: SERVICING_VALID_BEFORE };
+
+  it.each(AFTER_EXPIRY)("serves a page and a full 900-second cursor at %s", async (clock) => {
+    const now = setClock(clock);
+    page.hasMore = true;
+    const wallet = walletConfig(longLived);
+    const { payload } = await performQuery(
+      { providerAgentId, limit: 1, cursor: null }, { limit: 1, cursor: null }, wallet,
+    );
+    expect(payload.assets).toHaveLength(1);
+    const binding = {
+      kind: "provider-assets", environment: standard.environment, chainId,
+      issuer: standard.providerAudience, audience: standard.gatewayAudience,
+      payer: payer.address.toLowerCase() as Hex, providerAgentId,
+      queryHash: canonicalHash({ kind: "provider-assets", sort: "created_at-desc,id-desc", limit: 1 }),
+    };
+    const token = payload.nextCursor!;
+    expect(decryptCursor({ token, binding, keyRing: wallet.cursorKeyRing, now: now + 899 }))
+      .toMatchObject({ id: "11111111-1111-4111-8111-111111111111" });
+    expect(() => decryptCursor({ token, binding, keyRing: wallet.cursorKeyRing, now: now + 900 }))
+      .toThrow("invalid cursor");
+  });
+
+  it.each(AFTER_EXPIRY)("still refuses an expired grant and wallet authorization at %s", async (clock) => {
+    setClock(clock);
+    const providerBody = { limit: 25, cursor: null };
+    const message = queryMessage({ providerAgentId, ...providerBody });
+    const authorization = await signedAuthorization(message);
+    const grant = await signedGrant(message, providerBody);
+    vi.setSystemTime(Date.now() + 121_000);
+    const service = new ProviderAssetQueryService(standard, walletConfig(longLived), chainId);
+    await expect(service.query({ request: providerBody, authorization, grant }))
+      .rejects.toThrow("provider wallet grant denied");
+    // A fresh grant does not revive the payer's expired authorization.
+    const fresh = await signedGrant(message, providerBody);
+    await expect(service.query({ request: providerBody, authorization, grant: fresh }))
+      .rejects.toThrow("wallet authorization denied");
   });
 });

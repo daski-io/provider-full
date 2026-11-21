@@ -69,7 +69,6 @@ export interface ProviderWalletConfig {
   assetResponsePrivateKey: Hex;
   assetResponseKey: Address;
   assetResponseKeyId: string;
-  artifactValidBefore: number;
   cursorKeyRing: CursorKeyRing;
   destructiveActionDelaySeconds: number;
   gatewayAssetQueryUrl: string;
@@ -85,6 +84,13 @@ export interface ProviderWalletConfig {
   };
 }
 
+/**
+ * Whether the admission (and the action) may serve now. The servicing
+ * admission, the action catalog and its definitions are long-lived release
+ * artifacts: their validBefore is kept as signed but is informational, never
+ * enforced, so they serve until a later epoch replaces them. A
+ * not-yet-valid validFrom still refuses.
+ */
 export async function assertProviderWalletAvailable(
   config: ProviderWalletConfig,
   definition?: AssetActionDefinitionV1,
@@ -92,8 +98,7 @@ export async function assertProviderWalletAvailable(
   const now = Math.floor(Date.now() / 1_000);
   if (
     !config.admission.servicingEnabled || config.admission.validFrom > now ||
-    config.admission.validBefore <= now || config.artifactValidBefore <= now ||
-    (definition && (definition.validFrom > now || definition.validBefore <= now))
+    (definition && definition.validFrom > now)
   ) throw new Error("provider servicing unavailable");
 }
 
@@ -119,12 +124,12 @@ async function verifyReleaseEnvelope<T>(args: {
   standard: ProviderStandardRailConfig;
 }): Promise<void> {
   assertExactKeys(args.envelope, SIGNED_ENVELOPE_KEYS, `${args.artifactType} envelope`);
+  // Admissions and catalogs are long-lived: their envelope validBefore is informational.
   if (
     args.envelope.artifactType !== args.artifactType || args.envelope.schemaVersion !== 1 ||
     args.envelope.environment !== args.standard.environment ||
     args.envelope.chainId !== args.standard.chainId ||
-    args.envelope.audience !== args.standard.gatewayAudience ||
-    args.envelope.validBefore <= Math.floor(Date.now() / 1_000)
+    args.envelope.audience !== args.standard.gatewayAudience
   ) throw new Error(`${args.artifactType} domain is invalid`);
   let recovered: Address;
   try {
@@ -180,7 +185,6 @@ export async function loadProviderWalletConfig(
   const catalogHash = canonicalHash(catalogEnvelope);
   if (
     !admission.servicingEnabled || admission.validFrom > Math.floor(Date.now() / 1_000) ||
-    admission.validBefore <= Math.floor(Date.now() / 1_000) ||
     admission.providerControlProfileHash !== providerControlProfileHash ||
     admission.actionCatalogHash !== catalogHash ||
     admission.providerAgentId !== catalog.providerAgentId ||
@@ -212,7 +216,7 @@ export async function loadProviderWalletConfig(
         canonicalHash(reviewedAction.resultSchema) ||
       action.ownershipPolicy !== "owner-only" || canonicalHash(preimage) !== actionDefinitionHash ||
       (action.destructive !== (action.confirmationSummarySchema !== null && action.confirmationSummaryTemplate !== null)) ||
-      action.validFrom > Math.floor(Date.now() / 1_000) || action.validBefore <= Math.floor(Date.now() / 1_000)
+      action.validFrom > Math.floor(Date.now() / 1_000)
       || !Number.isSafeInteger(action.retentionSeconds) || action.retentionSeconds < 1
       || (action.replayPolicy === "redacted-after-window" && action.retentionSeconds > 604_800)
       || (action.destructive && action.retentionSeconds <= delay)
@@ -276,7 +280,6 @@ export async function loadProviderWalletConfig(
     assetResponsePrivateKey: responsePrivateKey,
     assetResponseKey,
     assetResponseKeyId: "provider-wallet",
-    artifactValidBefore: Math.min(admissionEnvelope.validBefore, catalogEnvelope.validBefore),
     cursorKeyRing: keyRing,
     destructiveActionDelaySeconds: delay,
     gatewayAssetQueryUrl: gatewayAssetQueryUrl.toString(),

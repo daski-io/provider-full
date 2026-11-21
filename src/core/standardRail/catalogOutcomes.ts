@@ -91,13 +91,15 @@ async function verifyGlobalEnvelope(args: {
     SIGNED_ENVELOPE_KEYS,
     `${args.artifactType} envelope`,
   );
+  // The global rail policy envelopes are long-lived: their validBefore is
+  // kept as signed (their hashes feed every listing's policyVersionHash) but
+  // is informational, never enforced. The signer and the domain are.
   if (
     args.envelope.artifactType !== args.artifactType ||
     args.envelope.schemaVersion !== args.schemaVersion ||
     args.envelope.environment !== args.environment ||
     args.envelope.chainId !== args.chainId ||
-    args.envelope.audience !== args.gatewayAudience ||
-    args.envelope.validBefore <= Math.floor(Date.now() / 1_000)
+    args.envelope.audience !== args.gatewayAudience
   ) throw new Error(`${args.artifactType} domain is invalid`);
   let recovered: Address;
   try {
