@@ -152,7 +152,6 @@ export const wallet = {
   assetResponsePrivateKey: `0x${"32".repeat(32)}` as Hex,
   assetResponseKey: provider.address,
   assetResponseKeyId: "provider-wallet",
-  artifactValidBefore: nowSeconds + 86_400,
   destructiveActionDelaySeconds: 600,
   gatewayAssetQueryUrl: "https://gateway.example/wallet/assets",
   gatewayAssetActionUrl: "https://gateway.example/wallet/assets/action",

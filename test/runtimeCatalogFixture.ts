@@ -64,6 +64,12 @@ export interface GlobalPolicyFixtureArgs {
   gatewayAudience?: string;
   canonicalToken?: Address;
   signerKey?: Hex;
+  /** Envelope dates; default: issued at 100, valid for a day from now. */
+  issuedAt?: number;
+  validBefore?: number;
+  /** The active rail profile's own windows; default: a day and two days from now. */
+  admissionValidBefore?: number;
+  recoveryValidBefore?: number;
 }
 
 export async function buildGlobalPolicyFixture(
@@ -73,6 +79,7 @@ export async function buildGlobalPolicyFixture(
   const chainId = args.chainId ?? 84_532;
   const gatewayAudience = args.gatewayAudience ?? "https://gateway.example";
   const canonicalToken = args.canonicalToken ?? "0x6666666666666666666666666666666666666666";
+  const dates = { issuedAt: args.issuedAt, validBefore: args.validBefore };
   const chainEvidencePolicy = await signTestEnvelope({
     artifactType: "ChainEvidencePolicyV2",
     schemaVersion: 2,
@@ -81,6 +88,7 @@ export async function buildGlobalPolicyFixture(
     audience: gatewayAudience,
     signerKeyId: "gateway-protocol",
     signerKey: args.signerKey,
+    ...dates,
     payload: {
       policyId: "test-chain-policy",
       canonicalToken,
@@ -102,6 +110,7 @@ export async function buildGlobalPolicyFixture(
     audience: gatewayAudience,
     signerKeyId: "gateway-protocol",
     signerKey: args.signerKey,
+    ...dates,
     payload: {
       railEpoch: "1",
       facilitatorProfileHash: hash32("1"),
@@ -110,8 +119,8 @@ export async function buildGlobalPolicyFixture(
       environment,
       chainId,
       activatedAt: 100,
-      admissionValidBefore: Math.floor(Date.now() / 1_000) + 86_400,
-      recoveryValidBefore: Math.floor(Date.now() / 1_000) + 172_800,
+      admissionValidBefore: args.admissionValidBefore ?? Math.floor(Date.now() / 1_000) + 86_400,
+      recoveryValidBefore: args.recoveryValidBefore ?? Math.floor(Date.now() / 1_000) + 172_800,
     },
   });
   const railCapabilityRequirements = await signTestEnvelope({
@@ -122,6 +131,7 @@ export async function buildGlobalPolicyFixture(
     audience: gatewayAudience,
     signerKeyId: "gateway-protocol",
     signerKey: args.signerKey,
+    ...dates,
     payload: {
       requirementId: "test-rail-capabilities",
       scheme: "exact",

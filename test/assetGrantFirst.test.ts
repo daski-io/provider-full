@@ -73,7 +73,6 @@ const wallet = {
     providerAgentId: "77", providerControlProfileHash: hash("1"), servicingProfileEpoch: 3,
     actionCatalogSchemaHash: hash("4"), actionCatalogEpoch: 0, actions: [definition],
   },
-  artifactValidBefore: now() + 3_600,
   gatewayAssetQueryUrl: "https://gateway.test/wallet/assets",
   gatewayAssetActionUrl: "https://gateway.test/wallet/assets/action",
 } as unknown as ProviderWalletConfig;
