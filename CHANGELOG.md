@@ -472,10 +472,14 @@ All notable changes to this project will be documented here.
   extension metadata was not counted: the router ignores `taskId` and still
   ran the free skill, so such requests ran under the general A2A limit of
   120 a minute instead. `taskId` once continued an `input-required` task
-  under the retired native payment rail; nothing reads it now. `GetTask`
-  polls stay on the general limit only. No change to responses, pricing,
-  paid flows, agent cards or skill contracts; no migration or configuration
-  change.
+  under the retired native payment rail; nothing reads it now. A
+  `SendMessage` without a string `skillId` (missing, misplaced or not a
+  string), which the router answers with the self-correcting missing-skillId
+  error, is now counted too: a caller guessing the request shape gets a 429
+  from `a2a-open` after 30 such calls a minute instead of 120. `GetTask`
+  polls stay on the general limit only. Responses under the limit, pricing,
+  paid flows, agent cards and skill contracts are unchanged; no migration or
+  configuration change.
 
 - A read-only asset action parked in `attention` no longer keeps its task
   `working` forever. A claim now records the installed service's effect in

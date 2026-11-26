@@ -166,12 +166,14 @@ describe("open-request limit in front of the A2A router", () => {
   it("refuses a free SendMessage carrying taskId once the open limit is spent", async () => {
     state.refuse = true;
     for (const metadata of METADATA_VARIANTS) {
-      vi.mocked(handleFreeSkill).mockClear();
-      const { status, body } = await post(sendMessage(metadata));
-      const label = JSON.stringify(metadata);
-      expect(status, label).toBe(429);
-      expect(body, label).toMatchObject({ namespace: "a2a-open" });
-      expect(handleFreeSkill, label).not.toHaveBeenCalled();
+      for (const method of ["SendMessage", "message/send"]) {
+        vi.mocked(handleFreeSkill).mockClear();
+        const { status, body } = await post(sendMessage(metadata, method));
+        const label = `${method} ${JSON.stringify(metadata)}`;
+        expect(status, label).toBe(429);
+        expect(body, label).toMatchObject({ namespace: "a2a-open" });
+        expect(handleFreeSkill, label).not.toHaveBeenCalled();
+      }
     }
   });
 

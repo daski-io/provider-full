@@ -177,10 +177,11 @@ skills, pricing metadata, access class, lifecycle, legal links, and support
 contact.
 
 An open free request may use `/a2a/:serviceSlug` directly only when the skill
-is free, does not require ownership, and satisfies the open-A2A boundary. It is
-still validated, rate-limited, body-limited, and protected by provider
-identity readiness. Every `SendMessage` on this endpoint is a public free
-call (paid and order-bound work arrives only through the standard rail), so
+is free and does not require ownership; the router refuses anything else,
+including native payment metadata. It is still validated, rate-limited,
+body-limited, and protected by provider identity readiness. The open-A2A
+boundary admits or refuses nothing; it chooses the limiter. Every
+`SendMessage` on this endpoint is a public free call (paid and order-bound work arrives only through the standard rail), so
 the boundary counts every request whose normalized method is `SendMessage`
 against the stricter open-request limit, whatever its metadata: metadata
 decides only how the router answers, never whether the request is counted.
