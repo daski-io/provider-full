@@ -148,7 +148,9 @@ export function deliverableLabel(value: string | null | undefined): string | nul
     if (cut.length + character.length > DELIVERABLE_LABEL_MAX_LENGTH - 1) break;
     cut += character;
   }
-  return `${cut.trimEnd()}…`;
+  // A cut can end mid-word on what then reads as active content ("<object…").
+  const label = `${cut.trimEnd()}…`;
+  return ACTIVE_CONTENT.test(label) ? null : label;
 }
 
 /**

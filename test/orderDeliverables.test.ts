@@ -159,6 +159,8 @@ describe("a deliverable label", () => {
     expect(deliverableLabel("")).toBeNull();
     expect(deliverableLabel(null)).toBeNull();
     expect(deliverableLabel("onload=alert")).toBeNull();
+    // Whole, this title is passive; cut at 64 characters it ends "<object…".
+    expect(deliverableLabel(`${"a".repeat(55)} <objectives of the company`)).toBeNull();
     expect(deliverableLabel("Title \uD83D")).toBe("Title");
   });
 });
