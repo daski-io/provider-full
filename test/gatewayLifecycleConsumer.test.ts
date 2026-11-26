@@ -53,7 +53,7 @@ const vectors: Vector[] = [...lifecycle.responses, ...lifecycle.refusals, ...ter
 
 describe("ported gateway lifecycle consumer", () => {
   it("covers every lifecycle and terminal-evidence vector that applies to full", () => {
-    expect(vectors.length).toBe(33);
+    expect(vectors.length).toBe(34);
   });
 
   it.each(vectors.map((entry) => [entry.id, entry] as const))("%s", async (_id, entry) => {

@@ -1,6 +1,6 @@
 {
   "repository": "daski-io/gateway",
-  "commit": "802409ff1927a035073b6c9b80e171d85158541f",
+  "commit": "66b522b0887175d4ab0bfc02b1864319163eb400",
   "path": "test/fixtures/provider-wire",
-  "manifestSha256": "091b3d7e66171fdc1677bb63db3dfced90f9158bd9e00b8076fa4250daf13fe4"
+  "manifestSha256": "6edb0b4f89b5451183d1d050a92fa0d0610ccb52f37e869c84ee817c7b64657e"
 }
