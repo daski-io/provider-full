@@ -18,10 +18,18 @@ vi.mock("../src/core/db/queries/skills.js", () => ({
 vi.mock("../src/core/serviceRegistry/registry.js", () => ({
   getService: (slug: string) => ({
     manifest: { slug },
-    skills: [{ id: "echo" }],
+    skills: [{
+      id: "echo",
+      inputSchema: {
+        type: "object",
+        properties: { text: { type: "string", minLength: 1, maxLength: 64 } },
+        required: ["text"],
+        additionalProperties: false,
+      },
+    }],
     operations: { readiness: { checkInvariants: async () => [...state.failures] } },
   }),
-  validateSkillInput: () => undefined,
+  skillInputFieldErrors: () => [],
 }));
 
 const { resolveFreeSkillRequest } = await import("../src/core/a2a/handlers/freeSkill/request.js");

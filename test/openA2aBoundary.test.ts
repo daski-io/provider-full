@@ -3,9 +3,9 @@ import { isOpenFreeA2aRequest } from "../src/core/security/openA2aBoundary.js";
 
 const EXT = "https://daski.io/a2a/v1";
 
-function request(metadata: Record<string, unknown>) {
+function request(metadata: Record<string, unknown>, method: unknown = "SendMessage") {
   return {
-    method: "SendMessage",
+    method,
     params: {
       message: {
         metadata: { [EXT]: metadata },
@@ -29,5 +29,17 @@ describe("open A2A request boundary", () => {
       paymentId: "42",
     }))).toBe(true);
     expect(isOpenFreeA2aRequest(request({ taskId: "task-1" }))).toBe(false);
+  });
+
+  it("classifies the message/send alias as an open submission, so it is limited the same way", () => {
+    expect(isOpenFreeA2aRequest(request({ skillId: "get-item" }, "message/send"))).toBe(true);
+    expect(isOpenFreeA2aRequest(request({ skillId: "get-item", serviceRef: "0x01" }, "message/send")))
+      .toBe(false);
+  });
+
+  it("does not classify other or malformed method names", () => {
+    for (const method of ["tasks/send", "GetTask", "get-item", 42, null]) {
+      expect(isOpenFreeA2aRequest(request({ skillId: "get-item" }, method))).toBe(false);
+    }
   });
 });

@@ -148,26 +148,78 @@ function describeSchemaErrors(errors: ErrorObject[] | null | undefined): string 
     const where = error.instancePath
       ? `'${error.instancePath.slice(1).replaceAll("/", ".")}' `
       : "";
-    let detail = `${where}${error.message ?? "is invalid"}`;
-    const params = error.params as Record<string, unknown>;
-    if (Array.isArray(params.allowedValues)) {
-      const preview = params.allowedValues
-        .slice(0, 12)
-        .map((allowed) => JSON.stringify(allowed));
-      const more =
-        params.allowedValues.length > preview.length
-          ? `, … (${params.allowedValues.length} values)`
-          : "";
-      detail += `: ${preview.join(", ")}${more}`;
-    } else if (typeof params.allowedValue === "string") {
-      detail += `: ${JSON.stringify(params.allowedValue)}`;
-    } else if (typeof params.additionalProperty === "string") {
-      detail += ` ('${params.additionalProperty.slice(0, 64)}')`;
-    }
-    return detail;
+    return `${where}${schemaErrorProblem(error)}`;
   });
   const suffix = errors.length > 3 ? `; +${errors.length - 3} more` : "";
   return ` — ${shown.join("; ")}${suffix}`;
+}
+
+function schemaErrorProblem(error: ErrorObject): string {
+  let detail = error.message ?? "is invalid";
+  const params = error.params as Record<string, unknown>;
+  if (Array.isArray(params.allowedValues)) {
+    const preview = params.allowedValues
+      .slice(0, 12)
+      .map((allowed) => JSON.stringify(allowed));
+    const more =
+      params.allowedValues.length > preview.length
+        ? `, … (${params.allowedValues.length} values)`
+        : "";
+    detail += `: ${preview.join(", ")}${more}`;
+  } else if (typeof params.allowedValue === "string") {
+    detail += `: ${JSON.stringify(params.allowedValue)}`;
+  } else if (typeof params.additionalProperty === "string") {
+    detail += ` ('${params.additionalProperty.slice(0, 64)}')`;
+  }
+  return detail;
+}
+
+/** One schema mismatch: the dotted field path ("" for the whole value) and
+ *  what is wrong with it. Built from the same schema-only data as
+ *  describeSchemaErrors, never from the submitted values. */
+export interface SchemaFieldError {
+  field: string;
+  problem: string;
+}
+
+const MAX_FIELD_ERRORS = 8;
+
+function schemaErrorField(error: ErrorObject): string {
+  const base = error.instancePath
+    ? error.instancePath.slice(1).replaceAll("/", ".")
+    : "";
+  const params = error.params as Record<string, unknown>;
+  const child = typeof params.missingProperty === "string"
+    ? params.missingProperty
+    : typeof params.additionalProperty === "string"
+      ? params.additionalProperty
+      : undefined;
+  if (child === undefined) return base;
+  const name = child.slice(0, 64);
+  return base ? `${base}.${name}` : name;
+}
+
+/// The same checks as validateProviderRequest, returned as field-level
+/// errors instead of thrown, so a caller can tell an agent which fields to
+/// fix. An empty list means the value matches.
+export function providerRequestFieldErrors(
+  validate: ValidateFunction,
+  value: unknown,
+): SchemaFieldError[] {
+  try {
+    assertBoundedJsonValue(value, REQUEST_JSON_BUDGET, "Request");
+  } catch (error) {
+    return [{ field: "", problem: (error as Error).message }];
+  }
+  if (validate(value)) return [];
+  const errors = validate.errors ?? [];
+  if (errors.length === 0) return [{ field: "", problem: "is invalid" }];
+  return errors
+    .slice(0, MAX_FIELD_ERRORS)
+    .map((error) => ({
+      field: schemaErrorField(error),
+      problem: schemaErrorProblem(error),
+    }));
 }
 
 export function validateProviderRequest(

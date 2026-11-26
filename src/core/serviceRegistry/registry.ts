@@ -14,7 +14,9 @@ import { assertRecoverableDeadlines, skillDeadlines } from "./deadlines.js";
 import { requireScreeningScopes } from "../screening/registry.js";
 import {
   compileProviderSchema,
+  providerRequestFieldErrors,
   validateProviderRequest,
+  type SchemaFieldError,
 } from "../standardRail/schema.js";
 
 const REGISTERED: Map<string, ServiceModule> = new Map();
@@ -295,6 +297,18 @@ export function validateSkillInput(
   const validator = SKILL_INPUT_VALIDATORS.get(`${serviceSlug}:${skillId}`);
   if (!validator) throw new Error("Skill input contract is unavailable");
   validateProviderRequest(validator, value);
+}
+
+/// validateSkillInput's checks as field-level errors (empty when the input
+/// matches), for responses that tell the caller what to fix.
+export function skillInputFieldErrors(
+  serviceSlug: string,
+  skillId: string,
+  value: unknown,
+): SchemaFieldError[] {
+  const validator = SKILL_INPUT_VALIDATORS.get(`${serviceSlug}:${skillId}`);
+  if (!validator) throw new Error("Skill input contract is unavailable");
+  return providerRequestFieldErrors(validator, value);
 }
 
 export function getAdapter(slug: string): FulfillmentAdapter {

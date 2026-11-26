@@ -92,8 +92,18 @@ const METHODS = new Set<CanonicalMethod>([
   "PushNotificationConfigGet",
 ]);
 
+// A2A 0.x named SendMessage `message/send`, and agents calling a public free
+// skill by hand often reach for it first. It is accepted as that one alias
+// only: the request shape the provider reads is unchanged, responses stay
+// A2A v1.0, the open-request rate limit classifies it the same way
+// (security/openA2aBoundary.ts), and the free-skill gate still refuses every
+// paid or owner-only skill. No other 0.x method name is accepted; an unknown
+// method's error names the v1.0 method to use.
+const METHOD_ALIASES: Readonly<Record<string, CanonicalMethod>> = {
+  "message/send": "SendMessage",
+};
+
 export function normalizeMethod(method: string): CanonicalMethod | undefined {
-  return METHODS.has(method as CanonicalMethod)
-    ? method as CanonicalMethod
-    : undefined;
+  if (METHODS.has(method as CanonicalMethod)) return method as CanonicalMethod;
+  return Object.hasOwn(METHOD_ALIASES, method) ? METHOD_ALIASES[method] : undefined;
 }

@@ -7,8 +7,14 @@ import { missingRequiredFields } from "../requiredFields.js";
 import { serviceDeclaresOutage } from "../../../serviceRegistry/readiness.js";
 import {
   getService,
-  validateSkillInput,
+  skillInputFieldErrors,
 } from "../../../serviceRegistry/registry.js";
+import { config } from "../../../config.js";
+import {
+  freeSkillHelp,
+  skillInputHelp,
+  type OpenFreeSkill,
+} from "../../freeSkillHelp.js";
 import type { TaskDurability } from "../../../serviceRegistry/types.js";
 import { validateFreeSkillInput } from "./inputValidation.js";
 import type { DaskiMetadata, FreeSkillError } from "./types.js";
@@ -38,6 +44,7 @@ export async function resolveFreeSkillRequest(args: {
       ok: false,
       code: DASKI_ERR.SERVICE_NOT_FOUND,
       message: `Service not found or inactive: ${args.serviceSlug}`,
+      data: { ...await freeSkillHelp(args.serviceSlug) },
     };
   }
   const skillId = args.metadata.skillId;
@@ -46,6 +53,7 @@ export async function resolveFreeSkillRequest(args: {
       ok: false,
       code: JSON_RPC.INVALID_PARAMS,
       message: "Missing skillId in metadata",
+      data: { ...await freeSkillHelp(args.serviceSlug) },
     };
   }
   const skill = await getSkillByServiceAndSkillId(service.id, skillId);
@@ -54,6 +62,7 @@ export async function resolveFreeSkillRequest(args: {
       ok: false,
       code: JSON_RPC.INVALID_PARAMS,
       message: `Invalid skill: ${skillId}`,
+      data: { ...await freeSkillHelp(args.serviceSlug) },
     };
   }
   if (
@@ -80,6 +89,16 @@ export async function resolveFreeSkillRequest(args: {
     };
   }
   const taskDurability = definition.taskDurability ?? "persistent";
+  const help = (includeSchema: boolean) => skillInputHelp(
+    args.serviceSlug,
+    {
+      skillId,
+      definition,
+      documentationUrl: skill.documentation_url
+        ?? `${config.BASE_URL}/skills/${args.serviceSlug}/${skillId}.md`,
+    } satisfies OpenFreeSkill,
+    includeSchema,
+  );
   const input = validateFreeSkillInput({
     messageId: args.message.messageId,
     data,
@@ -92,15 +111,34 @@ export async function resolveFreeSkillRequest(args: {
       ok: false,
       code: JSON_RPC.INVALID_PARAMS,
       message: input.message,
+      data: help(input.field === "data"),
     };
   }
+  let fieldErrors;
   try {
-    validateSkillInput(args.serviceSlug, skillId, data);
+    fieldErrors = skillInputFieldErrors(args.serviceSlug, skillId, data);
   } catch {
     return {
       ok: false,
+      code: JSON_RPC.INTERNAL_ERROR,
+      message: `Skill contract is unavailable: ${skillId}`,
+    };
+  }
+  if (fieldErrors.length > 0) {
+    const fields = [
+      ...new Set(fieldErrors.map((error) => error.field || "(input)")),
+    ];
+    return {
+      ok: false,
       code: JSON_RPC.INVALID_PARAMS,
-      message: "Input does not match the published skill contract",
+      message:
+        `Input does not match the published skill contract: ${fields.join(", ")}. ` +
+        "See error.data.errors and error.data.inputSchema.",
+      data: {
+        errors: fieldErrors,
+        ...(hasDataPart(args.message) ? {} : { inputPart: NO_DATA_PART }),
+        ...help(true),
+      },
     };
   }
   const missing = missingRequiredFields(skill, data);
@@ -109,6 +147,7 @@ export async function resolveFreeSkillRequest(args: {
       ok: false,
       code: JSON_RPC.INVALID_PARAMS,
       message: `Missing required fields: ${missing.join(", ")}`,
+      data: help(true),
     };
   }
   // A valid call waits out an outage the service declares instead of
@@ -130,4 +169,14 @@ export async function resolveFreeSkillRequest(args: {
     messageId: input.messageId,
     taskDurability,
   };
+}
+
+const NO_DATA_PART =
+  'No part with kind "data" was found, so the input was read as {}. ' +
+  'Send the input as parts: [{"kind":"data","data":{...}}].';
+
+function hasDataPart(message: Record<string, unknown>): boolean {
+  return Array.isArray(message.parts) && message.parts.some((part) =>
+    part !== null && typeof part === "object"
+    && (part as Record<string, unknown>).kind === "data");
 }

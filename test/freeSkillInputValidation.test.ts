@@ -24,6 +24,7 @@ describe("free skill input validation", () => {
     })).toEqual({
       ok: false,
       message: "Undeclared fields: debug, extra",
+      field: "data",
     });
   });
 
