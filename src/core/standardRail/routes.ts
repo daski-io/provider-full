@@ -6,6 +6,7 @@ import { isIpInRanges, requestClientIp } from "../security/rateLimit.js";
 import { StandardDispatchService } from "./dispatch.js";
 import { StandardLifecycleService } from "./lifecycle.js";
 import { lifecycleRefusalOf } from "./lifecycleErrors.js";
+import { gatewayAcceptsDeliverables, ORDER_STATUS_ADDITIONS_HEADER } from "./orderDeliverables.js";
 import { mountProtocolRoutes } from "./protocolRoutes.js";
 import { salesAdmission } from "../health.js";
 import { liveContractIntegrity, type ContractIntegrityCheck } from "./contractIntegrity.js";
@@ -107,7 +108,9 @@ export function createStandardRailRouter(
       return;
     }
     try {
-      sendSignedJson(res, await lifecycle.perform(req.body));
+      sendSignedJson(res, await lifecycle.perform(req.body, {
+        deliverables: gatewayAcceptsDeliverables(req.get(ORDER_STATUS_ADDITIONS_HEADER)),
+      }));
     } catch (error) {
       const refusal = lifecycleRefusalOf(error);
       if (refusal.unauthenticated) lifecycleFailures.recordFailure(req);

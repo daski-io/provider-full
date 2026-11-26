@@ -11,7 +11,14 @@ import { applyLifecycleCancel } from "./lifecycleMutations.js";
 import { readLifecycleState, signedLifecycleAnswer, type LifecycleAnswerV1 } from "./lifecycleResponse.js";
 import { consumeLifecycleNonce, loadLifecycleTask, type StandardTaskRow } from "./lifecycleStore.js";
 import { acceptSupportRequest } from "./orderSupport.js";
+import { addOrderDeliverables } from "./orderDeliverables.js";
 import { loadFrozenTerminalProjection } from "./terminalResult.js";
+
+/** What the requesting gateway accepts beyond the exact answer, from its lifecycle POST headers. */
+export interface LifecycleAnswerOptions {
+  /** The deliverables data part in an artifact read's task (`daski-order-status-additions` names it). */
+  deliverables?: boolean;
+}
 
 /**
  * Buyer order actions the gateway proxies to the provider's lifecycle URL.
@@ -22,7 +29,8 @@ import { loadFrozenTerminalProjection } from "./terminalResult.js";
  *
  * Status never carries a result. Artifact carries the frozen projection of a
  * completed order: unrevealed under a read capability, with its protected
- * references revealed under the payer's fresh signature. Support answers its
+ * references revealed under the payer's fresh signature, and with the
+ * order's deliverables part for a gateway that names it. Support answers its
  * durable receipt. Every failure is a named refusal (lifecycleErrors.ts).
  */
 export class StandardLifecycleService {
@@ -33,7 +41,7 @@ export class StandardLifecycleService {
     private readonly contractIntegrity?: ContractIntegrityCheck,
   ) {}
 
-  async perform(body: unknown): Promise<LifecycleAnswerV1> {
+  async perform(body: unknown, options: LifecycleAnswerOptions = {}): Promise<LifecycleAnswerV1> {
     const call = await authenticateLifecycleCall(this.config, this.chainId, body);
     const task = await loadLifecycleTask(call);
     // A mutation proves the rail contracts before its nonce is consumed, so
@@ -55,7 +63,7 @@ export class StandardLifecycleService {
       case "status":
         return signedLifecycleAnswer(this.config, order);
       case "artifact":
-        return signedLifecycleAnswer(this.config, order, { result: await this.artifactResult(task, call) });
+        return signedLifecycleAnswer(this.config, order, { result: await this.artifactResult(task, call, options) });
       case "support": {
         const supportReceipt = await acceptSupportRequest(this.config, task, call);
         return signedLifecycleAnswer(this.config, order, { result: { supportReceipt } });
@@ -78,16 +86,25 @@ export class StandardLifecycleService {
     return (await readLifecycleState(this.config, { orderId: task.standard_order_id, taskId: task.id })).state;
   }
 
-  /** The frozen projection of a completed order, revealed only for the payer's own signature. */
-  private async artifactResult(task: StandardTaskRow, call: LifecycleCall): Promise<unknown> {
+  /**
+   * The frozen projection of a completed order, revealed only for the payer's
+   * own signature. The deliverables part is added to this answer only, never
+   * to the frozen projection, so every attestation keeps its hash.
+   */
+  private async artifactResult(
+    task: StandardTaskRow,
+    call: LifecycleCall,
+    options: LifecycleAnswerOptions,
+  ): Promise<unknown> {
     if (await this.publicState(task) !== "completed") {
       throw artifactUnavailable("Artifacts are available only after completed fulfilment");
     }
     const frozen = await loadFrozenTerminalProjection(pool, task.id);
     if (!frozen) throw artifactUnavailable("The order's deliverable bytes are not retained");
-    return call.authorization.form === "payer-signed"
-      ? revealFrozenTaskProjection(task.id, frozen.projection, frozen.references)
+    const result = call.authorization.form === "payer-signed"
+      ? await revealFrozenTaskProjection(task.id, frozen.projection, frozen.references)
       : frozen.projection;
+    return options.deliverables ? addOrderDeliverables(task, result) : result;
   }
 
   /// A completion answered inline carries the frozen unrevealed projection,

@@ -15,6 +15,7 @@ const { canonicalJson } = await import("../src/core/standardRail/canonical.js");
 const { WIRE_AUTHORIZATION_KEY, plantFrozenResult, startWireHarness, wire } = await import("./providerWireHarness.js");
 const { context, expectWireAnswer, fixture, order, vector } = await import("./providerWireFixture.js");
 const { LIFECYCLE_HTTP, lifecycleBody } = await import("./lifecycleWire.js");
+const { createAsset, getAssetById } = await import("../src/core/db/queries/assets.js");
 
 /**
  * Drives full's lifecycle handler through every vendored lifecycle and
@@ -113,6 +114,43 @@ describe("provider-wire lifecycle reads", () => {
     };
     expect(capability.result).toEqual(expected.provider.frozenResult);
     expect(capability.terminalAttestation.payload).toEqual(expected.response.body.terminalAttestation.payload);
+  });
+
+  it("adds the deliverables part to the artifact read only for a gateway that names deliverables", async () => {
+    await admittedOrder();
+    const expected = vector(lifecycle, "artifact.deliverables.accepted");
+    await plantFrozenResult(harness.database, expected.provider);
+    // The note the order created, linked to its task as core links a provisioned asset.
+    const note = await createAsset({ id: "00000000-0000-4000-8000-00000000a0e1", service_id: harness.serviceId,
+      type: "note", identifier: "note-0001" }, harness.database.pool);
+    await harness.database.pool.query("UPDATE transactions SET asset_id=$2 WHERE id=$1", [order.providerTaskId, note.id]);
+    wire.orderDeliverables = async ({ assetId }) => {
+      const asset = assetId ? await getAssetById(assetId) : null;
+      return asset ? [{ actionId: "get-note-access-code", assetType: asset.type, providerAssetId: asset.id,
+        input: { note: asset.identifier }, label: "Access code" }] : [];
+    };
+    const answer = await send("artifact.payer-signed.completed");
+    expectWireAnswer(answer, expected);
+    // The gateway lists exactly these items: each names a non-destructive
+    // action of its signed catalog with the matching asset type.
+    const listed = (JSON.parse(answer.text) as { result: { artifacts: Array<{ parts: Array<{ data: Record<string, any> }> }> } })
+      .result.artifacts.at(-1)!.parts[0]!.data["https://daski.io/deliverables/v1"].items as Array<Record<string, unknown>>;
+    const providerAgentId = expected.gateway.deliverables[1].providerAgentId;
+    expect(expected.gateway.deliverables).toEqual(listed.map((item) =>
+      item.kind === "artifact" ? item : { ...item, providerAgentId }));
+    for (const item of listed.filter((entry) => entry.kind === "owner-action")) {
+      expect(expected.gateway.assetActions).toContainEqual({ actionId: item.actionId, assetType: item.assetType, destructive: false });
+    }
+    // The frozen projection is the attested identity and never carries the part.
+    const capability = lifecycle.requests["artifact.read-capability.completed"];
+    const read = async (additions: string) => JSON.parse((await harness.send({ ...capability.http,
+      headers: { ...capability.http.headers, "daski-order-status-additions": additions } })).text) as {
+      result: unknown; terminalAttestation: { payload: unknown };
+    };
+    const older = await read("salesTax");
+    expect(older.result).toEqual(expected.provider.frozenResult);
+    expect(older.terminalAttestation.payload).toEqual(expected.response.body.terminalAttestation.payload);
+    expect((await read("salesTax, deliverables")).result).toEqual(expected.provider.result);
   });
 
   it("refuses an unfinished artifact and an unavailable read with the named refusals", async () => {

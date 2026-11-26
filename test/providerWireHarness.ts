@@ -5,6 +5,7 @@ import pg from "pg";
 import type { Hex } from "viem";
 import { vi } from "vitest";
 import type { FulfillmentAdapter, ServiceModule } from "../src/core/serviceRegistry/types.js";
+import type { OrderDeliverablesTask, OwnerActionDeliverable } from "../src/core/standardRail/orderDeliverables.js";
 import { createGatewayView } from "./gatewayView.js";
 import { createMigratedDatabase, type DisposableDatabase } from "./postgresHarness.js";
 import { context, fixedListing, dynamicListing, order, wireConfig, type WireAnswer } from "./providerWireFixture.js";
@@ -36,6 +37,8 @@ export const wire = {
   /** Runs before each provider statement, e.g. to emulate a concurrent writer. */
   beforeQuery: null as ((text: string) => Promise<void>) | null,
   adapter: null as unknown as FulfillmentAdapter,
+  /** The notes service's order deliverables; none unless a test lists them. */
+  orderDeliverables: null as ((task: OrderDeliverablesTask) => Promise<readonly OwnerActionDeliverable[]>) | null,
   /** The gateway's judgement of every answer; a defect fails the send. */
   gateway: createGatewayView(),
 };
@@ -79,6 +82,7 @@ export function poolModule() {
 /** The synthetic notes service the fixture listings name. */
 export const notesModule = {
   manifest: { slug: "notes", version: "1" },
+  fulfillment: { orderDeliverables: async (task: OrderDeliverablesTask) => wire.orderDeliverables?.(task) ?? [] },
   operations: { readiness: { checkInvariants: async () => [...wire.readinessFailures] } },
 } as unknown as ServiceModule;
 
@@ -182,6 +186,7 @@ export async function startWireHarness(
       wire.supportReviewIds.length = 0;
       wire.statements.length = 0;
       wire.beforeQuery = null;
+      wire.orderDeliverables = null;
       const tables = (await database.pool.query<{ tablename: string }>(
         "SELECT tablename FROM pg_tables WHERE schemaname='public'",
       )).rows.map((row) => row.tablename).filter((table) => !KEPT_TABLES.has(table));

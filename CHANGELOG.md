@@ -4,6 +4,28 @@ All notable changes to this project will be documented here.
 
 ## Unreleased
 
+### Added
+
+- Order deliverables. A service whose result is partly behind an owner action
+  on the asset an order created (an API key, a document) declares it with the
+  optional `fulfillment.orderDeliverables` facet. On the artifact read of a
+  completed order, core adds one standard data part
+  (`https://daski.io/deliverables/v1`) in its own `deliverables` artifact:
+  the artifact first, then each owner action with its asset type, asset id,
+  input and label, so a buyer's agent can fetch everything it bought. Items
+  are pointers, never secrets; core leaves out malformed and repeated items,
+  lists at most 32 in at most 16 KiB, and waits at most three seconds for the
+  facet. The part rides only on artifact reads whose lifecycle
+  POST names `deliverables` in `daski-order-status-additions`, because an
+  older gateway refuses the read on it, and never enters the frozen terminal
+  projection, so attestations are unchanged. A service without the facet
+  answers exactly as before. See
+  [docs/adding-a-service.md](docs/adding-a-service.md#results-behind-an-owner-action).
+- The vendored gateway provider-wire fixtures are re-vendored from
+  `daski-io/gateway` `66b522b0887175d4ab0bfc02b1864319163eb400`: every
+  lifecycle POST names `salesTax, deliverables`, and the full-only vector
+  `artifact.deliverables.accepted` is answered byte for byte.
+
 ### Changed
 
 - Public free-skill errors on `POST /a2a/:serviceSlug` now show a working
