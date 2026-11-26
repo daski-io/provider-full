@@ -64,8 +64,9 @@ published input schema, with any stand-in values it holds listed in
 `error.data.example.placeholders`. Errors before a skill is reached also
 carry `supportedMethods`, `freeSkillIds`, `agentCardUrl` and
 `documentationUrl` (an unknown service gets `catalogUrl`, the registration
-file); input errors carry the failing fields as `{field, problem}` in
-`error.data.errors`, from the schema only, and the published `inputSchema`.
+file). Undeclared or missing fields also carry the published `inputSchema`,
+and a contract mismatch adds the failing fields as `{field, problem}` in
+`error.data.errors`, built from the schema only.
 
 ## Provider endpoints
 

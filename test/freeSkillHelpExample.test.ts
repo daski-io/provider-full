@@ -1,11 +1,53 @@
-import { describe, expect, it } from "vitest";
-import { exampleInput } from "../src/core/a2a/freeSkillHelp.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  exampleInput,
+  skillExampleInput,
+  type OpenFreeSkill,
+} from "../src/core/a2a/freeSkillHelp.js";
 import { inputContract, schema } from "../src/core/serviceRegistry/skillContracts.js";
+import type { SkillDefinition } from "../src/core/serviceRegistry/types.js";
 import {
   compileProviderSchema,
   providerRequestFieldErrors,
 } from "../src/core/standardRail/schema.js";
 import { dummySkillContracts } from "../src/services/dummy/skillContracts.js";
+
+// The registry's compiled skill contracts, for the schemas these tests name.
+const contracts = vi.hoisted(() => new Map<string, Record<string, unknown>>());
+vi.mock("../src/core/serviceRegistry/registry.js", async () => {
+  const { compileProviderSchema: compile, providerRequestFieldErrors: fieldErrors } =
+    await import("../src/core/standardRail/schema.js");
+  return {
+    getService: () => null,
+    skillInputFieldErrors: (_slug: string, skillId: string, value: unknown) => {
+      const contract = contracts.get(skillId);
+      if (!contract) throw new Error("Skill input contract is unavailable");
+      return fieldErrors(compile(contract), value);
+    },
+  };
+});
+
+function freeSkill(
+  skillId: string,
+  inputSchema: Record<string, unknown>,
+  requiredFields: readonly string[] = (inputSchema.required ?? []) as string[],
+): OpenFreeSkill {
+  contracts.set(skillId, inputSchema);
+  return {
+    skillId,
+    definition: { id: skillId, inputSchema } as unknown as SkillDefinition,
+    requiredFields,
+    documentationUrl: `https://provider.test/skills/example/${skillId}.md`,
+  };
+}
+
+const closed = (properties: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({
+  type: "object",
+  properties,
+  required: Object.keys(properties),
+  additionalProperties: false,
+  ...extra,
+});
 
 // The example a free-skill error returns is built from the skill's published
 // input schema. Where the schema fixes every value it must pass that schema
@@ -111,5 +153,72 @@ describe("free skill example input", () => {
     const { input, placeholders } = exampleInput(nested);
     expect(JSON.stringify(input)).toContain("null");
     expect(placeholders).toHaveLength(1);
+  });
+});
+
+describe("free skill example checked against the skill's contract", () => {
+  // Keywords the builder does not derive a value from: the contract refuses
+  // the derived value, so the example marks it instead of calling itself a
+  // working request.
+  it.each([
+    ["multipleOf", closed({ qty: { type: "integer", minimum: 1, maximum: 100, multipleOf: 5 } }), ["qty"]],
+    ["exclusiveMaximum", closed({ ratio: { type: "number", exclusiveMaximum: 1 } }), ["ratio"]],
+    ["a fractional integer minimum", closed({ n: { type: "integer", minimum: 0.5, maximum: 10 } }), ["n"]],
+    [
+      "uniqueItems",
+      closed({ ids: { type: "array", minItems: 2, uniqueItems: true, items: { type: "integer", minimum: 1 } } }),
+      ["ids"],
+    ],
+    [
+      "a nested minProperties",
+      closed({
+        opts: {
+          type: "object",
+          properties: { a: { type: "boolean" } },
+          required: [],
+          additionalProperties: false,
+          minProperties: 1,
+        },
+      }),
+      ["opts"],
+    ],
+    [
+      "a root minProperties",
+      { type: "object", properties: { a: { type: "boolean" } }, additionalProperties: false, minProperties: 1 },
+      [""],
+    ],
+  ])("marks a value refused through %s", (name, inputSchema, expected) => {
+    const skill = freeSkill(`refused-${name.replaceAll(" ", "-")}`, inputSchema as Record<string, unknown>);
+    expect(skillExampleInput("example", skill).placeholders).toEqual(expected);
+  });
+
+  it("marks an array item the contract refuses by its index", () => {
+    const skill = freeSkill("refused-item", closed({
+      sizes: { type: "array", minItems: 1, items: { type: "integer", minimum: 1, multipleOf: 4 } },
+    }));
+    expect(skillExampleInput("example", skill).placeholders).toEqual(["sizes[0]"]);
+  });
+
+  it("fills a field the skill requires and the schema leaves optional", () => {
+    const pricing = inputContract(["units"], ["tier", "note"], {
+      units: schema.integer(2, 16),
+      tier: schema.stringEnum(["standard", "priority"]),
+      note: schema.string(200),
+    }) as Record<string, unknown>;
+    expect(skillExampleInput("example", freeSkill("row-required", pricing, ["units", "tier"])))
+      .toEqual({ input: { units: 2, tier: "standard" }, placeholders: [] });
+    expect(skillExampleInput("example", freeSkill("row-required-text", pricing, ["units", "note"])))
+      .toEqual({ input: { units: 2, note: "<note>" }, placeholders: ["note"] });
+  });
+
+  it("keeps a working example as it is", () => {
+    const skill = freeSkill("works", closed({ units: schema.integer(2, 16) }));
+    expect(skillExampleInput("example", skill)).toEqual({ input: { units: 2 }, placeholders: [] });
+  });
+
+  it("marks the whole input when the skill has no contract to check against", () => {
+    const skill = freeSkill("no-contract", closed({ units: schema.integer(2, 16) }));
+    contracts.delete("no-contract");
+    expect(skillExampleInput("example", skill).placeholders).toEqual([""]);
   });
 });

@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { isOpenFreeA2aRequest } from "../src/core/security/openA2aBoundary.js";
+import type { NextFunction, Request, Response } from "express";
+import { describe, expect, it, vi } from "vitest";
+import {
+  applyOnlyToOpenFreeRequests,
+  isOpenFreeA2aRequest,
+} from "../src/core/security/openA2aBoundary.js";
 
 const EXT = "https://daski.io/a2a/v1";
 
@@ -40,6 +44,20 @@ describe("open A2A request boundary", () => {
   it("does not classify other or malformed method names", () => {
     for (const method of ["tasks/send", "GetTask", "get-item", 42, null]) {
       expect(isOpenFreeA2aRequest(request({ skillId: "get-item" }, method))).toBe(false);
+    }
+  });
+
+  it("runs the open-request limiter for the alias as for SendMessage", async () => {
+    for (const method of ["SendMessage", "message/send"]) {
+      const limiter = vi.fn();
+      const next = vi.fn() as unknown as NextFunction;
+      await applyOnlyToOpenFreeRequests(limiter)(
+        { body: request({ skillId: "get-item" }, method) } as Request,
+        {} as Response,
+        next,
+      );
+      expect(limiter, method).toHaveBeenCalledOnce();
+      expect(next, method).not.toHaveBeenCalled();
     }
   });
 });

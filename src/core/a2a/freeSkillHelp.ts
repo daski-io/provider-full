@@ -18,7 +18,10 @@ import { getServiceBySlug } from "../db/queries/services.js";
 import { getActiveSkillsByServiceId } from "../db/queries/skills.js";
 import { errorClassExtra, logWarn } from "../logger.js";
 import { isPaymentRequired } from "../pricing/index.js";
-import { getService } from "../serviceRegistry/registry.js";
+import {
+  getService,
+  skillInputFieldErrors,
+} from "../serviceRegistry/registry.js";
 import type { SkillDefinition } from "../serviceRegistry/types.js";
 import { ANONYMOUS_TASK_ACCESS_ARTIFACT } from "./anonymousTaskAccess.js";
 
@@ -56,6 +59,9 @@ export interface FreeSkillHelp {
 export interface OpenFreeSkill {
   skillId: string;
   definition: SkillDefinition;
+  /** The skill row's required fields, which the gate checks on top of the
+   *  schema: a field the schema leaves optional may be required here. */
+  requiredFields: readonly string[];
   documentationUrl: string;
 }
 
@@ -82,22 +88,85 @@ export async function openFreeSkills(
     return [{
       skillId: row.skill_id,
       definition,
+      requiredFields: row.required_fields ?? [],
       documentationUrl: row.documentation_url
         ?? `${config.BASE_URL}/skills/${serviceSlug}/${row.skill_id}.md`,
     }];
   });
 }
 
-/// An input built from a closed provider schema: every required field with
-/// its first allowed value or its lowest allowed number, and a "<name>"
-/// stand-in where no value can be derived (strings, supplier-defined
-/// records). `placeholders` lists the dotted paths of the stand-ins.
+interface BuiltInput {
+  input: unknown;
+  placeholders: string[];
+}
+
+/// An input built from a closed provider schema: every required field (and
+/// any top-level field named in `alsoRequired`) with its first allowed value
+/// or its lowest allowed number, and a "<name>" stand-in where no value can
+/// be derived (strings, supplier-defined records). `placeholders` lists the
+/// dotted paths of the stand-ins, with array items as `[index]`.
 export function exampleInput(
   schema: Record<string, unknown>,
-): { input: unknown; placeholders: string[] } {
+  alsoRequired: readonly string[] = [],
+): BuiltInput {
   const placeholders: string[] = [];
-  const input = fill(schema, "", "value", 0, placeholders);
+  const input = fill(schema, "", "value", 0, placeholders, alsoRequired);
   return { input, placeholders };
+}
+
+/// exampleInput for a free skill, checked the way the gate checks a request:
+/// against the skill's compiled input contract and its row's required
+/// fields. A value the contract still refuses (a keyword the builder does
+/// not derive from, such as multipleOf or uniqueItems) is marked as a
+/// placeholder too, so an example without placeholders is one the gate
+/// admits as sent.
+export function skillExampleInput(
+  serviceSlug: string,
+  skill: OpenFreeSkill,
+): BuiltInput {
+  const built = exampleInput(skill.definition.inputSchema, skill.requiredFields);
+  const placeholders = [...built.placeholders];
+  const covered = (field: string) => placeholders.some((path) => {
+    const marked = dotted(path);
+    return marked === "" || field === marked || field.startsWith(`${marked}.`);
+  });
+  let fields: string[];
+  try {
+    fields = skillInputFieldErrors(serviceSlug, skill.skillId, built.input)
+      .map((error) => error.field);
+  } catch {
+    // No contract to check against: nothing in the example is known to work.
+    fields = [""];
+  }
+  const data = built.input as Record<string, unknown>;
+  fields.push(...skill.requiredFields.filter((field) =>
+    data === null || typeof data !== "object" || !Object.hasOwn(data, field)));
+  for (const field of fields) {
+    if (!covered(field)) placeholders.push(bracketed(built.input, field));
+  }
+  return { input: built.input, placeholders };
+}
+
+const dotted = (path: string) => path.replace(/\[(\d+)\]/g, ".$1");
+
+/// A dotted schema-error path written as a placeholder path: segments that
+/// index an array in `input` become `[index]`.
+function bracketed(input: unknown, field: string): string {
+  if (field === "") return "";
+  let path = "";
+  let current: unknown = input;
+  for (const segment of field.split(".")) {
+    if (Array.isArray(current)) {
+      path += `[${segment}]`;
+      current = current[Number(segment)];
+    } else {
+      path += path ? `.${segment}` : segment;
+      current = current !== null && typeof current === "object"
+        ? (current as Record<string, unknown>)[segment]
+        : undefined;
+    }
+  }
+  return path;
 }
 
 function fill(
@@ -106,6 +175,7 @@ function fill(
   name: string,
   depth: number,
   placeholders: string[],
+  alsoRequired: readonly string[] = [],
 ): unknown {
   if (depth > MAX_EXAMPLE_DEPTH) {
     placeholders.push(path);
@@ -124,7 +194,12 @@ function fill(
         string,
         Record<string, unknown>
       >;
-      const required = Array.isArray(schema.required) ? schema.required : [];
+      const required = [
+        ...new Set([
+          ...(Array.isArray(schema.required) ? schema.required : []),
+          ...alsoRequired,
+        ]),
+      ];
       return Object.fromEntries(
         required
           .filter((field): field is string =>
@@ -193,16 +268,17 @@ function endpoint(serviceSlug: string | null): Pick<ExampleRequest, "httpMethod"
   };
 }
 
-/// A complete SendMessage request for `skill` on this endpoint. The
+/// A complete SendMessage request for `skill` on this endpoint, or, without
+/// a skill, its shape with the skill id and input to fill in. The
 /// messageId is fresh on every call: a reused messageId with the same input
 /// replays the earlier answer, and with different input is refused.
 export function exampleRequest(
   serviceSlug: string | null,
   skill: OpenFreeSkill | null,
+  built: BuiltInput = skill && serviceSlug
+    ? skillExampleInput(serviceSlug, skill)
+    : { input: {}, placeholders: [""] },
 ): ExampleRequest {
-  const built = skill
-    ? exampleInput(skill.definition.inputSchema)
-    : { input: {}, placeholders: [""] };
   const placeholders = [
     ...(serviceSlug ? [] : ["url"]),
     ...built.placeholders.map((path) =>
@@ -312,19 +388,22 @@ export async function freeSkillHelp(
       hint,
     };
   }
-  const chosen = skills.find((skill) => skill.skillId === options.preferredSkillId)
-    ?? skills.find((skill) =>
-      exampleInput(skill.definition.inputSchema).placeholders.length === 0)
-    ?? skills[0]
+  const examples = skills.map((skill) => ({
+    skill,
+    built: skillExampleInput(serviceSlug, skill),
+  }));
+  const chosen = examples.find(({ skill }) => skill.skillId === options.preferredSkillId)
+    ?? examples.find(({ built }) => built.placeholders.length === 0)
+    ?? examples[0]
     ?? null;
   return {
     supportedMethods: SUPPORTED_METHODS,
     freeSkillIds: skills.map((skill) => skill.skillId),
     example: options.getTask
       ? getTaskRequest(serviceSlug)
-      : exampleRequest(serviceSlug, chosen),
+      : exampleRequest(serviceSlug, chosen?.skill ?? null, chosen?.built),
     agentCardUrl: `${config.BASE_URL}/agent-cards/${serviceSlug}.json`,
-    ...(chosen && !options.getTask ? { documentationUrl: chosen.documentationUrl } : {}),
+    ...(chosen && !options.getTask ? { documentationUrl: chosen.skill.documentationUrl } : {}),
     hint,
   };
 }

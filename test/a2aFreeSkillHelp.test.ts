@@ -107,6 +107,14 @@ const ITEM_SCHEMA = {
   required: ["itemId"],
   additionalProperties: false,
 };
+// A keyword the example builder does not derive from: its lowest allowed
+// number (1) is not a multiple of 5, so the contract refuses it.
+const BATCH_SCHEMA = {
+  type: "object",
+  properties: { count: { type: "integer", minimum: 1, maximum: 100, multipleOf: 5 } },
+  required: ["count"],
+  additionalProperties: false,
+};
 const RESULT_SCHEMA = {
   type: "object",
   properties: {},
@@ -149,6 +157,7 @@ const module = {
       optionalFields: ["tier"],
     }),
     skill("check-item", { requiredFields: ["itemId"] }),
+    skill("get-batch", { inputSchema: BATCH_SCHEMA, requiredFields: ["count"] }),
     skill("create-item", { pricing: QUOTED, requiredFields: ["itemId"] }),
     skill("get-item", { requiresAssetOwnership: true, requiredFields: ["itemId"] }),
   ],
@@ -166,6 +175,7 @@ const module = {
       skills: {
         "get-pricing": "# get-pricing",
         "check-item": "# check-item",
+        "get-batch": "# get-batch",
         "create-item": "# create-item",
         "get-item": "# get-item",
       },
@@ -327,6 +337,21 @@ describe("A2A free-skill help: unknown methods", () => {
     expect(body.error.data.freeSkillIds).toEqual(["check-item", "get-pricing"]);
     expect(body.error.data.example.body.params.message.metadata[EXT].skillId)
       .toBe("get-pricing");
+  });
+
+  it("marks a value the contract refuses and prefers another skill's example", async () => {
+    state.rows.unshift(row("get-batch", { required_fields: ["count"] }));
+    const listed = await post({ jsonrpc: "2.0", id: "r1", method: "tools/list" });
+    expect(listed.error.data.freeSkillIds).toEqual(["get-batch", "get-pricing"]);
+    expect(listed.error.data.example.body.params.message.metadata[EXT].skillId)
+      .toBe("get-pricing");
+    expect(listed.error.data.example.placeholders).toBeUndefined();
+
+    const named = await post({ jsonrpc: "2.0", id: "r2", method: "get-batch" });
+    expect(named.error.message).toContain("replace the values listed in error.data.example.placeholders");
+    expect(named.error.data.example.body.params.message.parts[0].data).toEqual({ count: 1 });
+    expect(named.error.data.example.placeholders)
+      .toEqual(["body.params.message.parts[0].data.count"]);
   });
 
   it("names no substitute for a v1.0 method this endpoint does not serve", async () => {
@@ -498,6 +523,12 @@ describe("A2A free-skill help: contract mismatch", () => {
     const body = await post(send("SendMessage", pricingMessage(VALID)));
     expect(body.error.message).toBe("Missing required fields: tier");
     expect(body.error.data.inputSchema).toEqual(PRICING_SCHEMA);
+    // The example fills the field the row requires and the schema leaves optional.
+    expect(body.error.data.example.body.params.message.parts[0].data)
+      .toEqual({ units: 2, sizeGiB: 1, days: 1, tier: "standard" });
+    expect(body.error.data.example.placeholders).toBeUndefined();
+    const replay = await post(body.error.data.example.body);
+    expect(replay.error).toBeUndefined();
   });
 
   it("shows a working request when messageId is missing", async () => {

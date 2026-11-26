@@ -94,6 +94,7 @@ export async function resolveFreeSkillRequest(args: {
     {
       skillId,
       definition,
+      requiredFields: skill.required_fields ?? [],
       documentationUrl: skill.documentation_url
         ?? `${config.BASE_URL}/skills/${args.serviceSlug}/${skillId}.md`,
     } satisfies OpenFreeSkill,

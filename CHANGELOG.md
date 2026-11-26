@@ -14,8 +14,12 @@ All notable changes to this project will be documented here.
   that endpoint (`httpMethod`, `url`, headers `Content-Type` and
   `A2A-Version: 1.0`, and a `SendMessage` body with a fresh `messageId`)
   whose skill input is built from the skill's published input schema.
-  Values the schema cannot supply, such as free text, are stand-ins like
-  `"<message>"` listed in `example.placeholders`; without placeholders the
+  Fields the skill requires beyond the schema's own `required` are filled
+  too. Values the schema cannot supply, such as free text, are stand-ins
+  like `"<message>"`, and the example is checked against the skill's
+  compiled contract and required fields, so any value it still refuses (for
+  example under `multipleOf` or `uniqueItems`) is marked as well; all of
+  them are listed in `example.placeholders`. Without placeholders the
   request works as sent. The default example is the first free skill that
   needs none.
   - `Unknown method`, the missing-`skillId` error (message unchanged, with
