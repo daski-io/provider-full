@@ -129,7 +129,18 @@ describe("provider-wire lifecycle reads", () => {
       return asset ? [{ actionId: "get-note-access-code", assetType: asset.type, providerAssetId: asset.id,
         input: { note: asset.identifier }, label: "Access code" }] : [];
     };
-    expectWireAnswer(await send("artifact.payer-signed.completed"), expected);
+    const answer = await send("artifact.payer-signed.completed");
+    expectWireAnswer(answer, expected);
+    // The gateway lists exactly these items: each names a non-destructive
+    // action of its signed catalog with the matching asset type.
+    const listed = (JSON.parse(answer.text) as { result: { artifacts: Array<{ parts: Array<{ data: Record<string, any> }> }> } })
+      .result.artifacts.at(-1)!.parts[0]!.data["https://daski.io/deliverables/v1"].items as Array<Record<string, unknown>>;
+    const providerAgentId = expected.gateway.deliverables[1].providerAgentId;
+    expect(expected.gateway.deliverables).toEqual(listed.map((item) =>
+      item.kind === "artifact" ? item : { ...item, providerAgentId }));
+    for (const item of listed.filter((entry) => entry.kind === "owner-action")) {
+      expect(expected.gateway.assetActions).toContainEqual({ actionId: item.actionId, assetType: item.assetType, destructive: false });
+    }
     // The frozen projection is the attested identity and never carries the part.
     const capability = lifecycle.requests["artifact.read-capability.completed"];
     const read = async (additions: string) => JSON.parse((await harness.send({ ...capability.http,

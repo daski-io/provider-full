@@ -33,7 +33,10 @@ export interface ServiceFulfillmentFacet {
    * The owner actions that deliver the rest of a completed order's result
    * (an API key, a document), listed in the order's artifact read for a
    * gateway that accepts them (orderDeliverables.ts). Pointers only: never a
-   * secret. Absent, or an empty list, when the artifact is the whole result.
+   * secret or a protected identifier, since read-capability reads carry them
+   * too. A fast read of the service's own records, never a supplier call: an
+   * answer after three seconds is not used. Absent, or an empty list, when
+   * the artifact is the whole result.
    */
   orderDeliverables?(task: OrderDeliverablesTask): Promise<readonly OwnerActionDeliverable[]>;
 }

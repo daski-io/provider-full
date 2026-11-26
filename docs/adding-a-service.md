@@ -408,11 +408,18 @@ part to the task it answers, in its own `deliverables` artifact
   `operation`; values are null, a boolean, a finite number or a string of at
   most 256 characters) and an optional `label` of 1 to 64 characters.
   `deliverableLabel` turns a display text, such as a document title, into
-  one. Core leaves out a malformed or repeated item and lists at most 32,
-  the artifact included.
+  one. An item may also carry `kind: "owner-action"`; core writes it either
+  way. Core leaves out a malformed or repeated item (an input key such as
+  `constructor` included) and lists at most 32, the artifact included, in at
+  most 16 KiB.
 - **Pointers only.** Never put a secret in an item: the secret comes from the
-  action, which the payer's wallet authorizes on its own. The part is not in
-  the frozen terminal projection, so no attestation changes.
+  action, which the payer's wallet authorizes on its own. The part rides on
+  every artifact read, read-capability reads included, so never put a
+  protected identifier (`security.protectedAssetIdentifiers`) or a protected
+  artifact field in `input` either. The part is not in the frozen terminal
+  projection, so no attestation changes.
+- **Fast.** Read your own records only, never a supplier. Core waits at most
+  three seconds and then answers the artifact without the part.
 - **Only when asked.** A gateway released before the part refuses the whole
   artifact read on it, so core adds it only when the lifecycle POST names
   `deliverables` in `daski-order-status-additions`. A failing or empty

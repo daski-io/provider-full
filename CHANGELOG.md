@@ -13,8 +13,9 @@ All notable changes to this project will be documented here.
   (`https://daski.io/deliverables/v1`) in its own `deliverables` artifact:
   the artifact first, then each owner action with its asset type, asset id,
   input and label, so a buyer's agent can fetch everything it bought. Items
-  are pointers, never secrets; core leaves out malformed and repeated items
-  and lists at most 32. The part rides only on artifact reads whose lifecycle
+  are pointers, never secrets; core leaves out malformed and repeated items,
+  lists at most 32 in at most 16 KiB, and waits at most three seconds for the
+  facet. The part rides only on artifact reads whose lifecycle
   POST names `deliverables` in `daski-order-status-additions`, because an
   older gateway refuses the read on it, and never enters the frozen terminal
   projection, so attestations are unchanged. A service without the facet

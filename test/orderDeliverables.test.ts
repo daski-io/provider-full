@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { A2ATask } from "../src/core/a2a/responseTypes.js";
 
 const state = vi.hoisted(() => ({
@@ -96,6 +96,16 @@ describe("the deliverables part", () => {
     expect(dropped.filter((entry) => entry.reason === "too many items")).toHaveLength(10);
   });
 
+  it("writes the owner-action kind itself and keeps the whole part under 16 KiB", () => {
+    expect(deliverablesPart([{ kind: "owner-action", ...item }]).part).toEqual(deliverablesPart([item]).part);
+    const large = Array.from({ length: 20 }, (_, index) => ({ ...item,
+      input: Object.fromEntries(Array.from({ length: 7 }, (_, key) => [`k${key}`, `${index}-${"x".repeat(250)}`])) }));
+    const { part, dropped } = deliverablesPart(large);
+    expect(Buffer.byteLength(JSON.stringify(part), "utf8")).toBeLessThan(16_384 + 200);
+    expect(dropped.length).toBeGreaterThan(0);
+    expect(dropped.every((entry) => entry.reason === "part too large")).toBe(true);
+  });
+
   it("appends its own artifact to a task without artifacts", () => {
     const { part } = deliverablesPart([item]);
     const { artifacts: _artifacts, ...bare } = task;
@@ -110,10 +120,15 @@ describe("an owner-action item", () => {
     expect(ownerActionDeliverableProblem(item)).toBeNull();
     expect(ownerActionDeliverableProblem({ ...item, label: undefined })).toBeNull();
     expect(ownerActionDeliverableProblem({ ...item, input: { a: null, b: true, c: 1.5, d: "" } })).toBeNull();
+    expect(ownerActionDeliverableProblem({ kind: "owner-action", ...item })).toBeNull();
   });
 
   it.each([
-    ["an unknown key", { ...item, kind: "owner-action" }, "unknown key"],
+    ["an unknown key", { ...item, providerAgentId: "4242" }, "unknown key"],
+    ["another kind", { ...item, kind: "artifact" }, "kind"],
+    ["an asset type with a lone surrogate", { ...item, assetType: "note\uDC00" }, "assetType"],
+    ["a constructor input key", { ...item, input: { constructor: "x" } }, "input"],
+    ["an input value with a lone surrogate", { ...item, input: { note: "\uD800" } }, "input"],
     ["an action id outside the grammar", { ...item, actionId: "-get" }, "actionId"],
     ["an empty asset type", { ...item, assetType: "" }, "assetType"],
     ["an uppercase asset id", { ...item, providerAssetId: ASSET.toUpperCase() }, "providerAssetId"],
@@ -128,6 +143,7 @@ describe("an owner-action item", () => {
     ["a 65-character label", { ...item, label: "x".repeat(65) }, "label"],
     ["a label with a hidden character", { ...item, label: "API‮key" }, "label"],
     ["a label with active content", { ...item, label: "<script>" }, "label"],
+    ["a label with a lone surrogate", { ...item, label: "Doc \uD800" }, "label"],
   ])("refuses %s", (_name, candidate, reason) => {
     expect(ownerActionDeliverableProblem(candidate)).toBe(reason);
   });
@@ -143,6 +159,7 @@ describe("a deliverable label", () => {
     expect(deliverableLabel("")).toBeNull();
     expect(deliverableLabel(null)).toBeNull();
     expect(deliverableLabel("onload=alert")).toBeNull();
+    expect(deliverableLabel("Title \uD83D")).toBe("Title");
   });
 });
 
@@ -158,6 +175,18 @@ describe("adding an order's deliverables to its artifact read", () => {
     expect(orderDeliverables).toHaveBeenCalledWith({ id: "task-1", serviceId: "service-notes", skillId: "create-note", assetId: ASSET });
     expect(result).toEqual(withDeliverablesArtifact(task, deliverablesPart([item]).part!));
     expect(task.artifacts).toHaveLength(1);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("answers the task unchanged when the service does not list in time", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    state.module = { fulfillment: { orderDeliverables: () => new Promise(() => undefined) } };
+    const pending = addOrderDeliverables(order, task);
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(await pending).toBe(task);
   });
 
   it("leaves the task unchanged without the facet, with an empty list, or when the service fails", async () => {
