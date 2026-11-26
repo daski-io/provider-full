@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   compileProviderSchema,
+  providerRequestFieldErrors,
   validateProviderRequest,
 } from "../src/core/standardRail/schema.js";
 import { schema } from "../src/core/serviceRegistry/skillContracts.js";
@@ -93,5 +94,66 @@ describe("schema mismatch errors name the field and its allowed values", () => {
       message = (err as Error).message;
     }
     expect(message).toMatch(/\+\d+ more$/);
+  });
+});
+
+describe("field-level schema errors", () => {
+  const validate = compileProviderSchema({
+    type: "object",
+    properties: {
+      vcpu: { type: "integer", minimum: 2 },
+      kind: schema.stringEnum(["alpha", "beta"]),
+      nested: {
+        type: "object",
+        properties: { size: { type: "integer", minimum: 1 } },
+        required: ["size"],
+        additionalProperties: false,
+      },
+    },
+    required: ["vcpu", "kind"],
+    additionalProperties: false,
+    maxProperties: 3,
+  });
+
+  it("is empty for a matching value", () => {
+    expect(providerRequestFieldErrors(validate, { vcpu: 2, kind: "alpha" })).toEqual([]);
+  });
+
+  it("names each failing field, including missing and unknown ones, never the values", () => {
+    const errors = providerRequestFieldErrors(validate, {
+      vcpu: 1,
+      kind: "SUBMITTED-SECRET",
+      nested: {},
+    });
+    expect(errors).toEqual([
+      { field: "vcpu", problem: "must be >= 2" },
+      {
+        field: "kind",
+        problem: 'must be equal to one of the allowed values: "alpha", "beta"',
+      },
+      { field: "nested.size", problem: "must have required property 'size'" },
+    ]);
+    expect(JSON.stringify(errors)).not.toContain("SUBMITTED-SECRET");
+    expect(providerRequestFieldErrors(validate, { vcpu: 2, kind: "alpha", extra: 1 }))
+      .toEqual([{ field: "extra", problem: "must NOT have additional properties ('extra')" }]);
+    expect(providerRequestFieldErrors(validate, {}).map((error) => error.field))
+      .toEqual(["vcpu", "kind"]);
+  });
+
+  it("reports a budget failure on the whole value", () => {
+    expect(providerRequestFieldErrors(validate, nested(30)))
+      .toEqual([{ field: "", problem: "Request JSON is invalid: too deeply nested" }]);
+  });
+
+  it("caps the list", () => {
+    const wide = compileProviderSchema({
+      type: "object",
+      properties: Object.fromEntries(
+        Array.from({ length: 12 }, (_, index) => [`f${index}`, { type: "integer" }]),
+      ),
+      required: Array.from({ length: 12 }, (_, index) => `f${index}`),
+      additionalProperties: false,
+    });
+    expect(providerRequestFieldErrors(wide, {})).toHaveLength(8);
   });
 });

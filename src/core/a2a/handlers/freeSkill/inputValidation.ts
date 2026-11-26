@@ -2,7 +2,7 @@ import type { TaskDurability } from "../../../serviceRegistry/types.js";
 
 type ValidationResult =
   | { ok: true; messageId: string }
-  | { ok: false; message: string };
+  | { ok: false; message: string; field: "messageId" | "data" };
 
 export function validateFreeSkillInput(args: {
   messageId: unknown;
@@ -19,6 +19,7 @@ export function validateFreeSkillInput(args: {
     return {
       ok: false,
       message: "message.messageId is required and must be at most 256 characters",
+      field: "messageId",
     };
   }
   if (args.taskDurability === "ephemeral") {
@@ -33,6 +34,7 @@ export function validateFreeSkillInput(args: {
       return {
         ok: false,
         message: `Undeclared fields: ${undeclared.join(", ")}`,
+        field: "data",
       };
     }
   }

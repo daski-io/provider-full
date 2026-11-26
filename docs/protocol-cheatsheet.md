@@ -49,12 +49,24 @@ new version that re-registers through `npm run daski:register`.
 ## Direct A2A methods
 
 `POST /a2a/:serviceSlug` accepts JSON-RPC `SendMessage` only for admitted,
-open, free skills. `GetTask` polls a public free task when the initial call
+open, free skills; the A2A 0.x name `message/send` is accepted as its alias
+and nothing else is. `GetTask` polls a public free task when the initial call
 does not return a terminal result. `SubscribeToTask` and `ListTasks` return
 an explicit unsupported-operation error; `CancelTask` and push-configuration
 methods are not implemented and AgentCards advertise push as unavailable.
 Paid and order-bound work always enters through
 the Daski gateway and standard rail.
+
+A request that misses the shape (an unknown method, a missing or unknown
+`skillId`, an unknown service, input the skill refuses) is answered with a
+request for that endpoint in `error.data.example`, built from the skill's
+published input schema, with any stand-in values it holds listed in
+`error.data.example.placeholders`. Errors before a skill is reached also
+carry `supportedMethods`, `freeSkillIds`, `agentCardUrl` and
+`documentationUrl` (an unknown service gets `catalogUrl`, the registration
+file). Undeclared or missing fields also carry the published `inputSchema`,
+and a contract mismatch adds the failing fields as `{field, problem}` in
+`error.data.errors`, built from the schema only.
 
 ## Provider endpoints
 

@@ -76,7 +76,7 @@ export function appendAnonymousTaskAccess(
         taskAccessToken: token,
         hint:
           "Pass this taskAccessToken as params.taskAccessToken on every " +
-          "tasks/get call for this anonymous task. It is shown only in " +
+          "GetTask call for this anonymous task. It is shown only in " +
           "the submission response.",
       },
     }],

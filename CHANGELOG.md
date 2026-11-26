@@ -6,6 +6,47 @@ All notable changes to this project will be documented here.
 
 ### Changed
 
+- Public free-skill errors on `POST /a2a/:serviceSlug` now show a working
+  request. Agents calling a free skill by hand without a client library
+  guess the request shape (an A2A 0.x method name, a skill id as the
+  method, the skill id outside the extension metadata) and spend many calls
+  on it. The errors below carry `error.data.example`: a complete request for
+  that endpoint (`httpMethod`, `url`, headers `Content-Type` and
+  `A2A-Version: 1.0`, and a `SendMessage` body with a fresh `messageId`)
+  whose skill input is built from the skill's published input schema.
+  Fields the skill requires beyond the schema's own `required` are filled
+  too. Values the schema cannot supply, such as free text, are stand-ins
+  like `"<message>"`, and the example is checked against the skill's
+  compiled contract and required fields, so any value it still refuses (for
+  example under `multipleOf` or `uniqueItems`) is marked as well; all of
+  them are listed in `example.placeholders`. Without placeholders the
+  request works as sent. The default example is the first free skill that
+  needs none.
+  - `Unknown method`, the missing-`skillId` error (message unchanged, with
+    the exact metadata path in `required`), unknown or empty skill ids and
+    an unknown service also carry `supportedMethods` (`SendMessage`,
+    `GetTask`), the endpoint's free skill ids (`freeSkillIds`, exactly what
+    the free-skill gate admits) and its `agentCardUrl` and
+    `documentationUrl`; an unknown service gets the `/.well-known/agent.json`
+    registration file (`catalogUrl`) instead. `Unknown method` names the
+    method to use (`useMethod`), says when a skill id was sent as the
+    method, and answers `tasks/get` with a `GetTask` example.
+  - Input a free skill refuses (contract mismatch, undeclared or missing
+    fields, no `messageId`) carries an example for that skill and its
+    documentation; field errors also carry its published input schema.
+    `Input does not match the published skill contract` names the failing
+    fields in its message and lists them as `{field, problem}` in
+    `error.data.errors`, built from the schema only and never from the
+    submitted values, with `inputPart` when no part had `kind: "data"`.
+  - The A2A 0.x method name `message/send` is accepted as an alias of
+    `SendMessage` only. The open-request rate limit classifies requests by
+    the normalized method, so the alias is limited the same way, and paid
+    and owner-only skills and native payment metadata are still refused on
+    this endpoint. Responses stay A2A v1.0.
+  - The anonymous task access hint names `GetTask`, the method this
+    endpoint serves, instead of `tasks/get`.
+  - No change to pricing, paid flows, authorization, agent cards or skill
+    contracts; no migration or configuration change.
 - The long-lived standard-rail artifacts no longer stop the provider at
   their signed `validBefore`: the global rail policy
   (`STANDARD_RAIL_GLOBAL_POLICY_JSON`), the servicing admission and the

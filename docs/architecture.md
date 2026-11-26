@@ -179,7 +179,9 @@ contact.
 An open free request may use `/a2a/:serviceSlug` directly only when the skill
 is free, does not require ownership, and satisfies the open-A2A boundary. It is
 still validated, rate-limited, body-limited, and protected by provider
-identity readiness.
+identity readiness. The boundary classifies a request by its normalized
+method, so the accepted A2A 0.x alias `message/send` gets the same stricter
+open-request limit as `SendMessage`.
 
 Ephemeral task durability is allowed only for terminal, unpaid, open automated
 reads that create no durable product state.
