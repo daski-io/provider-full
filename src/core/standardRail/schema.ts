@@ -182,7 +182,8 @@ export interface SchemaFieldError {
   problem: string;
 }
 
-const MAX_FIELD_ERRORS = 8;
+/** providerRequestFieldErrors lists at most this many errors. */
+export const MAX_FIELD_ERRORS = 8;
 
 function schemaErrorField(error: ErrorObject): string {
   const base = error.instancePath

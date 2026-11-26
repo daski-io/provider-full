@@ -199,6 +199,13 @@ describe("free skill example checked against the skill's contract", () => {
     expect(skillExampleInput("example", skill).placeholders).toEqual(["sizes[0]"]);
   });
 
+  it("marks the whole input when more values are refused than the error list names", () => {
+    const many = closed(Object.fromEntries(Array.from({ length: 9 }, (_, index) =>
+      [`f${index}`, { type: "integer", minimum: 1, maximum: 100, multipleOf: 5 }])));
+    expect(skillExampleInput("example", freeSkill("refused-many", many)).placeholders)
+      .toEqual(["f0", "f1", "f2", "f3", "f4", "f5", "f6", "f7", ""]);
+  });
+
   it("fills a field the skill requires and the schema leaves optional", () => {
     const pricing = inputContract(["units"], ["tier", "note"], {
       units: schema.integer(2, 16),

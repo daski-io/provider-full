@@ -23,6 +23,7 @@ import {
   skillInputFieldErrors,
 } from "../serviceRegistry/registry.js";
 import type { SkillDefinition } from "../serviceRegistry/types.js";
+import { MAX_FIELD_ERRORS } from "../standardRail/schema.js";
 import { ANONYMOUS_TASK_ACCESS_ARTIFACT } from "./anonymousTaskAccess.js";
 
 export const DASKI_EXTENSION_URI = "https://daski.io/a2a/v1";
@@ -134,6 +135,8 @@ export function skillExampleInput(
   try {
     fields = skillInputFieldErrors(serviceSlug, skill.skillId, built.input)
       .map((error) => error.field);
+    // A capped list may leave refused values unnamed: mark the whole input.
+    if (fields.length >= MAX_FIELD_ERRORS) fields.push("");
   } catch {
     // No contract to check against: nothing in the example is known to work.
     fields = [""];
