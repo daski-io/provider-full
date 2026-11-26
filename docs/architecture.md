@@ -177,11 +177,16 @@ skills, pricing metadata, access class, lifecycle, legal links, and support
 contact.
 
 An open free request may use `/a2a/:serviceSlug` directly only when the skill
-is free, does not require ownership, and satisfies the open-A2A boundary. It is
-still validated, rate-limited, body-limited, and protected by provider
-identity readiness. The boundary classifies a request by its normalized
-method, so the accepted A2A 0.x alias `message/send` gets the same stricter
-open-request limit as `SendMessage`.
+is free and does not require ownership; the router refuses anything else,
+including native payment metadata. It is still validated, rate-limited,
+body-limited, and protected by provider identity readiness. The open-A2A
+boundary admits or refuses nothing; it chooses the limiter. Every
+`SendMessage` on this endpoint is a public free call (paid and order-bound work arrives only through the standard rail), so
+the boundary counts every request whose normalized method is `SendMessage`
+against the stricter open-request limit, whatever its metadata: metadata
+decides only how the router answers, never whether the request is counted.
+The accepted A2A 0.x alias `message/send` is counted the same way. `GetTask`
+polls stay on the general A2A limit.
 
 Ephemeral task durability is allowed only for terminal, unpaid, open automated
 reads that create no durable product state.
