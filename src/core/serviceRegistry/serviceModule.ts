@@ -8,6 +8,7 @@ import type {
 import type { ProtectedDataSink } from "../security/protectedDataSinkTypes.js";
 import type { Queryable } from "../db/queryable.js";
 import type { FulfillmentAdapter } from "./adapterTypes.js";
+import type { OrderDeliverablesTask, OwnerActionDeliverable } from "../standardRail/orderDeliverables.js";
 import type { ServiceScreeningFacet } from "../screening/types.js";
 import type {
   InboundEmailInterceptor,
@@ -28,6 +29,13 @@ export interface ServiceFulfillmentFacet {
   buildPreExecuteReviewData?(
     args: PreExecuteReviewDataArgs,
   ): Record<string, unknown> | Promise<Record<string, unknown>>;
+  /**
+   * The owner actions that deliver the rest of a completed order's result
+   * (an API key, a document), listed in the order's artifact read for a
+   * gateway that accepts them (orderDeliverables.ts). Pointers only: never a
+   * secret. Absent, or an empty list, when the artifact is the whole result.
+   */
+  orderDeliverables?(task: OrderDeliverablesTask): Promise<readonly OwnerActionDeliverable[]>;
 }
 
 export interface ServiceProtocolFacet {

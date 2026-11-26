@@ -356,6 +356,71 @@ A refusal there is final for that email; an infrastructure failure leaves it
 retryable under the same idempotency key, which must therefore name the
 logical message, not the attempt.
 
+### Results behind an owner action
+
+When part of what a buyer paid for is not in the order's artifact but comes
+from an owner action on the asset the order created (an API key from
+`get-api-key`, a document from `download-document`), declare it with
+`fulfillment.orderDeliverables`. After `FULFILLED`, a buyer's agent fetches
+an order's deliverables: the artifact, then each owner action listed here.
+Without the declaration it stops at the artifact and never learns that the
+key or document exists.
+
+```typescript
+fulfillment: {
+  adapter,
+  async orderDeliverables({ skillId, assetId }) {
+    if (skillId !== "create-report" || !assetId) return [];
+    const asset = await getAssetById(assetId);
+    if (!asset) return [];
+    return [{
+      actionId: "download-report",
+      assetType: asset.type,
+      providerAssetId: asset.id,
+      input: { reportId: asset.identifier },
+      label: "Report (PDF)",
+    }];
+  },
+},
+```
+
+Core calls it on the artifact read of a completed order, with the asset core
+linked to the order (`assetId`, null when none), and adds one standard data
+part to the task it answers, in its own `deliverables` artifact
+(`src/core/standardRail/orderDeliverables.ts`):
+
+```json
+{"kind": "data", "data": {"https://daski.io/deliverables/v1": {"items": [
+  {"kind": "artifact"},
+  {"kind": "owner-action", "actionId": "download-report", "assetType": "report",
+   "providerAssetId": "<uuid>", "input": {"reportId": "rpt_0001"}, "label": "Report (PDF)"}
+]}}}
+```
+
+- **Each action** must be one of your skills with an `assetAction` contract,
+  published in your signed asset-action catalog, and not `destructive`; the
+  item's `assetType` must be the one the catalog names for it. The gateway
+  checks every item against that catalog and drops one that fails, without
+  failing the artifact read.
+- **The item** carries `actionId` (`^[a-z0-9][a-z0-9-]{0,95}$`),
+  `providerAssetId` (a lowercase UUID), `input` (a flat object of at most 16
+  keys and 2 KiB; keys match `^[A-Za-z][A-Za-z0-9_]{0,63}$` and are never
+  `operation`; values are null, a boolean, a finite number or a string of at
+  most 256 characters) and an optional `label` of 1 to 64 characters.
+  `deliverableLabel` turns a display text, such as a document title, into
+  one. Core leaves out a malformed or repeated item and lists at most 32,
+  the artifact included.
+- **Pointers only.** Never put a secret in an item: the secret comes from the
+  action, which the payer's wallet authorizes on its own. The part is not in
+  the frozen terminal projection, so no attestation changes.
+- **Only when asked.** A gateway released before the part refuses the whole
+  artifact read on it, so core adds it only when the lifecycle POST names
+  `deliverables` in `daski-order-status-additions`. A failing or empty
+  `orderDeliverables` leaves the artifact as it was.
+
+When the artifact is the whole result (credentials or server details in its
+data), declare nothing.
+
 ### External supplier writes
 
 For non-convergent supplier mutations, use the core supplier-operation journal
@@ -513,6 +578,9 @@ Only add a facet when your product needs it:
 - `operations.startWorkers`: durable worker startup with a stop function;
 - `operations.waitSupervision`: the poller that durably owns long supplier
   waits of paid tasks (see below);
+- `fulfillment.orderDeliverables`: the owner actions that deliver the rest of
+  a completed order's result (see [Results behind an owner
+  action](#results-behind-an-owner-action));
 - `security.redactSensitiveFields`: service-specific prompt/review redaction;
 - `security.protectedDataSinks`: rotation for encrypted service columns/JSON;
 - `security.protectedAssetIdentifiers`: encrypt sensitive identifiers while

@@ -225,7 +225,10 @@ A paid order crosses several independent bindings:
    the same transaction (core migration 006). Every dispatch, status and
    lifecycle answer re-reads the task state, that frozen identity and the
    persisted operations projection, stamps the database time and is signed
-   for that request; no signed body is cached.
+   for that request; no signed body is cached. An artifact read for a
+   gateway that names `deliverables` in `daski-order-status-additions` also
+   carries the service's order deliverables part, outside the frozen
+   projection.
 9. The provider writes a replay-safe terminal reputation outcome.
 
 The adapter never receives authority to reinterpret payment evidence.
