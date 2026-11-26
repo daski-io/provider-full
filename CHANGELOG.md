@@ -465,6 +465,18 @@ All notable changes to this project will be documented here.
 
 ### Fixed
 
+- The stricter open-request rate limit on `POST /a2a/:serviceSlug`
+  (`RATE_LIMIT_A2A_OPEN_*`, 30 a minute by default) now counts every
+  `SendMessage`, including the `message/send` alias, whatever its metadata.
+  Before, a free request that added `taskId` (or `serviceRef`) to the Daski
+  extension metadata was not counted: the router ignores `taskId` and still
+  ran the free skill, so such requests ran under the general A2A limit of
+  120 a minute instead. `taskId` once continued an `input-required` task
+  under the retired native payment rail; nothing reads it now. `GetTask`
+  polls stay on the general limit only. No change to responses, pricing,
+  paid flows, agent cards or skill contracts; no migration or configuration
+  change.
+
 - A read-only asset action parked in `attention` no longer keeps its task
   `working` forever. A claim now records the installed service's effect in
   the task metadata (`asset_action_effect`), because the signed definition
